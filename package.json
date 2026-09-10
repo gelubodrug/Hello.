@@ -1,0 +1,99 @@
+{
+  "name": "hello-workspace",
+  "productName": "Hello.",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A quiet, local-first workspace for conversations, research and execution.",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron out/main/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "test:native": "node scripts/smoke.mjs",
+    "icon": "electron scripts/render-icon.cjs",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3,node-pty",
+    "package:mac": "pnpm build && electron-builder --mac --dir",
+    "preview:design": "pnpm --dir design/reference dev"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@fontsource-variable/inter": "5.3.0",
+    "@react-symbols/icons": "1.4.1",
+    "@tiptap/core": "3.31.3",
+    "@tiptap/extension-placeholder": "3.31.3",
+    "@tiptap/extension-task-item": "3.31.3",
+    "@tiptap/extension-task-list": "3.31.3",
+    "@tiptap/markdown": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/react": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-unicode11": "0.9.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
+    "better-sqlite3": "13.0.0",
+    "lucide-react": "0.468.0",
+    "minimatch": "10.2.6",
+    "node-pty": "1.1.0",
+    "react": "18.3.1",
+    "react-arborist": "3.16.0",
+    "react-dom": "18.3.1",
+    "react-markdown": "9.0.3",
+    "remark-gfm": "4.0.1",
+    "shiki": "1.29.2",
+    "smol-toml": "^1.8.0",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "4.2.0",
+    "@playwright/test": "1.49.1",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "20.17.30",
+    "@types/react": "18.3.20",
+    "@types/react-dom": "18.3.6",
+    "@vitejs/plugin-react": "4.3.4",
+    "electron": "44.3.0",
+    "electron-builder": "25.1.8",
+    "electron-vite": "2.3.0",
+    "jsdom": "26.1.0",
+    "typescript": "5.8.3",
+    "vite": "5.4.21",
+    "vitest": "2.1.9"
+  },
+  "build": {
+    "appId": "studio.hello.workspace",
+    "productName": "Hello",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/node-pty/**",
+      "**/@earendil-works/pi-coding-agent/**",
+      "out/main/pi-extension.js"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": "dir",
+      "icon": "assets/icon.png",
+      "darkModeSupport": true
+    },
+    "extraResources": [
+      {
+        "from": "assets/examples",
+        "to": "examples"
+      }
+    ]
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

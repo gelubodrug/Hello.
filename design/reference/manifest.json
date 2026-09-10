@@ -1,0 +1,567 @@
+{
+  "schemaVersion": 1,
+  "entry": "src/renderer/design/ChatPanelPreview.tsx",
+  "mode": "renderer-only",
+  "canonicalSource": "Parent repository src/ and design/; this folder is a one-way checkpoint.",
+  "sources": [
+    {
+      "source": "design/chat-panel.html",
+      "file": "design/chat-panel.html",
+      "sha256": "45d2c2205e0493cfe6c297c6c1776c54ffaddccfeb6486c7e439e39c834e9e48",
+      "bytes": 361
+    },
+    {
+      "source": "design/IMPLEMENTATION.md",
+      "file": "design/IMPLEMENTATION.md",
+      "sha256": "79b8e4f119f9ac28050ce9482eab363e65db81fd04b83dc32790255da00d3418",
+      "bytes": 4809
+    },
+    {
+      "source": "design/LOOK.md",
+      "file": "design/LOOK.md",
+      "sha256": "9d3a775b3e9364263a550ada73dc24df5e5d2b1a03efd4bab20afb6f29ecb62c",
+      "bytes": 19538
+    },
+    {
+      "source": "design/README.md",
+      "file": "design/README.md",
+      "sha256": "1a1563a93a88de1a98a393de3b60f0da997c777a93bab9ef77399fcd2223dc5f",
+      "bytes": 5176
+    },
+    {
+      "source": "DESIGNUIguide.md",
+      "file": "DESIGNUIguide.md",
+      "sha256": "c34fbf29c061a51f82a6557e8b3d001a37a9c38e373d6e622e0d578b09e0f48e",
+      "bytes": 52905
+    },
+    {
+      "source": "src/renderer/app/App.css",
+      "file": "src/renderer/app/App.css",
+      "sha256": "349126cac6625df1a1f6fd3daaa3c085edc2dd6736e0da5f2127ef1558766feb",
+      "bytes": 12373
+    },
+    {
+      "source": "src/renderer/app/browser-split.ts",
+      "file": "src/renderer/app/browser-split.ts",
+      "sha256": "051321ff8832974133c801563bcbc2b982d921e1912c34fc50c3b61d19cf6edd",
+      "bytes": 4240
+    },
+    {
+      "source": "src/renderer/chat/AddMenu.module.css",
+      "file": "src/renderer/chat/AddMenu.module.css",
+      "sha256": "b4247ff36ab5d02f0bfd4ccaaebe14e89ba503f8eae6cd2446d43c2cf9900cba",
+      "bytes": 3505
+    },
+    {
+      "source": "src/renderer/chat/AddMenu.tsx",
+      "file": "src/renderer/chat/AddMenu.tsx",
+      "sha256": "795611dca36556113da678c69c199fb8329b063e8c4c31b9f6d6456d812d709d",
+      "bytes": 7558
+    },
+    {
+      "source": "src/renderer/chat/chat-panel-state.ts",
+      "file": "src/renderer/chat/chat-panel-state.ts",
+      "sha256": "77918be46bd7be7e064a9e5ef0345f7067d0b1d625830ef688e55d54eaac3148",
+      "bytes": 1426
+    },
+    {
+      "source": "src/renderer/chat/ChatPanel.module.css",
+      "file": "src/renderer/chat/ChatPanel.module.css",
+      "sha256": "d3050ec5ea4953e17ee0fdbfe469307bd8329ce15a3a8255879e7f78019f0e3d",
+      "bytes": 4544
+    },
+    {
+      "source": "src/renderer/chat/ChatPanel.tsx",
+      "file": "src/renderer/chat/ChatPanel.tsx",
+      "sha256": "ca7327de120e2d21f356ca49d56b15f491a89de1618dad12ca70fa493705121e",
+      "bytes": 10122
+    },
+    {
+      "source": "src/renderer/chat/CodeBlock.module.css",
+      "file": "src/renderer/chat/CodeBlock.module.css",
+      "sha256": "4debcd0968e30abeea71a1073e0103fc6f4a068d15c1f6f94043716846d7a294",
+      "bytes": 6828
+    },
+    {
+      "source": "src/renderer/chat/CodeBlock.tsx",
+      "file": "src/renderer/chat/CodeBlock.tsx",
+      "sha256": "5bb548ee409ee92765ea7fbac77f1c74d89bdc5129248260fc7a9d24b7170401",
+      "bytes": 9022
+    },
+    {
+      "source": "src/renderer/chat/Composer.module.css",
+      "file": "src/renderer/chat/Composer.module.css",
+      "sha256": "88a27e62f9273e61a2f21c4bd927a51dca36d4107473eb6d8d86351772e3ff1f",
+      "bytes": 11635
+    },
+    {
+      "source": "src/renderer/chat/Composer.tsx",
+      "file": "src/renderer/chat/Composer.tsx",
+      "sha256": "dd7c0dd1aaf62fc3a84e39b28bf750a3607ffe1e7cc8c48da26c879b64211f71",
+      "bytes": 42965
+    },
+    {
+      "source": "src/renderer/chat/ConversationGreeting.tsx",
+      "file": "src/renderer/chat/ConversationGreeting.tsx",
+      "sha256": "edf12bf481b62614c4ec3bf06a16a5e4b2a5261288c887a0d3ba7d694c96107f",
+      "bytes": 3054
+    },
+    {
+      "source": "src/renderer/chat/Markdown.module.css",
+      "file": "src/renderer/chat/Markdown.module.css",
+      "sha256": "9433974c00bec75e4a15a04a784e8beadfd096d2bc372067a7192b7c00a03b06",
+      "bytes": 5901
+    },
+    {
+      "source": "src/renderer/chat/Markdown.tsx",
+      "file": "src/renderer/chat/Markdown.tsx",
+      "sha256": "7c31d7919f93be169c91619f7e79f8b3bca20a446e85a2d34db2484572be04a1",
+      "bytes": 10236
+    },
+    {
+      "source": "src/renderer/chat/Message.module.css",
+      "file": "src/renderer/chat/Message.module.css",
+      "sha256": "0824ee2113db3b4ad95d920142c4889fca02740b5cd8b8793f37dd91e2c61326",
+      "bytes": 12321
+    },
+    {
+      "source": "src/renderer/chat/Message.tsx",
+      "file": "src/renderer/chat/Message.tsx",
+      "sha256": "9dedf19c56b05694727544d3bfa2e98a1b12b8e5598af95ae1ea2fc6126c0c8e",
+      "bytes": 24847
+    },
+    {
+      "source": "src/renderer/chat/MessageList.module.css",
+      "file": "src/renderer/chat/MessageList.module.css",
+      "sha256": "e2c9174b76edcb5ae3f68ed8466ad8511609796c1c9425eb1588f9388ed91af4",
+      "bytes": 6844
+    },
+    {
+      "source": "src/renderer/chat/MessageList.tsx",
+      "file": "src/renderer/chat/MessageList.tsx",
+      "sha256": "00d63ffe974f84eac530bda6287f9315a43534345aa0313f4d4ef9e1fbc57910",
+      "bytes": 22921
+    },
+    {
+      "source": "src/renderer/chat/runbook-context.ts",
+      "file": "src/renderer/chat/runbook-context.ts",
+      "sha256": "42e6a73c50c4fe1d2e9b47f11ace03f440fe4d0b6225abaa999e1facd6412003",
+      "bytes": 3153
+    },
+    {
+      "source": "src/renderer/design/ChatPanelPreview.css",
+      "file": "src/renderer/design/ChatPanelPreview.css",
+      "sha256": "e45815b098b120582048815046bf9f1b76d99a9e4dfa13297c7b6664c1da7db0",
+      "bytes": 11783
+    },
+    {
+      "source": "src/renderer/design/ChatPanelPreview.tsx",
+      "file": "src/renderer/design/ChatPanelPreview.tsx",
+      "sha256": "18394d17edc08f8314b290e46ca29fdb51b64d4a2542c2f32f52b207eebf7863",
+      "bytes": 22828
+    },
+    {
+      "source": "src/renderer/design/preview-cli-picker.ts",
+      "file": "src/renderer/design/preview-cli-picker.ts",
+      "sha256": "30d067825fff321e01ec9385a5d5d28ddb3546986ebb49a2837d9bc4ee2294dc",
+      "bytes": 733
+    },
+    {
+      "source": "src/renderer/design/preview-layout-motion.ts",
+      "file": "src/renderer/design/preview-layout-motion.ts",
+      "sha256": "6d10c86201c095bf2d2b8ec39c69336b72bccc58f27996655de51747884b09fd",
+      "bytes": 3335
+    },
+    {
+      "source": "src/renderer/design/preview-notebook.ts",
+      "file": "src/renderer/design/preview-notebook.ts",
+      "sha256": "14cd00d9783f8b513c93a5b2bee3b7320b4ad2c2fe517db87ac2741a6865964e",
+      "bytes": 3594
+    },
+    {
+      "source": "src/renderer/design/preview-tabs.ts",
+      "file": "src/renderer/design/preview-tabs.ts",
+      "sha256": "75eb70d8d65c77ef5c6bc390d30eb9f15a5f477b6338a005806d2389f797e944",
+      "bytes": 3925
+    },
+    {
+      "source": "src/renderer/design/preview-workspace.ts",
+      "file": "src/renderer/design/preview-workspace.ts",
+      "sha256": "28bd03b2aca9571681f73ea75a4dcf19bae9d8ccbcf33bee7fd9fba80fd38f0a",
+      "bytes": 1271
+    },
+    {
+      "source": "src/renderer/design/PreviewNotebook.css",
+      "file": "src/renderer/design/PreviewNotebook.css",
+      "sha256": "34e370db49de4bc657304d8b19acdc4a04a40ecd31656a102ef900a6a5b09caa",
+      "bytes": 4134
+    },
+    {
+      "source": "src/renderer/design/PreviewNotebook.tsx",
+      "file": "src/renderer/design/PreviewNotebook.tsx",
+      "sha256": "cd9d506a27f5115dcce6f1d6a4a3e26fc79de2332ed4ca9751b858f7a2cbe1eb",
+      "bytes": 7424
+    },
+    {
+      "source": "src/renderer/design/PreviewTabs.tsx",
+      "file": "src/renderer/design/PreviewTabs.tsx",
+      "sha256": "5b26fdf966c6b44ce79bc6994280514282fb8df566bfef2cd80ba7edf9f789f1",
+      "bytes": 9086
+    },
+    {
+      "source": "src/renderer/design/PreviewToolSurface.css",
+      "file": "src/renderer/design/PreviewToolSurface.css",
+      "sha256": "9c51cf512c2b33594a6a5a32a92cdbf63226d1a925c4112c5dad8e56dd15d36c",
+      "bytes": 5335
+    },
+    {
+      "source": "src/renderer/design/PreviewToolSurface.tsx",
+      "file": "src/renderer/design/PreviewToolSurface.tsx",
+      "sha256": "5d25d410857ed0d1cc939e09bb8ada1517816f6a8f4433b8d8d265c0d794dfa8",
+      "bytes": 9982
+    },
+    {
+      "source": "src/renderer/endpoints/endpoint-identity.ts",
+      "file": "src/renderer/endpoints/endpoint-identity.ts",
+      "sha256": "9650ec51bb77b07906e7da49450520a8be7e91a802ae1e1a221d5c5088ea40d4",
+      "bytes": 2745
+    },
+    {
+      "source": "src/renderer/endpoints/EndpointSettings.css",
+      "file": "src/renderer/endpoints/EndpointSettings.css",
+      "sha256": "2fd7b64a4806b045a639c068f128c68f5d9a8d2cd53d9402f1a25f8168c67a5f",
+      "bytes": 6140
+    },
+    {
+      "source": "src/renderer/endpoints/EndpointSettings.tsx",
+      "file": "src/renderer/endpoints/EndpointSettings.tsx",
+      "sha256": "7430f5bf0391beff244f3d745a02aad6210dc4c5cf253529f2033cb6ebe81987",
+      "bytes": 35824
+    },
+    {
+      "source": "src/renderer/endpoints/ModelSelector.css",
+      "file": "src/renderer/endpoints/ModelSelector.css",
+      "sha256": "650b4232c59f454e8fb97a292e9bc06fae83bc6fb0785e13fca21416dfbcda96",
+      "bytes": 7179
+    },
+    {
+      "source": "src/renderer/endpoints/ModelSelector.tsx",
+      "file": "src/renderer/endpoints/ModelSelector.tsx",
+      "sha256": "c6090e77fdab2af725f0ec373c1de1d6379d5c4c30c69b71751a91b4dc812bfc",
+      "bytes": 15779
+    },
+    {
+      "source": "src/renderer/endpoints/presets.ts",
+      "file": "src/renderer/endpoints/presets.ts",
+      "sha256": "8e315074f2b537888ba7076f872dc00a8bf511d2bb6b52bfe8026bde1868f773",
+      "bytes": 3779
+    },
+    {
+      "source": "src/renderer/layout/status-bar-readout.ts",
+      "file": "src/renderer/layout/status-bar-readout.ts",
+      "sha256": "47a00324a82b3b21f2adef01954f02305eed63f871f6bc8afc20b26d23d61be1",
+      "bytes": 7792
+    },
+    {
+      "source": "src/renderer/layout/StatusBar.module.css",
+      "file": "src/renderer/layout/StatusBar.module.css",
+      "sha256": "906c5ebdf9a90d070e3f86b1d46ab24675a425f1899518fa28d7282c39eebc86",
+      "bytes": 1881
+    },
+    {
+      "source": "src/renderer/layout/StatusBar.tsx",
+      "file": "src/renderer/layout/StatusBar.tsx",
+      "sha256": "411ab6b58a6a7510408a7c3975714b44ac4f48829b32ea3172f1a695632608aa",
+      "bytes": 5580
+    },
+    {
+      "source": "src/renderer/state/cli-workers.ts",
+      "file": "src/renderer/state/cli-workers.ts",
+      "sha256": "bf8fc124881f1f0ca54c00080123dc2096e5b412ffb662fc61627bf9ba77997d",
+      "bytes": 2824
+    },
+    {
+      "source": "src/renderer/state/composer-context.ts",
+      "file": "src/renderer/state/composer-context.ts",
+      "sha256": "8f93b641e6b06f9d35d846d34242ac68e764b36110d365650778a67aae00af3b",
+      "bytes": 2556
+    },
+    {
+      "source": "src/renderer/state/conversations.ts",
+      "file": "src/renderer/state/conversations.ts",
+      "sha256": "0441e75f6c71a11ac63bfa75b731ad4d8da6fc9727c961388d7bee9e3d7b515c",
+      "bytes": 49778
+    },
+    {
+      "source": "src/renderer/state/endpoints.ts",
+      "file": "src/renderer/state/endpoints.ts",
+      "sha256": "78c2efa314ab85f63b203e83575c97389c6af4aa7a401ecf9dd627927c002dcc",
+      "bytes": 5569
+    },
+    {
+      "source": "src/renderer/state/generation.ts",
+      "file": "src/renderer/state/generation.ts",
+      "sha256": "1f2e269252c4d1b0c3a3d6b2fe8d18074ab33b06495bbdc06bf3e9ad0440b616",
+      "bytes": 1629
+    },
+    {
+      "source": "src/renderer/state/settings.ts",
+      "file": "src/renderer/state/settings.ts",
+      "sha256": "e148508eaff971a8b0fcd920e99ac67739f85d4ebed112c22834ca854652fa1d",
+      "bytes": 20771
+    },
+    {
+      "source": "src/renderer/styles/fonts.css",
+      "file": "src/renderer/styles/fonts.css",
+      "sha256": "d4faf40c1af583e6d24135ed777f30fb8601148c81b1b0e086296374922e34dd",
+      "bytes": 787
+    },
+    {
+      "source": "src/renderer/styles/globals.css",
+      "file": "src/renderer/styles/globals.css",
+      "sha256": "5d228a35af17a0dd8a53f3a934d146a3a7d58b0d368e7fae8a9b86b85ce8dd56",
+      "bytes": 4060
+    },
+    {
+      "source": "src/renderer/styles/motion.css",
+      "file": "src/renderer/styles/motion.css",
+      "sha256": "efe1fcc4abeaecdc99afe046c8f4bef52de80ebaa3268b53561f2349ac4be731",
+      "bytes": 1271
+    },
+    {
+      "source": "src/renderer/styles/tokens.css",
+      "file": "src/renderer/styles/tokens.css",
+      "sha256": "6e2b6535a9ca743f28589792d1a806ffe6f689258691795abc670a8a8fd734d5",
+      "bytes": 14597
+    },
+    {
+      "source": "src/renderer/styles/typography.css",
+      "file": "src/renderer/styles/typography.css",
+      "sha256": "72247e1decac699f5df43cbbdd69ab343c5ca3234ca2e7944636078c142adcb9",
+      "bytes": 2759
+    },
+    {
+      "source": "src/renderer/terminal/dock-state.ts",
+      "file": "src/renderer/terminal/dock-state.ts",
+      "sha256": "b270fe25688f0e27d71eb7ee18dce1c65ed776980007b63b6817b7345e839312",
+      "bytes": 9525
+    },
+    {
+      "source": "src/renderer/ui/Button.css",
+      "file": "src/renderer/ui/Button.css",
+      "sha256": "96a24c4a3853918358cf6a5a868288a8be997baa3fbcf957d1a8f678a91d6f63",
+      "bytes": 2142
+    },
+    {
+      "source": "src/renderer/ui/Button.tsx",
+      "file": "src/renderer/ui/Button.tsx",
+      "sha256": "8ceb8a99ab3c7125a1d3c46939ff2a2c060f7f8d8f06c2bdc05a3d49204c3861",
+      "bytes": 981
+    },
+    {
+      "source": "src/renderer/ui/Dialog.css",
+      "file": "src/renderer/ui/Dialog.css",
+      "sha256": "307ba56caa62950080a0670d2ceb1d6d81962118b5684f55899852cf841338a1",
+      "bytes": 1824
+    },
+    {
+      "source": "src/renderer/ui/Dialog.tsx",
+      "file": "src/renderer/ui/Dialog.tsx",
+      "sha256": "4406e3047a5cc3a827e0e168f093b59ad37508236530811653aa8f1444bb1dd4",
+      "bytes": 4998
+    },
+    {
+      "source": "src/renderer/ui/input-modality.ts",
+      "file": "src/renderer/ui/input-modality.ts",
+      "sha256": "73ba6afb2b8acb3ec68c969a8b83eee3065fc43904b5659a4ac3a49c8ebb03f4",
+      "bytes": 2323
+    },
+    {
+      "source": "src/renderer/ui/Input.css",
+      "file": "src/renderer/ui/Input.css",
+      "sha256": "4f685c187dd8e0c84e1e7e7d0a1ac72c9f4358f97e364c340e082b5e1866764e",
+      "bytes": 1149
+    },
+    {
+      "source": "src/renderer/ui/Input.tsx",
+      "file": "src/renderer/ui/Input.tsx",
+      "sha256": "419f2c310b72092ff2f1aba5f46685bf5d357a7b10fa9535021d66a05befe7bf",
+      "bytes": 576
+    },
+    {
+      "source": "src/renderer/ui/Menu.css",
+      "file": "src/renderer/ui/Menu.css",
+      "sha256": "58b616a3d05f54904a2baf99b66d7bec3bd77162252f424716f5f6a81d51e46f",
+      "bytes": 2588
+    },
+    {
+      "source": "src/renderer/ui/Menu.tsx",
+      "file": "src/renderer/ui/Menu.tsx",
+      "sha256": "70a60ad5d27b55c983da21dd674846af549c7d7efd77a23dd2d2542f6e4cdc50",
+      "bytes": 4762
+    },
+    {
+      "source": "src/renderer/ui/Popover.css",
+      "file": "src/renderer/ui/Popover.css",
+      "sha256": "fc3bb0cf238e614a2f6782f8a077a41be73ec886a2d3b62a45ab318c73bb9085",
+      "bytes": 1312
+    },
+    {
+      "source": "src/renderer/ui/Popover.tsx",
+      "file": "src/renderer/ui/Popover.tsx",
+      "sha256": "c4674e591efb4a424d53190857b49d2d528422fe38c7fa22c0632134d20e6d82",
+      "bytes": 7194
+    },
+    {
+      "source": "src/renderer/ui/RequestDiagnosticDetails.css",
+      "file": "src/renderer/ui/RequestDiagnosticDetails.css",
+      "sha256": "2dc57633079867177738920fa1992a73f4261d3b20d1474ce4ca7cc3d60649b3",
+      "bytes": 2783
+    },
+    {
+      "source": "src/renderer/ui/RequestDiagnosticDetails.tsx",
+      "file": "src/renderer/ui/RequestDiagnosticDetails.tsx",
+      "sha256": "5bc8808599f365af154effc480158428a84cc0adac15bfde76e5cae9f0938dd6",
+      "bytes": 5127
+    },
+    {
+      "source": "src/renderer/ui/Reveal.css",
+      "file": "src/renderer/ui/Reveal.css",
+      "sha256": "83d371f75b54760e186b8e52a9dcc63dc53aca891b9cc40ab931e26d11f590c9",
+      "bytes": 792
+    },
+    {
+      "source": "src/renderer/ui/Reveal.tsx",
+      "file": "src/renderer/ui/Reveal.tsx",
+      "sha256": "7ada74ce230a99b815e7aa92d35327d2e74dd3a0e9e9efd80545b4ce7ad805b2",
+      "bytes": 3165
+    },
+    {
+      "source": "src/renderer/ui/shortcut.ts",
+      "file": "src/renderer/ui/shortcut.ts",
+      "sha256": "da5203b21c4573c51896a94a18a3a11a67e611c26e3993c01aa5d51af055aee1",
+      "bytes": 2081
+    },
+    {
+      "source": "src/renderer/ui/surface-motion.ts",
+      "file": "src/renderer/ui/surface-motion.ts",
+      "sha256": "6e77ea0c0aca146106e2dac61b10b5baebafc9ad20349453934e734b5052bfc2",
+      "bytes": 3267
+    },
+    {
+      "source": "src/renderer/ui/Tooltip.css",
+      "file": "src/renderer/ui/Tooltip.css",
+      "sha256": "987c0a583ad08abe61a0ba8254d54656a58f72cf86a47afb1e30f04639160866",
+      "bytes": 1021
+    },
+    {
+      "source": "src/renderer/ui/Tooltip.tsx",
+      "file": "src/renderer/ui/Tooltip.tsx",
+      "sha256": "30290caed0b0bd9c4844a144e1614f1bd10451805add1d6419b43a4a96aa3a74",
+      "bytes": 5318
+    },
+    {
+      "source": "src/renderer/ui/TruncatedText.tsx",
+      "file": "src/renderer/ui/TruncatedText.tsx",
+      "sha256": "787212774ee8c39f2ec746131e29385cf6f51bad7e52473aa2d1b3aa643cd551",
+      "bytes": 656
+    },
+    {
+      "source": "src/renderer/ui/useConditionalTruncation.ts",
+      "file": "src/renderer/ui/useConditionalTruncation.ts",
+      "sha256": "55c74d066acd0616af278e6bcca9e0681a51c6e0d6b9f3adb8a580b793ca7cd1",
+      "bytes": 1106
+    },
+    {
+      "source": "src/renderer/ui/useOverlayLock.ts",
+      "file": "src/renderer/ui/useOverlayLock.ts",
+      "sha256": "2e60325116a034318653fc9be8a2624c13a30dd80749a4f943aeecec76e1970d",
+      "bytes": 12716
+    },
+    {
+      "source": "src/renderer/vite-env.d.ts",
+      "file": "src/renderer/vite-env.d.ts",
+      "sha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+      "bytes": 38
+    },
+    {
+      "source": "src/shared/errors.ts",
+      "file": "src/shared/errors.ts",
+      "sha256": "108de2147af1e58bb2ff9bfeb1909d7df863af91bd263c75422ac0d20809f09e",
+      "bytes": 2515
+    },
+    {
+      "source": "src/shared/ipc-contract.ts",
+      "file": "src/shared/ipc-contract.ts",
+      "sha256": "0147b788f26039cb7f1ac751588c8ef48ce71e5390c7a9ab3a648cdac8ed5811",
+      "bytes": 37191
+    },
+    {
+      "source": "src/shared/types.ts",
+      "file": "src/shared/types.ts",
+      "sha256": "d347bb942057b91bf3e10a4d7768c5025cb4a7b56b02f3c58fc735ca84baaaf2",
+      "bytes": 7477
+    }
+  ],
+  "generated": [
+    {
+      "file": ".eslintrc.cjs",
+      "sha256": "45ecea311917d2ae0cb4b9171031fe8fab1d607b04b150849218dfe0c6804a34",
+      "bytes": 136
+    },
+    {
+      "file": ".gitignore",
+      "sha256": "61022f949eb49fe0ee5b774835be844845b3d71d9001f676d9ac82bd433e49a7",
+      "bytes": 34
+    },
+    {
+      "file": "index.html",
+      "sha256": "45d2c2205e0493cfe6c297c6c1776c54ffaddccfeb6486c7e439e39c834e9e48",
+      "bytes": 361
+    },
+    {
+      "file": "package.json",
+      "sha256": "77769b1111a36875325ab04091c01e722e688e2e28b3ff7eb68ea7051fa69501",
+      "bytes": 1113
+    },
+    {
+      "file": "README.md",
+      "sha256": "28da67c7c0eb207e9b2e01e4d7788674ac95f05a71e0b7c723dda4e7e0466d03",
+      "bytes": 3173
+    },
+    {
+      "file": "tsconfig.json",
+      "sha256": "3b8e0ed136d6ad597a116a7dfa34314bf0014791e6721754ac9624b4ccacbbbf",
+      "bytes": 616
+    },
+    {
+      "file": "vite.config.ts",
+      "sha256": "553ab7faec014136d146162d7b07c508a0e760228a3c2636d5c15cee2ad8a47c",
+      "bytes": 198
+    }
+  ],
+  "dependencies": {
+    "@fontsource-variable/inter": "5.3.0",
+    "@tanstack/react-virtual": "3.14.10",
+    "geist": "1.7.2",
+    "lucide-react": "0.468.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "9.1.0",
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "shiki": "1.29.2",
+    "unified": "11.0.5",
+    "zustand": "5.0.15"
+  },
+  "devDependencies": {
+    "@types/hast": "3.0.5",
+    "@types/mdast": "4.0.4",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "5.4.21"
+  }
+}

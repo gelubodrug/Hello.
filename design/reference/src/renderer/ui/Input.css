@@ -1,0 +1,41 @@
+/**
+ * Input primitive (DESIGNUIguide.md §Inputs): caret-only focus from the global
+ * text-control rule, a readable placeholder, consistent internal padding, and
+ * disabled/invalid states. Border width and box model never change between
+ * states, so dimensions stay stable when validation status changes. Built
+ * entirely on tokens.css/typography.css custom properties.
+ */
+
+.input {
+  display: block;
+  width: 100%;
+  height: calc(var(--sp-16) * 2);
+  padding: 0 var(--sp-12);
+  border-radius: var(--r-8);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.input:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.input:disabled {
+  cursor: not-allowed;
+  background: var(--color-surface-hover);
+  color: var(--color-text-disabled);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--color-error);
+}

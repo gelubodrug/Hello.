@@ -1,0 +1,101 @@
+/**
+ * StatusBar: low-profile status strip at the bottom of the chat region.
+ * Shows endpoint health, latency, active model, and live throughput while
+ * streaming (see StatusBar.tsx / status-bar-readout.ts).
+ */
+
+/* Docked under the composer (DESIGNUIguide.md §Status bar): a 24px-tall
+   centered line, 11px Geist, tertiary, transparent — no border, no fill. */
+.statusBar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-sm);
+  padding: 0 var(--sp-16);
+  background: transparent;
+  border: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-11);
+  line-height: var(--lh-tight);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.viewport {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.statusReadout {
+  grid-area: 1 / 1;
+  min-width: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+  will-change: opacity;
+}
+
+.statusReadout[data-state='enter'],
+.statusReadout[data-state='exit'] {
+  opacity: 0;
+  transform: none;
+}
+
+.statusReadout[data-state='shown'] {
+  opacity: 1;
+  transform: none;
+}
+
+.statusReadout[data-state='exit'] {
+  transition-timing-function: var(--ease-in);
+}
+
+.snapshot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--color-text-tertiary);
+}
+
+.dot.busy {
+  background: var(--color-accent);
+}
+
+.dot.ready {
+  background: var(--color-success);
+}
+
+.dot.error {
+  background: var(--color-error);
+}
+
+.metric {
+  overflow: hidden;
+}
+
+/* Keep the readout's own emphasis within the shared UI face. */
+.model {
+  font-variant-ligatures: none;
+}
+
+.throughput {
+  color: var(--color-text-secondary);
+}
+
+.separator,
+.detail {
+  color: var(--color-text-tertiary);
+}
+
+.detail {
+  overflow: hidden;
+}

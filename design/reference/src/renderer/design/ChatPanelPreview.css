@@ -1,0 +1,509 @@
+/* Fixture layout only. All surfaces/type come from the shipped design tokens. */
+.chat-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: var(--sp-16) var(--sp-24) var(--sp-12);
+  background: var(--surface-sidebar);
+  color: var(--ink-primary);
+  font: var(--fs-13)/1.5 var(--font-ui);
+}
+
+.chat-preview-toolbar,
+.chat-preview-toolbar > div,
+.chat-preview-canvas-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-12);
+}
+.chat-preview-workspace-title {
+  flex: 1;
+  min-width: 0;
+}
+.chat-preview-closed-panes {
+  /* In-flow header control, outside the native tool host's future bounds. */
+  display: flex;
+  flex: none;
+  gap: var(--sp-8);
+  margin-inline-end: auto;
+}
+.chat-preview-workspace-title:has(+ .chat-preview-closed-panes) {
+  flex: 0 1 auto;
+}
+.chat-preview-sidebar[hidden],
+.chat-preview-module[hidden],
+.chat-preview-tools[hidden],
+.chat-preview-splitter[hidden] {
+  display: none;
+}
+.chat-preview-workspace[data-sidebar-visible='false'] .chat-preview-canvas {
+  margin-left: var(--sp-8);
+}
+
+.chat-preview-toolbar {
+  min-height: var(--titlebar-height);
+  margin-bottom: var(--sp-12);
+}
+
+.chat-preview-caption,
+.chat-preview-footer {
+  color: var(--ink-tertiary);
+  font-size: var(--fs-12);
+}
+
+.chat-preview-toolbar > span > span {
+  margin-left: var(--sp-12);
+}
+.chat-preview button {
+  cursor: pointer;
+}
+
+.chat-preview-toolbar button,
+.chat-preview-reopen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  height: var(--control-lg);
+  padding: 0 var(--sp-12);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+}
+
+.chat-preview-workspace {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--panel-radius);
+  background:
+    var(--surface-navigation-background) padding-box,
+    var(--surface-rim-layers);
+}
+
+.chat-preview-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 228px;
+  gap: var(--sp-4);
+  padding: var(--sp-24) var(--sp-12);
+  /* The shared navigation light is painted once by the enclosing frame. */
+  background: transparent;
+}
+
+.chat-preview-brand {
+  margin: 0 var(--sp-12) var(--sp-32);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-medium);
+}
+
+.chat-preview-sidebar > .chat-preview-caption {
+  margin: 0 var(--sp-12) var(--sp-8);
+}
+
+.chat-preview-sidebar button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-height: var(--control-lg);
+  padding: var(--sp-4) var(--sp-12);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-secondary);
+  text-align: left;
+}
+
+.chat-preview-sidebar button svg {
+  flex: none;
+  color: var(--ink-tertiary);
+}
+.chat-preview-sidebar .chat-preview-current {
+  background: var(--sidebar-current-fill);
+  color: var(--ink-primary);
+}
+
+.chat-preview-canvas {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  margin: var(--sp-8) var(--sp-8) var(--sp-8) 0;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--panel-radius);
+  background: var(--surface-rim-layers);
+  box-shadow: var(--surface-surround-shadow);
+}
+
+/* One full-opacity, resolution-independent paint layer. The browser renders
+   overlapping gradients directly, without an intermediate SVG alpha mask.
+   The rim stays separate; children, focus rings and menus stay unclipped. */
+.chat-preview-canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: calc(var(--panel-radius) - var(--border-hairline));
+  pointer-events: none;
+  background: var(--surface-cloud-background);
+}
+
+.chat-preview-canvas-header {
+  min-height: var(--titlebar-height);
+  padding: var(--sp-8) var(--sp-16);
+  color: var(--ink-secondary);
+}
+
+.chat-preview-tag {
+  margin-left: var(--sp-8);
+  padding: 2px var(--sp-8);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+
+.chat-preview-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-lg);
+  height: var(--control-lg);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-secondary);
+}
+
+.chat-preview button:hover,
+.chat-preview-actions[aria-expanded='true'] {
+  background: var(--surface-hover);
+}
+.chat-preview button:active {
+  background: var(--surface-active);
+}
+
+.chat-preview-canvas-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.chat-preview-canvas-body[data-work-mode='true'] {
+  display: grid;
+  grid-template-columns: minmax(0, var(--preview-chat-share)) var(--sp-8) minmax(0, 1fr);
+  padding: var(--sp-12);
+}
+.chat-preview-canvas-body[data-work-mode='true'][data-chat-open='false'] {
+  /* Closing chat removes its entire column, not just the panel inside it. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.chat-preview-canvas-body[data-work-mode='true'] .chat-preview-context {
+  display: none;
+}
+.chat-preview-canvas-body[data-work-mode='true'] .chat-preview-module [data-chat-design] {
+  padding: 0;
+}
+.chat-preview-tools {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--panel-radius);
+  background:
+    var(--surface-panel-background) padding-box,
+    var(--surface-rim-layers);
+}
+.chat-preview-tools-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  min-height: calc(var(--titlebar-height) + var(--sp-8));
+  padding: var(--sp-8) var(--sp-16);
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+}
+.chat-preview-tools-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+}
+.chat-preview-tools .preview-tab-panels {
+  /* This is the explicit rectangular viewport for the future native host. */
+  overflow: hidden;
+  border-radius: 0 0 var(--panel-radius) var(--panel-radius);
+}
+.chat-preview-splitter {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: col-resize;
+  touch-action: none;
+}
+.chat-preview-splitter::after {
+  content: '';
+  width: var(--border-hairline);
+  height: var(--sp-32);
+  background: var(--surface-edge);
+}
+.chat-preview-splitter:hover::after,
+.chat-preview-splitter:focus-visible::after {
+  background: var(--ink-tertiary);
+}
+.chat-preview-pane-switch {
+  display: flex;
+  gap: var(--sp-4);
+}
+.chat-preview-pane-switch button {
+  border: 0;
+  border-radius: var(--r-pill);
+  min-height: var(--control-md);
+  padding: 0 var(--sp-8);
+  background: transparent;
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+.chat-preview-pane-switch button[aria-pressed='true'] {
+  background: var(--surface-raised);
+  color: var(--ink-primary);
+}
+.chat-preview-canvas-body[data-compact='true'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.chat-preview-context {
+  flex: 1;
+  padding: var(--sp-32);
+}
+.chat-preview-context h1 {
+  margin: var(--sp-20) 0 var(--sp-16);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.025em;
+}
+.chat-preview-context p {
+  color: var(--ink-tertiary);
+  line-height: 1.8;
+}
+
+.chat-preview-module {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 600px;
+  min-width: 0;
+  min-height: 0;
+}
+.chat-preview-module [data-chat-design] {
+  padding: var(--sp-16);
+  background: transparent;
+}
+.chat-preview-footer {
+  padding-top: var(--sp-12);
+}
+
+/* Motion controls belong to the specimen, not the shipped app. Native OS
+   reduced motion always takes precedence over the slow demonstration. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-preview-motion='slow'] {
+    --motion-fast: 360ms;
+    --motion-base: 480ms;
+    --motion-slow: 600ms;
+  }
+}
+:root[data-preview-motion='reduced'] {
+  --motion-fast: 0ms;
+  --motion-base: 0ms;
+  --motion-slow: 0ms;
+  --reveal-translate: 0px;
+}
+
+.preview-tabs-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-12) var(--sp-8);
+}
+.preview-tabs {
+  display: flex;
+  flex: 1;
+  gap: var(--sp-4);
+  min-width: 0;
+  overflow-x: auto;
+  padding-block: var(--sp-4);
+  scrollbar-width: thin;
+}
+.preview-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-radius: var(--r-pill);
+  background: var(--surface-sidebar);
+  color: var(--ink-tertiary);
+}
+.preview-tab[data-active='true'] {
+  background: var(--surface-raised);
+  color: var(--ink-primary);
+}
+.preview-tab > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  height: var(--control-md);
+  padding: 0 var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.preview-tab > .preview-tab-close {
+  width: var(--control-md);
+  padding: 0;
+}
+.preview-tab[data-closing='true'] .preview-tab-close {
+  pointer-events: none;
+}
+.preview-tab-panels {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.preview-tools-empty {
+  padding: var(--sp-24);
+  color: var(--ink-tertiary);
+}
+.preview-tab-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.preview-tab-panel[hidden] {
+  display: none;
+}
+.preview-tab-panel[aria-hidden='true'] {
+  pointer-events: none;
+}
+.preview-note {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-16) var(--sp-24);
+  color: var(--ink-secondary);
+  font-size: var(--fs-14);
+}
+.preview-note h2 {
+  margin: var(--sp-8) 0;
+  color: var(--ink-primary);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+}
+.preview-note textarea {
+  flex: 1;
+  min-height: 160px;
+  resize: none;
+  padding: var(--sp-12) 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-primary);
+  font: var(--fs-14)/1.7 var(--font-ui);
+}
+.preview-note pre {
+  white-space: pre-wrap;
+  font: var(--fs-13)/1.7 var(--font-mono);
+}
+.preview-address {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-height: var(--control-lg);
+  padding-inline: var(--sp-12);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+}
+
+@media (max-width: 1150px) {
+  .chat-preview-context {
+    display: none;
+  }
+  .chat-preview-module {
+    flex: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .chat-preview-canvas {
+    margin: var(--sp-8);
+  }
+}
+
+@media (max-width: 620px) {
+  .chat-preview-workspace[data-sidebar-visible='true'] {
+    flex-direction: column;
+  }
+  .chat-preview-sidebar {
+    flex: 0 0 auto;
+    padding: var(--sp-8) var(--sp-12);
+  }
+  .chat-preview-sidebar .chat-preview-brand,
+  .chat-preview-sidebar > .chat-preview-caption {
+    display: none;
+  }
+  .chat-preview-workspace-title .chat-preview-tag {
+    display: none;
+  }
+  .chat-preview-canvas-header {
+    flex-wrap: wrap;
+  }
+  .chat-preview-workspace-title:has(+ .chat-preview-closed-panes) {
+    flex: 1;
+  }
+  .chat-preview-closed-panes {
+    order: 1;
+    flex-basis: 100%;
+  }
+  .chat-preview-canvas-body[data-work-mode='true'] {
+    padding: var(--sp-8);
+  }
+  .chat-preview-tools-heading .chat-preview-caption {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    min-width: 320px;
+  }
+  .chat-preview {
+    padding: var(--sp-8);
+  }
+  .chat-preview-toolbar > span > span {
+    display: none;
+  }
+  .chat-preview-toolbar,
+  .chat-preview-toolbar > div {
+    flex-wrap: wrap;
+  }
+  .chat-preview-module [data-chat-design] {
+    padding: var(--sp-8);
+  }
+  .chat-preview-canvas-header {
+    padding: var(--sp-4) var(--sp-12);
+  }
+}

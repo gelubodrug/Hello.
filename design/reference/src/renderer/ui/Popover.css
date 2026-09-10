@@ -1,0 +1,53 @@
+/**
+ * Popover primitive (DESIGNUIguide.md §Menus and popovers): a positioning
+ * container that clips to the viewport rather than an ancestor's overflow.
+ * `top`/`left` are set inline once measured; the initial off-screen position
+ * avoids a visible flash before that first measurement.
+ */
+
+.popover-presence {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  z-index: 1000;
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+  will-change: opacity, transform;
+}
+
+.popover-presence[data-state='enter'],
+.popover-presence[data-state='exit'] {
+  opacity: 0;
+  transform: translateY(var(--popover-offset, -4px));
+}
+
+.popover-presence[data-state='shown'] {
+  opacity: 1;
+  transform: none;
+}
+
+.popover-presence[data-state='exit'] {
+  pointer-events: none;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-in);
+}
+
+.popover {
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+}
+
+/* One surface and one shadow, even when Menu is hosted by a portal. */
+.popover:has(> .menu) {
+  overflow: visible;
+  border-radius: var(--menu-radius);
+  box-shadow: var(--menu-shadow);
+}
+
+.popover > .menu {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  box-shadow: none;
+}

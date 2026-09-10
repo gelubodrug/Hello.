@@ -1,0 +1,29 @@
+/**
+ * Reveal primitive styling (see Reveal.tsx). Transform + opacity only —
+ * never layout properties — per DESIGNUIguide.md §Motion. Durations and
+ * easing come from motion.css. Surface-specific classes override only the
+ * catalog values that differ (direction or duration).
+ */
+
+.reveal {
+  transition:
+    opacity var(--reveal-dur, var(--motion-base)) var(--ease-out),
+    transform var(--reveal-dur, var(--motion-base)) var(--ease-out);
+  will-change: opacity, transform;
+}
+
+.reveal[data-state='enter'] {
+  opacity: 0;
+  transform: translateY(var(--reveal-translate));
+}
+
+.reveal[data-state='shown'] {
+  opacity: 1;
+  transform: none;
+}
+
+.reveal[data-state='exit'] {
+  opacity: 0;
+  transform: translateY(var(--reveal-translate));
+  transition-timing-function: var(--ease-in);
+}

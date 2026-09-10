@@ -1,0 +1,272 @@
+/**
+ * MessageList: the scrolling chat transcript. The stable history is
+ * virtualized (@tanstack/react-virtual); the currently streaming message is
+ * pinned OUTSIDE the virtualized window so its growing height never
+ * invalidates neighbor measurements (research.md Decision 4).
+ */
+
+.scroller {
+  position: relative;
+  height: 100%;
+  padding-top: var(--chat-transcript-inset, var(--titlebar-height));
+  scroll-padding-top: var(--chat-transcript-inset, var(--titlebar-height));
+  overflow: auto;
+  contain: strict;
+  background: var(--chat-transcript-fill, var(--color-bg));
+}
+
+/* Greeting for a selected conversation that holds no messages yet. It sits
+ * inside the scroller so the scroll container and the virtualizer stay mounted
+ * for the whole life of the conversation (see MessageList.tsx); the inset
+ * clears the titlebar band the scroller already pads for. */
+.emptyOverlay {
+  position: absolute;
+  inset: var(--chat-transcript-inset, var(--titlebar-height)) 0 0;
+  display: flex;
+}
+
+/* Sizing spacer for the virtualized rows; each row is absolutely
+ * positioned inside it via the virtualizer transform. */
+.virtualSpacer {
+  position: relative;
+  width: 100%;
+}
+
+.virtualRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+/* The pinned streaming message flows normally after the virtualized
+ * spacer — it does not participate in the virtualizer at all. */
+.pinned {
+  position: relative;
+  width: min(720px, 100%);
+  margin-inline: auto;
+}
+
+/* Day heading above the first message of each day (DESIGNUIguide.md §Chat
+ * transcript). Centered on the reading column, quiet and non-interactive —
+ * no rule lines, no chip, nothing to click. It sits inside the day-first
+ * message's virtual row, so the virtualizer measures the two together. */
+.dateSeparator {
+  width: min(720px, 100%);
+  margin-inline: auto;
+  padding: var(--sp-16) 0 var(--sp-8);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  text-align: center;
+  user-select: none;
+}
+
+.msg {
+  width: min(720px, 100%);
+  margin-inline: auto;
+  padding: var(--sp-12) var(--sp-16);
+  font-size: var(--fs-15);
+  line-height: 22px;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg[data-role='user'] {
+  color: var(--color-text-primary);
+}
+
+.msg[data-role='assistant'] {
+  color: var(--color-text-secondary);
+}
+
+.msg[data-role='system'] {
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-13);
+}
+
+/* Only rows appended to the currently-open conversation reveal. Existing
+ * history and virtualized rows recycled during scroll remain visually stable. */
+.messageAppend {
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+  will-change: opacity, transform;
+}
+
+.messageAppend[data-state='enter'] {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.messageAppend[data-state='shown'] {
+  opacity: 1;
+  transform: none;
+}
+
+.messageAppend[data-state='exit'] {
+  opacity: 0;
+  transform: translateY(4px);
+  transition-timing-function: var(--ease-in);
+}
+
+/* Inline recovery affordance for a stream that ended in 'error' or 'aborted'
+ * (FR-018). Flows normally after the pinned area, same as `.pinned` itself. */
+.failureWrap {
+  position: relative;
+  width: min(720px, 100%);
+  margin-inline: auto;
+  padding: 0 var(--sp-16) var(--sp-16);
+}
+
+.failure {
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
+  border: 1px solid var(--color-error);
+  border-radius: var(--r-8);
+  background: var(--color-error-subtle);
+}
+
+.failureHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-8);
+}
+
+.failureIcon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--color-error);
+}
+
+.failureCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.failureMessage {
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+  color: var(--color-text-primary);
+}
+
+.failureDetail {
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  overflow-wrap: anywhere;
+}
+
+.failureActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+}
+
+/* Floating "Jump to latest" chip — the presence wrapper owns the catalog's
+   opacity + translateY transition without changing the button's footprint. */
+.jumpChipPresence {
+  position: absolute;
+  right: var(--sp-16);
+  bottom: var(--sp-16);
+}
+
+.jumpChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  height: 32px;
+  padding: 0 var(--sp-12);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r-pill);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.jumpChip:hover {
+  background: var(--color-surface-hover);
+}
+
+.jumpChip:active {
+  background: var(--color-surface-active);
+}
+
+/* Static block caret at the tail of the pinned streaming message. Token output
+   is the progress indicator; the transcript never flashes for attention. */
+.streamCaret {
+  display: inline-block;
+  /* Fixed width: the Braille frames differ by a hair, and the text after them
+     must not shuffle ten times a second. */
+  /* The fixed box comes from the width, not from a mono family — chrome never
+     switches font (DESIGNUIguide.md §Typography). */
+  width: 1ch;
+  margin-left: 2px;
+  color: var(--color-text-tertiary);
+  line-height: 1;
+}
+
+/* Status of the turn being generated, above the message it belongs to. Quiet
+   by design: it is a sign of life, not a headline. */
+.streamStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin: 0 0 var(--sp-8);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-12);
+  line-height: var(--lh-tight);
+}
+
+.streamStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: stream-status-pulse 1.4s var(--ease-out) infinite;
+}
+
+@keyframes stream-status-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streamStatusDot {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* Silence mid-answer is not the same as work in progress: the line switches
+   to the warning tone so a dead endpoint is not read as a slow one. */
+.streamStatus[data-stalled='true'] {
+  color: var(--color-warning);
+}
+
+.streamStatus[data-stalled='true'] .streamStatusDot {
+  background: var(--color-warning);
+}

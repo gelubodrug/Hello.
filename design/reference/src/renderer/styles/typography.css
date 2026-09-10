@@ -1,0 +1,126 @@
+/**
+ * Typography stack (DESIGNUIguide.md §Typography): the 11–16px interface
+ * scale and a heading hierarchy that leans on weight and spacing rather than
+ * size, per the guide's "use font weight and spacing before increasing font
+ * size" rule. Code content owns its Geist Mono scopes locally.
+ */
+
+:root {
+  /* Type scale: 11 metadata, 12 secondary UI, 13 compact controls,
+     14 standard UI, 15-16 conversation text. */
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-16: 16px;
+
+  --lh-tight: 1.25;
+  --lh-normal: 1.5;
+  --lh-relaxed: 1.6;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Shared truncation treatment. The measuring hook adds `data-truncated` only
+   while the text actually overflows, so fitting labels stay fully opaque. */
+.truncate-fade {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.truncate-fade[data-truncated] {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
+/* Named size utilities matching each documented use case. */
+.text-11 {
+  font-size: var(--fs-11);
+  line-height: var(--lh-tight);
+}
+.text-12 {
+  font-size: var(--fs-12);
+  line-height: var(--lh-tight);
+}
+.text-13 {
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+}
+.text-14 {
+  font-size: var(--fs-14);
+  line-height: var(--lh-normal);
+}
+.text-15 {
+  font-size: var(--fs-15);
+  line-height: var(--lh-relaxed);
+}
+.text-16 {
+  font-size: var(--fs-16);
+  line-height: var(--lh-relaxed);
+}
+
+/* Headings: hierarchy comes from weight and spacing first, size second —
+   h1 stays within the interface scale rather than towering over it. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-family: var(--font-ui);
+  line-height: var(--lh-tight);
+}
+
+h1 {
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+}
+
+h2 {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+}
+
+h3 {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+
+h4 {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+}
+
+/* Nothing in this app is set in capitals: small headings get their rank from
+   size and colour, not from shouting. */
+h5,
+h6 {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    text-decoration-color var(--motion-fast) var(--ease-out);
+}
+
+a:hover {
+  text-decoration: underline;
+}

@@ -1,0 +1,133 @@
+/* Exact terminal palette and metrics from the authorized renderer reuse boundary. */
+:root {
+  --font-terminal:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "DejaVu Sans Mono", monospace;
+  --term-bg: #000000;
+  --term-fg: #f5f5f7;
+  --term-selection: rgba(255, 255, 255, 0.24);
+  --term-selection-inactive: rgba(255, 255, 255, 0.12);
+  --term-ansi-black: #1e1e20;
+  --term-ansi-red: #ff453a;
+  --term-ansi-green: #30d158;
+  --term-ansi-yellow: #ffd60a;
+  --term-ansi-blue: #0a84ff;
+  --term-ansi-magenta: #bf5af2;
+  --term-ansi-cyan: #64d2ff;
+  --term-ansi-white: #b4b4b8;
+  --term-ansi-bright-black: #6a6a70;
+  --term-ansi-bright-red: #ff6961;
+  --term-ansi-bright-green: #5be584;
+  --term-ansi-bright-yellow: #ffe066;
+  --term-ansi-bright-blue: #5aa9ff;
+  --term-ansi-bright-magenta: #da8fff;
+  --term-ansi-bright-cyan: #9be2ff;
+  --term-ansi-bright-white: #f5f5f7;
+}
+.hello-terminal {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--term-bg);
+}
+.hello-terminal-drop {
+  position: absolute;
+  z-index: 1;
+  bottom: var(--sp-12);
+  left: var(--sp-16);
+  right: var(--sp-16);
+  width: fit-content;
+  max-width: calc(100% - var(--sp-16) * 2);
+  margin: 0;
+  padding: var(--sp-4) var(--sp-12);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  font: var(--fs-12)/var(--lh-normal) var(--font-ui);
+  pointer-events: none;
+}
+.hello-terminal[hidden] {
+  display: none;
+}
+.hello-terminal-context {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4) var(--sp-12);
+  min-width: 0;
+  min-height: var(--control-lg);
+  padding: var(--sp-4) var(--sp-12);
+  background: var(--surface-panel);
+  color: var(--ink-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+}
+.hello-terminal-folder {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  min-width: 0;
+  max-width: 100%;
+}
+.hello-terminal-folder > :first-child {
+  flex: none;
+  color: var(--ink-tertiary);
+}
+.hello-terminal-tasks {
+  margin-left: auto;
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+.hello-terminal-folder-change {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4) var(--sp-8);
+  min-width: 0;
+}
+.hello-terminal-folder-explanation {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-tertiary);
+}
+.hello-terminal-open-folder {
+  max-width: 100%;
+  margin-left: auto;
+}
+.hello-terminal-surface {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 8px 8px 16px;
+  overflow: hidden;
+  background: var(--term-bg);
+}
+.hello-terminal-surface .xterm {
+  height: 100%;
+}
+.hello-terminal-surface .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.hello-terminal:hover .xterm-viewport {
+  scrollbar-color: var(--term-ansi-bright-black) transparent;
+}
+.hello-terminal-surface .xterm-helper-textarea:focus {
+  outline: none;
+}
+.hello-terminal-notice {
+  margin: 0;
+  padding: 8px 16px;
+  font: 12px/1.5 var(--font-ui, sans-serif);
+  color: var(--term-fg);
+}

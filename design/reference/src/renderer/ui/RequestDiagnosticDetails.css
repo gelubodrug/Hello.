@@ -1,0 +1,127 @@
+/**
+ * Request diagnostic disclosure (see RequestDiagnosticDetails.tsx).
+ *
+ * This is chrome, so it stays in Geist per DESIGNUIguide.md §Typography —
+ * including the response body, which a `pre` would otherwise render in the
+ * user agent's monospace default.
+ */
+
+.reqdiag {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.reqdiag-toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--sp-4);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.reqdiag-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.reqdiag-chevron {
+  flex: none;
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.reqdiag-toggle[aria-expanded='true'] .reqdiag-chevron {
+  transform: rotate(90deg);
+}
+
+.reqdiag-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-8);
+  border-radius: var(--r-8);
+  background: var(--color-surface);
+}
+
+.reqdiag-fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin: 0;
+}
+
+.reqdiag-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Nothing in this app is set in capitals: a field label takes its rank from
+   size and colour. */
+.reqdiag-field dt,
+.reqdiag-term {
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+}
+
+.reqdiag-field dd {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  overflow-wrap: anywhere;
+}
+
+/* Long bodies scroll inside the card rather than stretching the banner
+   (DESIGNUIguide.md §Cross-platform — wide content scrolls internally). */
+.reqdiag-body {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Fixed width: the label swap must not resize the control mid-action. */
+.reqdiag-copy {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  justify-content: flex-start;
+  gap: var(--sp-4);
+  width: 110px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.reqdiag-copy:hover {
+  color: var(--color-text-primary);
+}
+
+.reqdiag-copy-icon {
+  flex: none;
+}

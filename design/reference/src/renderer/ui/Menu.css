@@ -1,0 +1,107 @@
+/**
+ * Menu primitive (DESIGNUIguide.md §Menus and popovers): clear selected/hover
+ * states, keyboard navigation via roving tabindex. Built entirely on
+ * tokens.css/typography.css custom properties.
+ */
+
+.menu-presence {
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+  will-change: opacity, transform;
+}
+
+.menu-presence[data-state='enter'],
+.menu-presence[data-state='exit'] {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.menu-presence[data-state='shown'] {
+  opacity: 1;
+  transform: none;
+}
+
+.menu-presence[data-state='exit'] {
+  pointer-events: none;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-in);
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  min-width: min(var(--menu-width-min), calc(100vw - 16px));
+  padding: var(--menu-padding);
+  border-radius: var(--menu-radius);
+  border: var(--border-hairline) solid var(--menu-edge);
+  background: var(--menu-fill);
+  color: var(--menu-ink);
+  font-family: var(--font-ui);
+  box-shadow: var(--menu-shadow);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  min-height: var(--menu-row-height);
+  flex: none;
+  padding: 0 var(--sp-12);
+  border: none;
+  border-radius: var(--menu-row-radius);
+  background: transparent;
+  color: var(--menu-ink);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-regular);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+/* Pointer and keyboard share one roving row. A separate :hover fill would
+   leave two rows lit when arrow keys move away from a stationary pointer. */
+.menu-item[tabindex='0'] {
+  background: var(--menu-hover);
+}
+
+.menu-item:active:not(:disabled) {
+  background: var(--menu-active);
+}
+
+.menu-item:disabled {
+  cursor: not-allowed;
+  color: var(--color-text-disabled);
+}
+
+/* The destructive action is named and grouped, not red at rest. Its existing
+   confirmation still owns the explicit destructive button and warning tone. */
+
+.menu-item-icon {
+  flex: none;
+  color: var(--menu-muted);
+}
+
+.menu-item[tabindex='0'] .menu-item-icon {
+  color: var(--menu-ink);
+}
+
+.menu-item:disabled .menu-item-icon {
+  color: var(--color-text-disabled);
+}
+
+.menu-separator {
+  flex: none;
+  height: var(--border-hairline);
+  margin: var(--menu-padding) calc(-1 * var(--menu-padding));
+  background: var(--menu-separator);
+}
+
+.menu-item-label {
+  overflow: hidden;
+  white-space: nowrap;
+}

@@ -1,0 +1,298 @@
+.model-selector {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  font-family: var(--font-ui);
+}
+
+.model-selector__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  max-width: 240px;
+  height: var(--control-md);
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  line-height: var(--lh-tight);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.model-selector__trigger:hover,
+.model-selector__trigger[aria-expanded='true'] {
+  background: var(--color-surface-hover);
+}
+
+.model-selector__trigger:active {
+  background: var(--color-surface-active);
+}
+
+.model-selector__trigger-label {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.model-selector__trigger-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+
+/* Upward popover: hidden state moves 4px toward its trigger below. */
+.model-selector__popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--sp-4));
+  z-index: 1000;
+  width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
+  border: var(--border-hairline) solid var(--menu-edge);
+  border-radius: var(--menu-radius);
+  background: var(--menu-fill);
+  color: var(--menu-ink);
+  box-shadow: var(--menu-shadow);
+  --color-text-primary: var(--menu-ink);
+  --color-text-secondary: var(--menu-ink);
+  --color-text-tertiary: var(--menu-muted);
+  --color-border: var(--menu-separator);
+  --color-surface-hover: var(--menu-hover);
+  --color-surface-active: var(--menu-active);
+  overflow: hidden;
+  transform-origin: bottom right;
+}
+
+.model-selector__popover[data-state='enter'],
+.model-selector__popover[data-state='exit'] {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.model-selector__popover[data-state='shown'] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.model-selector__popover[data-state='exit'] {
+  pointer-events: none;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-in);
+}
+
+.model-selector__search {
+  display: block;
+  width: 100%;
+  height: var(--control-lg);
+  margin: var(--sp-8) 0 0;
+  padding: 0 var(--sp-12);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  caret-color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  outline: none;
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.model-selector__search::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.model-selector__search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.model-selector__search:is(:hover, :focus, :focus-visible, :active) {
+  border: 0;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+}
+
+.model-selector__count {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-12) var(--sp-4);
+  border-top: var(--border-hairline) solid var(--color-border);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+  line-height: var(--lh-tight);
+}
+
+.model-selector__scroll {
+  max-height: min(280px, calc(100vh - 160px));
+  overflow-y: auto;
+  padding: 0 var(--menu-padding) var(--menu-padding);
+}
+
+.model-selector__group-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: var(--control-sm);
+  padding: 0 var(--sp-8);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+  justify-content: center;
+}
+
+/* Name, tags and the detail line stack; the detail exists only where the name
+   alone cannot say which endpoint this is, so a unique row is one line as before. */
+.model-selector__identity-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+
+.model-selector__identity-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.model-selector__identity-detail {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+  font-variant-numeric: tabular-nums;
+}
+
+/* §State pills: same shape as "unverified", same neutral tone — a keyless
+   endpoint is not broken, and this row cannot know whether its server wants
+   a key. It appears only inside an ambiguous group. */
+.model-selector__nokey {
+  flex: 0 0 auto;
+  padding: 0 var(--sp-8);
+  border-radius: var(--r-pill);
+  background: var(--color-surface-active);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  line-height: var(--sp-16);
+}
+
+.model-selector__verified {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--color-accent);
+}
+
+.model-selector__unverified {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+}
+
+/* One line for whatever the list has to say about itself: still loading, never
+   listed, empty, or nothing matching the query. */
+.model-selector__notice {
+  margin: 0;
+  padding: var(--sp-8);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+}
+
+.model-selector__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-selector__option {
+  min-width: 0;
+  min-height: var(--menu-row-height);
+  padding: var(--sp-4) var(--sp-12);
+  border: none;
+  border-radius: var(--menu-row-radius);
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.model-selector__option:hover,
+.model-selector__option[data-highlighted='true'] {
+  background: var(--color-surface-hover);
+}
+
+.model-selector__option:active {
+  background: var(--color-surface-active);
+}
+
+.model-selector__option[aria-selected='true'] {
+  background: var(--menu-hover);
+}
+
+.model-selector__model {
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  line-height: 20px;
+}
+
+.model-selector__model > span {
+  display: block;
+  width: 100%;
+}
+
+.model-selector__endpoint {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--sp-4);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  line-height: 20px;
+}
+
+.model-selector__footer {
+  display: flex;
+  align-items: center;
+  width: calc(100% - 2 * var(--menu-padding));
+  min-height: var(--control-lg);
+  margin: var(--menu-padding);
+  padding: 0 var(--sp-12);
+  border: none;
+  border-radius: var(--menu-row-radius);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.model-selector__footer:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+.model-selector__footer:active {
+  background: var(--color-surface-active);
+}

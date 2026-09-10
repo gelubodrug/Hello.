@@ -1,0 +1,113 @@
+/* The user-requested local width-reveal exception is recorded in LOOK.md.
+   Shared material, spacing, focus, and motion roles remain authoritative. */
+.chat-mode-switch {
+  display: inline-flex;
+  flex: none;
+  position: relative;
+  inline-size: calc(var(--control-md) + var(--mode-switch-inset) * 2);
+  block-size: var(--control-md);
+  padding: var(--mode-switch-inset);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-8);
+  background: var(--mode-switch-glass-sheen), var(--mode-switch-glass-fill);
+  box-shadow: none;
+  -webkit-backdrop-filter: var(--mode-switch-material-filter);
+  backdrop-filter: var(--mode-switch-material-filter);
+  vertical-align: middle;
+  -webkit-app-region: no-drag;
+  transition: inline-size var(--motion-fast) var(--ease-in);
+}
+
+.chat-mode-switch[data-expanded='true'] {
+  inline-size: calc(var(--control-md) * 2 + var(--mode-switch-inset) * 2);
+  transition-duration: var(--motion-base);
+  transition-timing-function: var(--ease-out);
+}
+
+.chat-mode-switch__options {
+  display: flex;
+  flex: none;
+  inline-size: calc(var(--control-md) * 2);
+  block-size: var(--control-sm);
+  transform: translateX(0);
+  transition: transform var(--motion-fast) var(--ease-in);
+}
+
+.chat-mode-switch[data-value='coder']:not([data-expanded='true']) .chat-mode-switch__options {
+  transform: translateX(calc(-1 * var(--control-md)));
+}
+
+.chat-mode-switch[data-expanded='true'] .chat-mode-switch__options {
+  transition-duration: var(--motion-base);
+  transition-timing-function: var(--ease-out);
+}
+
+.chat-mode-switch__option {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--control-md);
+  block-size: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-6);
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--ink-tertiary);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    visibility 0s;
+}
+
+.chat-mode-switch__option[aria-checked='true'] {
+  background: var(--mode-switch-glass-sheen), var(--mode-switch-selected-fill);
+  color: var(--ink-primary);
+}
+
+.chat-mode-switch__option:hover:not(:disabled) {
+  background-color: var(--mode-switch-selected-fill);
+  color: var(--ink-primary);
+}
+
+.chat-mode-switch__option:active:not(:disabled) {
+  background-color: var(--mode-switch-selected-fill);
+}
+
+.chat-mode-switch__option:focus-visible:not(:disabled) {
+  outline: none;
+  background-color: var(--mode-switch-focus-fill);
+  color: var(--ink-primary);
+}
+
+.chat-mode-switch:not([data-expanded='true']) .chat-mode-switch__option[aria-checked='false'] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition-delay: 0s, 0s, 0s, var(--motion-fast);
+}
+
+.chat-mode-switch[aria-disabled='true'] .chat-mode-switch__option {
+  color: var(--ink-disabled);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-mode-switch,
+  .chat-mode-switch__options,
+  .chat-mode-switch__option {
+    transition: none;
+  }
+}
+
+[data-reduced-motion='true'] .chat-mode-switch,
+[data-reduced-motion='true'] .chat-mode-switch__options,
+[data-reduced-motion='true'] .chat-mode-switch__option {
+  transition: none;
+}

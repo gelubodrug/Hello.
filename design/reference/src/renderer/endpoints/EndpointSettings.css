@@ -1,0 +1,283 @@
+/**
+ * EndpointSettings dialog (T068). Layout and motion only — all color, spacing,
+ * radius, and typography come from tokens.css / typography.css custom
+ * properties. The Dialog primitive owns enter/exit; nothing here competes with
+ * it (DESIGNUIguide.md §Motion).
+ */
+
+.es-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-16);
+}
+
+.es-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.es-field > label,
+.es-group-label {
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  color: var(--color-text-secondary);
+}
+
+.es-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-8);
+}
+
+/* Key state: the badge carries the shape, a modifier carries the meaning.
+   Both states are stated in words as well as tone — an endpoint with no key is
+   not an error, it just has no key, so it takes the neutral surface rather than
+   a warning colour (§Color roles: never rely on colour alone). */
+.es-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: 0 var(--sp-8);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  line-height: calc(var(--sp-16) + var(--sp-4));
+}
+
+.es-badge-on {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+.es-badge-off {
+  background: var(--color-surface-active);
+  color: var(--color-text-tertiary);
+}
+
+.es-key-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+}
+
+/* Two-step removal, sharing the footer's confirm idiom at label scale. */
+.es-confirm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  font-size: var(--fs-12);
+  color: var(--color-text-secondary);
+}
+
+.es-error {
+  color: var(--color-error);
+  font-size: var(--fs-12);
+  line-height: var(--lh-tight);
+}
+
+/* Inline advisory text — muted, non-error (e.g. the key.txt source note). */
+.es-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--fs-12);
+  line-height: var(--lh-tight);
+}
+
+.es-hint code {
+  font-family: var(--font-ui);
+}
+
+.es-temperature-input {
+  caret-color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- custom headers ------------------------------------------------------- */
+
+/* Disclosure header. Shares the chevron, the muted weight and the rotation of
+   the request-diagnostic disclosure — adjacent components read as one design
+   (DESIGNUIguide.md §UX rules). */
+.es-disclosure {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--sp-4);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.es-disclosure .es-group-label {
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.es-disclosure:hover .es-group-label {
+  color: var(--color-text-primary);
+}
+
+.es-disclosure-chevron {
+  flex: none;
+  color: var(--color-text-tertiary);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.es-disclosure[aria-expanded='true'] .es-disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+/* Count of what is folded away, so a configured endpoint says so while shut. */
+.es-disclosure-count {
+  min-width: var(--sp-16);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-6);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.es-headers-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-8);
+}
+
+.es-headers {
+  align-self: stretch;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.es-header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--sp-8);
+  align-items: center;
+}
+
+.es-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--sp-16) * 2);
+  height: calc(var(--sp-16) * 2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-8);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+}
+
+.es-icon-btn:hover {
+  color: var(--color-error);
+  border-color: var(--color-error);
+  background: var(--color-error-subtle);
+}
+
+/* --- numeric grid --------------------------------------------------------- */
+.es-numeric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-12);
+}
+
+/* --- probe result --------------------------------------------------------- */
+.es-probe {
+  min-height: calc(var(--sp-16) + var(--sp-4));
+}
+
+.es-probe-result {
+  font-size: var(--fs-13);
+}
+
+.es-probe-testing {
+  color: var(--color-text-secondary);
+}
+
+.es-probe-ok {
+  color: var(--color-success);
+  font-weight: var(--fw-medium);
+}
+
+.es-probe-err {
+  color: var(--color-error);
+}
+
+/* --- footer --------------------------------------------------------------- */
+.es-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  padding-top: var(--sp-8);
+}
+
+.es-footer-left {
+  display: flex;
+  align-items: center;
+  min-height: calc(var(--sp-16) * 2);
+}
+
+.es-footer-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+}
+
+.es-delete-btn,
+.es-linkbtn {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.es-delete-btn {
+  color: var(--color-error);
+}
+
+.es-delete-btn:hover {
+  color: var(--color-error-hover);
+}
+
+.es-linkbtn {
+  color: var(--color-text-secondary);
+}
+
+.es-linkbtn:hover {
+  color: var(--color-text-primary);
+}
+
+.es-delete-btn:disabled,
+.es-linkbtn:disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+
+.es-confirm-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+}
+
+.es-confirm-delete-label {
+  margin-right: var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--color-text-secondary);
+}

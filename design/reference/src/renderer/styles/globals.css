@@ -1,0 +1,153 @@
+/**
+ * Global baseline (DESIGNUIguide.md §Responsive behavior/Accessibility/Motion):
+ * a minimal reset, a visible focus-visible ring built from the tokens in
+ * tokens.css, horizontal-overscroll containment for the app shell, a
+ * sensible minimum window size, and the reduced-motion contract: motion
+ * durations collapse, transforms are skipped, opacity fades remain brief,
+ * and activity spinners slow rather than freeze.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  min-width: 640px;
+  min-height: 480px;
+  /* Transparent so the native window vibrancy (src/main/index.ts) is the base
+     surface — the translucent chrome (tokens.css --material-chrome) composites
+     over it. Painted regions (sidebar, titlebar, conversation) cover the
+     window, so nothing renders straight onto bare desktop. */
+  background: transparent;
+  color: var(--color-text-primary);
+  overscroll-behavior-x: none;
+}
+
+#root {
+  height: 100%;
+}
+
+/*
+ * Theme-aware scrollbars. Nothing here declares `color-scheme`: the window is
+ * backed by native vibrancy and only stays transparent while the root canvas
+ * has no scheme-derived paint (see `body` above), so the UA would keep
+ * rendering its light-scheme default scrollbar (white track, #c1c1c1 thumb) —
+ * a bright strip down the transcript, the model popover and the dialog in dark
+ * mode. Colouring the scrollbar from the tokens instead keeps both themes
+ * consistent without touching the canvas. Inherited, so any scroller that
+ * wants something else (Sidebar.css's hover-only overlay thumb) overrides it.
+ */
+:root {
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+img,
+picture,
+svg,
+video {
+  max-width: 100%;
+  display: block;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Keyboard-only focus ring for non-text controls. Pointer focus stays clean,
+   while text controls always use their caret as the sole focus indicator. */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Chromium paints :focus-visible for programmatic focus too, and this app
+   restores focus by script whenever an overlay closes (ui/Dialog.tsx, the
+   sidebar menus). Without this the mouse-only round trip — click a row, open
+   its dialog, close it with the mouse — ends with a keyboard ring around the
+   clicked row. The ring stands down only while the pointer is the device
+   driving; any key press, Escape included, flips the modality back and the
+   ring returns. See ui/input-modality.ts, which sets the attribute. */
+:root[data-input-modality='pointer'] :focus-visible {
+  outline: none;
+}
+
+:where(
+  textarea,
+  select,
+  [data-focus-indicator='caret'],
+  input:not(
+    :is(
+      [type='button'],
+      [type='checkbox'],
+      [type='color'],
+      [type='file'],
+      [type='radio'],
+      [type='range'],
+      [type='reset'],
+      [type='submit']
+    )
+  )
+):focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Presence changes remain perceptible without spatial motion. */
+  .reveal,
+  .sidebar {
+    transform: none !important;
+    transition-property: opacity !important;
+    transition-duration: 80ms !important;
+  }
+
+  .dialog-panel {
+    transform: none !important;
+    transition-property: opacity !important;
+    transition-duration: 80ms !important;
+  }
+
+  /* Progress indicators communicate ongoing work, so they slow instead of
+     becoming a frozen glyph under reduced motion. */
+  [class*='spinner'] {
+    animation-duration: var(--dur-spin-reduced) !important;
+    animation-iteration-count: infinite !important;
+  }
+}

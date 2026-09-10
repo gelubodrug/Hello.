@@ -1,0 +1,435 @@
+/**
+ * Design tokens (DESIGNUIguide.md): spacing scale, radii, fonts, and a
+ * neutral color palette with accent/error/success roles + focus ring.
+ * Light values live on bare :root; dark values apply both to system
+ * `prefers-color-scheme: dark` (unless explicitly forced light) and to an
+ * explicit `[data-theme="dark"]` override, so a later theme toggle only
+ * needs to set `data-theme` on the document root.
+ */
+
+:root {
+  /* Spacing */
+  --sp-4: 4px;
+  --sp-8: 8px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-20: 20px;
+  --sp-24: 24px;
+  --sp-32: 32px;
+
+  /* Borders */
+  --border-hairline: 1px;
+
+  /* Radii */
+  --r-6: 6px;
+  --r-8: 8px;
+  --r-10: 10px;
+  --r-12: 12px;
+  --r-18: 18px;
+  --r-24: 24px;
+  --r-pill: 9999px;
+
+  /* Control sizes (DESIGNUIguide.md §Spacing & control sizes). Sizes for
+     controls are their own scale — never derived from the spacing tokens. */
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-lg: 32px;
+  --titlebar-height: 48px;
+  --pane-header-height: 48px;
+  --sidebar-width: 272px;
+  --window-control-inset: 96px;
+
+  /* Zone tab rails. Defined once, by reference: they resolve through the
+     themed surface tokens, so light and dark need no second copy. The rail is
+     the pressed surface — a tone below the pane — and the open tab is the
+     plain surface sitting on it, which is what makes the pill read without a
+     border or a shadow. Idle tabs get only a breath of ink. */
+  --zone-rail-fill: color-mix(in srgb, var(--color-bg) 84%, var(--color-surface-active));
+  --zone-tab-idle-fill: color-mix(in srgb, var(--color-bg) 72%, var(--color-surface-active));
+
+  /* User-requested glass mode switch, 2026-09-09. These translucent roles
+     are scoped to the composer switch, not other pills or menus. */
+  --mode-switch-inset: 2px;
+  --mode-switch-glass-fill: color-mix(in srgb, var(--surface-raised) 16%, transparent);
+  --mode-switch-glass-sheen: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-light-ink) 10%, transparent),
+    color-mix(in srgb, var(--surface-light-ink) 2%, transparent));
+  --mode-switch-selected-fill: color-mix(in srgb, var(--surface-rim-ink) 8%, transparent);
+  --mode-switch-focus-fill: color-mix(in srgb, var(--surface-rim-ink) 20%, transparent);
+  --mode-switch-material-filter: blur(12px) saturate(1.15);
+
+  /* Composer model/effort selectors: a quiet oval, including keyboard focus. */
+  --composer-selector-hover-fill: var(--surface-active);
+  --composer-selector-focus-fill: color-mix(in srgb, var(--surface-active) 88%, var(--ink-primary));
+
+  /* Active reasoning stays monochrome in both themes; only the text moves. */
+  --thinking-gradient: linear-gradient(110deg,
+    var(--ink-secondary) 30%, var(--ink-primary) 47%,
+    var(--ink-primary) 53%, var(--ink-secondary) 70%);
+
+  /* Browser AI Mode: grey Off, orange Read only, red Full access. Shared
+     themed ink keeps the reference's solid pill legible in light and dark. */
+  --browser-ai-off-fill: var(--surface-active);
+  --browser-ai-off-ink: var(--ink-primary);
+  --browser-ai-read-fill: color-mix(in srgb, var(--color-warning) 24%, var(--surface-active));
+  --browser-ai-read-ink: color-mix(in srgb, var(--color-warning) 45%, var(--ink-primary));
+  --browser-ai-full-fill: color-mix(in srgb, var(--color-error) 24%, var(--surface-active));
+  --browser-ai-full-ink: color-mix(in srgb, var(--color-error) 45%, var(--ink-primary));
+
+  /* Fonts */
+  --font-ui:
+    'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono:
+    'Geist Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+  /* The terminal's own stack, deliberately not --font-mono. Geist Mono has no
+     box-drawing or block-element glyphs, and a missing glyph falls back per
+     character to a face with a different advance width — which is what tears
+     the frames and logos of TUI programs apart. SF Mono and Menlo carry the
+     full set, so a terminal never reaches the fallback. */
+  --font-terminal:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+
+  /* Approved Linear hierarchy: navigation < workspace < panel < raised UI.
+     Components consume role aliases, never duplicate these palette values. */
+  --surface-sidebar: #f0f1f3;
+  --surface-workspace: #f7f7f8;
+  --surface-panel: #fafafa;
+  --surface-raised: #ffffff;
+  --surface-hover: #f0f0f1;
+  --surface-active: #e8e8ea;
+  --surface-edge: #e4e4e7;
+  --surface-edge-strong: #d4d4d8;
+  --surface-glow: #dcdfe3;
+  /* 23:02 reference refinement: light is a local, elliptical falloff, never
+     a diagonal wash. Each fill ends opaque so the rim cannot tint its body.
+     Keep the base color tokens above as colors for controls/contrast roles. */
+  --surface-light-ink: #ffffff;
+  --surface-rim-ink: #191c23;
+  --surface-cloud-peak: #f0f1f3;
+  --surface-cloud-soft: #f6f7f8;
+  --surface-cloud-shade: #fafafb;
+  --surface-cloud-spread: 1.4;
+  /* Native gradients interpolate near-surface colors directly. Do not flatten
+     this into a low-opacity white mask: that narrows its available alpha steps.
+     One broad source starts exactly at the upper-left corner. Three secondary
+     fields have different 20% / 80% / 50% horizontal radii and off-canvas centers.
+     They never reach the corner's peak or form a shared central convergence.
+     Keep these intersections fixed, never randomized per frame. */
+  --surface-cloud-background:
+    radial-gradient(
+      ellipse 20% 31% at 108% 13% in oklab,
+      var(--surface-cloud-soft) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse 80% 48% at -24% 110% in oklab,
+      var(--surface-cloud-soft) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse 50% 74% at 116% 83% in oklab,
+      var(--surface-cloud-shade) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse calc(80% * var(--surface-cloud-spread)) calc(60% * var(--surface-cloud-spread)) at 0%
+        0% in oklab,
+      var(--surface-cloud-peak) 0%,
+      var(--surface-cloud-soft) 28%,
+      var(--surface-workspace) 86%
+    );
+  --surface-navigation-background: radial-gradient(
+    ellipse 420px 560px at 0% 0%,
+    color-mix(in srgb, var(--surface-sidebar) 96.5%, var(--surface-light-ink)) 0%,
+    color-mix(in srgb, var(--surface-sidebar) 98.7%, var(--surface-light-ink)) 36%,
+    var(--surface-sidebar) 76%
+  );
+  --surface-workspace-background: radial-gradient(
+    ellipse 680px 540px at 0% 0%,
+    color-mix(in srgb, var(--surface-workspace) 97%, var(--surface-light-ink)) 0%,
+    color-mix(in srgb, var(--surface-workspace) 99%, var(--surface-light-ink)) 42%,
+    var(--surface-workspace) 78%
+  );
+  --surface-panel-background: radial-gradient(
+    ellipse 520px 420px at 0% 0%,
+    color-mix(in srgb, var(--surface-panel) 98.5%, var(--surface-light-ink)) 0%,
+    var(--surface-panel) 76%
+  );
+  --surface-surround-shadow: 0 4px 16px -6px rgb(0 0 0 / 8%);
+  --sidebar-current-fill: #e4e5e8;
+  --ink-primary: #24262b;
+  --ink-secondary: #565961;
+  --ink-tertiary: #727680;
+  --ink-disabled: #b4b4ba;
+  --color-bg: var(--surface-workspace);
+  --color-surface: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-border: var(--surface-edge);
+  --color-border-strong: var(--surface-edge-strong);
+  --color-text-primary: var(--ink-primary);
+  --color-text-secondary: var(--ink-secondary);
+  --color-text-tertiary: var(--ink-tertiary);
+  --color-text-disabled: var(--ink-disabled);
+  --color-text-inverse: #ffffff;
+
+  /* Menus are a distinct floating layer, including when portalled to body. */
+  --menu-fill: #ffffff;
+  --menu-hover: #ececee;
+  --menu-active: #e2e3e6;
+  --menu-edge: #dcdde0;
+  --menu-separator: #e8e8eb;
+  --menu-ink: #24262b;
+  --menu-muted: #727680;
+  --menu-shadow: 0 12px 32px rgb(25 28 35 / 12%), 0 2px 6px rgb(25 28 35 / 8%);
+  --menu-radius: var(--r-12);
+  --menu-row-radius: var(--r-8);
+  --menu-row-height: var(--control-lg);
+  --menu-padding: 6px;
+  --menu-width-min: 220px;
+  --panel-radius: 16px;
+  /* One native blur, drawn by box-shadow. Negative spread keeps the shadow
+     close to the card instead of building wide, overlapping near-black bands. */
+  --panel-shadow: 0 10px 28px -8px rgb(25 28 35 / 14%);
+
+  /* Compatibility material roles. The native window may retain vibrancy,
+     but opaque renderer backings keep the approved tonal hierarchy stable
+     regardless of what is on the desktop behind this window. */
+  --material-chrome: var(--surface-sidebar);
+  --material-content: var(--surface-workspace);
+
+  /* Accent (macOS systemBlue) */
+  --color-accent: #007aff;
+  --color-accent-hover: #0069d9;
+  --color-accent-active: #005bbf;
+  --color-accent-subtle: #e8f1ff;
+
+  /* Error (macOS systemRed) */
+  --color-error: #ff3b30;
+  --color-error-hover: #e0301f;
+  --color-error-subtle: #fdecea;
+
+  /* Success (macOS systemGreen) */
+  --color-success: #34c759;
+  --color-success-subtle: #e6f8ea;
+
+  /* Warning (macOS systemOrange) — e.g. the plain-HTTP address-bar indicator
+     and the certificate-error interstitial (T109). */
+  /* The agent's own colour: warm orange, distinct from the app's blue accent
+     (which is the user's own doing) and from the amber used for warnings.
+     While it is on screen, something other than the user is acting. */
+  --color-agent: #d97757;
+  --color-agent-subtle: #fdf0eb;
+
+  --color-warning: #ff9500;
+  --color-warning-subtle: #fdf1e3;
+
+  /* Focus ring */
+  --color-focus-ring: #007aff;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* Elevation: small shadows only, per DESIGNUIguide.md §Elevation
+     (dropdowns/popovers/menus/dialogs/floating overlays). */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.08);
+
+  /* Terminal surface (DESIGNUIguide.md is silent on it, so it is derived from
+     the app's macOS system palette rather than invented). The embedded
+     terminal takes its colours as a JS object, not as CSS, so the pane reads
+     these back with getComputedStyle and hands xterm a theme.
+
+     The ground is true black in every theme, because a terminal is a terminal:
+     it is the one surface in this app that is not the app's panel colour, and
+     a user who opens one expects the black rectangle they get from
+     Terminal.app rather than a pale box with a prompt in it. These four and
+     the ramp below are therefore declared once, here, and deliberately NOT
+     re-stated in the two dark blocks — three copies of one palette can only
+     drift, and there is nothing left for a theme to say about them. */
+  --term-bg: #000000;
+  --term-fg: #f5f5f7;
+  --term-selection: rgba(255, 255, 255, 0.24);
+  --term-selection-inactive: rgba(255, 255, 255, 0.12);
+
+  /* The ANSI ramp that goes with that ground: the normal half is the vivid
+     system colour it is named after, the bright half a lighter tint of it. */
+  --term-ansi-black: #1e1e20;
+  --term-ansi-red: #ff453a;
+  --term-ansi-green: #30d158;
+  --term-ansi-yellow: #ffd60a;
+  --term-ansi-blue: #0a84ff;
+  --term-ansi-magenta: #bf5af2;
+  --term-ansi-cyan: #64d2ff;
+  --term-ansi-white: #b4b4b8;
+  --term-ansi-bright-black: #6a6a70;
+  --term-ansi-bright-red: #ff6961;
+  --term-ansi-bright-green: #5be584;
+  --term-ansi-bright-yellow: #ffe066;
+  --term-ansi-bright-blue: #5aa9ff;
+  --term-ansi-bright-magenta: #da8fff;
+  --term-ansi-bright-cyan: #9be2ff;
+  --term-ansi-bright-white: #f5f5f7;
+
+  /* Motion */
+  --dur-spin: 700ms;
+  --dur-spin-reduced: 1400ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --surface-sidebar: #101112;
+    --surface-workspace: #131415;
+    --surface-panel: #171819;
+    --surface-raised: #212225;
+    --surface-hover: #282a2e;
+    --surface-active: #33363c;
+    --surface-edge: #2c2e32;
+    --surface-edge-strong: #414349;
+    --surface-glow: #232529;
+    --surface-rim-ink: #ffffff;
+    --surface-cloud-peak: #1d1e1f;
+    --surface-cloud-soft: #161718;
+    --surface-cloud-shade: #111213;
+    --surface-surround-shadow: 0 4px 16px -6px rgb(0 0 0 / 12%);
+    --sidebar-current-fill: #191a1c;
+    --ink-primary: #e5e5e7;
+    --ink-secondary: #b1b3bb;
+    --ink-tertiary: #92959e;
+    --ink-disabled: #6a6a70;
+    --color-text-inverse: #ffffff;
+    --menu-fill: #212121;
+    --menu-hover: #323232;
+    --menu-active: #3b3b3b;
+    --menu-edge: #3b3b3b;
+    --menu-separator: #303030;
+    --menu-ink: #e2e2e2;
+    --menu-muted: #969696;
+    --menu-shadow: 0 12px 32px rgb(0 0 0 / 28%), 0 2px 6px rgb(0 0 0 / 18%);
+    --panel-shadow: 0 10px 28px -8px rgb(0 0 0 / 22%);
+
+    --color-accent: #0a84ff;
+    --color-accent-hover: #3d9aff;
+    --color-accent-active: #007aff;
+    --color-accent-subtle: rgba(10, 132, 255, 0.16);
+
+    --color-error: #ff453a;
+    --color-error-hover: #ff6961;
+    --color-error-subtle: rgba(255, 69, 58, 0.16);
+
+    --color-success: #30d158;
+    --color-success-subtle: rgba(48, 209, 88, 0.16);
+
+    --color-agent: #e58f70;
+    --color-agent-subtle: rgba(217, 119, 87, 0.18);
+
+    --color-agent: #e58f70;
+    --color-agent-subtle: rgba(217, 119, 87, 0.18);
+
+    --color-warning: #ff9f0a;
+    --color-warning-subtle: rgba(255, 159, 10, 0.16);
+
+    --color-focus-ring: #0a84ff;
+
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.24);
+  }
+}
+
+:root[data-theme='dark'] {
+  --surface-sidebar: #101112;
+  --surface-workspace: #131415;
+  --surface-panel: #171819;
+  --surface-raised: #212225;
+  --surface-hover: #282a2e;
+  --surface-active: #33363c;
+  --surface-edge: #2c2e32;
+  --surface-edge-strong: #414349;
+  --surface-glow: #232529;
+  --surface-rim-ink: #ffffff;
+  --surface-cloud-peak: #1d1e1f;
+  --surface-cloud-soft: #161718;
+  --surface-cloud-shade: #111213;
+  --surface-surround-shadow: 0 4px 16px -6px rgb(0 0 0 / 12%);
+  --sidebar-current-fill: #191a1c;
+  --ink-primary: #e5e5e7;
+  --ink-secondary: #b1b3bb;
+  --ink-tertiary: #92959e;
+  --ink-disabled: #6a6a70;
+  --color-text-inverse: #ffffff;
+  --menu-fill: #212121;
+  --menu-hover: #323232;
+  --menu-active: #3b3b3b;
+  --menu-edge: #3b3b3b;
+  --menu-separator: #303030;
+  --menu-ink: #e2e2e2;
+  --menu-muted: #969696;
+  --menu-shadow: 0 12px 32px rgb(0 0 0 / 28%), 0 2px 6px rgb(0 0 0 / 18%);
+  --panel-shadow: 0 10px 28px -8px rgb(0 0 0 / 22%);
+
+  --color-accent: #0a84ff;
+  --color-accent-hover: #3d9aff;
+  --color-accent-active: #007aff;
+  --color-accent-subtle: rgba(10, 132, 255, 0.16);
+
+  --color-error: #ff453a;
+  --color-error-hover: #ff6961;
+  --color-error-subtle: rgba(255, 69, 58, 0.16);
+
+  --color-success: #30d158;
+  --color-success-subtle: rgba(48, 209, 88, 0.16);
+
+  --color-warning: #ff9f0a;
+  --color-warning-subtle: rgba(255, 159, 10, 0.16);
+
+  --color-focus-ring: #0a84ff;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.24);
+}
+
+/* One localized radial fade, not an illuminated corner on an invisible rim.
+   Its 40% horizontal/vertical radii cover 20% of a rectangle's perimeter
+   from a corner; the remaining ~80% stays at full rim strength. Define the
+   gradient on each surface so its local corner variable resolves there. */
+[data-surface-rim] {
+  --surface-rim-origin: 0% 0%;
+  --surface-rim-layers: radial-gradient(
+      ellipse 40% 40% at var(--surface-rim-origin),
+      transparent 0%,
+      color-mix(in srgb, var(--surface-rim-ink) 0.5%, transparent) 24%,
+      color-mix(in srgb, var(--surface-rim-ink) 4%, transparent) 64%,
+      color-mix(in srgb, var(--surface-rim-ink) 9%, transparent) 100%
+    )
+    border-box;
+}
+
+[data-surface-rim='top-right'] {
+  --surface-rim-origin: 100% 0%;
+}
+
+[data-surface-rim='bottom-left'] {
+  --surface-rim-origin: 0% 100%;
+}
+
+[data-surface-rim='bottom-right'] {
+  --surface-rim-origin: 100% 100%;
+}
+
+/* Chat-specific geometry; its tones now share the approved app hierarchy. */
+[data-chat-design] {
+  --chat-font-ui: var(--font-ui);
+  --chat-stage-fill: var(--surface-workspace);
+  --chat-stage-glow: var(--surface-glow);
+  --chat-panel-fill: var(--surface-panel);
+  --chat-raised-fill: var(--surface-raised);
+  --chat-hover-fill: var(--surface-hover);
+  --chat-pressed-fill: var(--surface-active);
+  --chat-ink: var(--ink-primary);
+  --chat-secondary: var(--ink-secondary);
+  --chat-muted: var(--ink-tertiary);
+  --chat-edge: var(--surface-edge);
+  --chat-panel-shadow: var(--panel-shadow);
+  --chat-panel-radius: var(--panel-radius);
+  --chat-floating-width: 560px;
+  --chat-floating-height: 760px;
+  --chat-transcript-top-fade: var(--sp-24);
+  --chat-transcript-mask: linear-gradient(to bottom, transparent, black var(--chat-transcript-top-fade));
+}

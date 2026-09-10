@@ -1,0 +1,54 @@
+# ─── Agent tooling ───
+# The agent tooling's own working data — worktrees, ledgers, chats, worker transcripts.
+# Never the user's work; never committed. Both spellings are listed on
+# purpose: the code says .agent/ (150 references, no .agents/), and one
+# extra line is cheaper than committing the directory we meant to hide.
+.agent/
+.agents/
+.od/
+.tmp/
+
+# Secrets. Ignored from the first commit, because noticing later means
+# rewriting history. `.env.example` stays tracked on purpose — it documents
+# which keys exist without carrying their values.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+out/
+target/
+.next/
+.nuxt/
+.svelte-kit/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Logs and local databases
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.sqlite
+*.sqlite3
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

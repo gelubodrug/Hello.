@@ -1,0 +1,84 @@
+/**
+ * Button primitive (DESIGNUIguide.md §Buttons): default/hover/active/disabled
+ * states per variant, plus a consistent height/alignment across variants.
+ * The single global :focus-visible rule supplies its keyboard ring. Built
+ * entirely on tokens.css/typography.css custom properties.
+ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  height: calc(var(--sp-16) * 2);
+  padding: 0 var(--sp-16);
+  border-radius: var(--r-8);
+  border: 1px solid transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn-icon {
+  flex: none;
+}
+
+/* Primary: visually strongest, reserved for the dominant action in a region. */
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--color-accent-active);
+  border-color: var(--color-accent-active);
+}
+
+/* Secondary: default weight for most actions. */
+.btn-secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.btn-secondary:active:not(:disabled) {
+  background: var(--color-surface-active);
+}
+
+/* Destructive: visually distinguishable from primary/secondary at a glance. */
+.btn-destructive {
+  background: var(--color-error);
+  border-color: var(--color-error);
+  color: var(--color-text-inverse);
+}
+
+.btn-destructive:hover:not(:disabled) {
+  background: var(--color-error-hover);
+  border-color: var(--color-error-hover);
+}
+
+.btn-destructive:active:not(:disabled) {
+  background: var(--color-error-hover);
+  filter: brightness(0.92);
+}

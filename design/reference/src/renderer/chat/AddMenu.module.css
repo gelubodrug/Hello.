@@ -1,0 +1,126 @@
+/**
+ * The composer's Add panel (see AddMenu.tsx).
+ *
+ * Two elements, like the shared Popover: `.presence` positions and animates,
+ * `.panel` is the floating surface. Splitting them keeps the panel's border
+ * and padding inside the element outside-click detection measures against, so
+ * a click on the panel's own padding cannot dismiss it.
+ *
+ * The panel is anchored to the composer surface itself rather than to the `+`
+ * button, so `left`/`right: 0` gives it the composer's exact width at every
+ * column size — DESIGNUIguide.md §Composer keeps the composer aligned to the
+ * 720px reading column, and this follows it for free.
+ */
+
+.presence {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--sp-4));
+  left: 0;
+  z-index: 1000;
+}
+
+/* Exit runs on the catalog's dismissal timing (DESIGNUIguide.md §Motion:
+   menu close is --motion-fast); the enter timing and the +4px upward travel
+   come from the shared .reveal rules. */
+.presence[data-state='exit'] {
+  pointer-events: none;
+  transition-duration: var(--motion-fast);
+}
+
+/* The same surface as every other menu in the app (ui/Menu.css): --r-10,
+   1px hairline, the shared shadow. This panel is wider, not different. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  /* Bounded like the model chip's list, the panel's sibling in this row: it
+     scrolls internally instead of climbing the window as entries are added. */
+  max-height: min(280px, calc(100vh - 160px));
+  padding: var(--sp-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-10);
+  background: var(--color-surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+/* A quiet label, written the way it is spoken — nothing in this app is set in
+   capitals, and a heading is not the place to start. */
+.heading {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-sm);
+  padding: 0 var(--sp-12);
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Row anatomy copied from `.menu-item` in ui/Menu.css, value for value, so a
+   row here and a row in any other menu are the same object. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  height: calc(var(--sp-16) * 2);
+  padding: 0 var(--sp-12);
+  border: none;
+  border-radius: var(--r-6);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-regular);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+/* The roving-tabindex row, i.e. where the keyboard is. */
+.row[tabindex='0'],
+.row:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.row:active:not(:disabled) {
+  background: var(--color-surface-active);
+}
+
+.row:disabled {
+  cursor: not-allowed;
+  color: var(--color-text-disabled);
+}
+
+.rowIcon {
+  flex: none;
+}
+
+.rowLabel {
+  flex: 0 1 auto;
+}
+
+/* The gloss gives way first: it takes the space the label leaves and fades
+   out before the label has to. */
+.rowDescription {
+  flex: 1 1 auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-regular);
+}
+
+.row:disabled .rowDescription {
+  color: var(--color-text-disabled);
+}

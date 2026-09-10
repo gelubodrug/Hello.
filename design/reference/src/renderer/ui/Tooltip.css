@@ -1,0 +1,42 @@
+/**
+ * Tooltip primitive (DESIGNUIguide.md §Tooltips): a light hint for
+ * icon-only controls, positioned like Popover (fixed + viewport clipping)
+ * but styled small and unobtrusive — never a container for required text.
+ */
+
+.tooltip-presence {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  z-index: 1000;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out);
+  will-change: opacity;
+}
+
+.tooltip-presence[data-state='enter'],
+.tooltip-presence[data-state='exit'] {
+  opacity: 0;
+  transform: none;
+}
+
+.tooltip-presence[data-state='shown'] {
+  opacity: 1;
+  transform: none;
+}
+
+.tooltip-presence[data-state='exit'] {
+  transition-timing-function: var(--ease-in);
+}
+
+.tooltip {
+  max-width: min(240px, calc(100vw - 16px));
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-6);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  box-shadow: var(--shadow-sm);
+}

@@ -1,0 +1,45 @@
+/**
+ * Motion tokens (DESIGNUIguide.md §Motion): shared duration + easing tokens
+ * for every reveal / dismiss / open-close transition in the app. Built on
+ * tokens.css — the source of truth for the rest of the design system.
+ *
+ * One shared enter curve (`--ease-out`) and one exit curve (`--ease-in`) so
+ * components never invent per-surface easings. Under
+ * `prefers-reduced-motion: reduce` every motion-token duration collapses to
+ * `0ms` and reveal transforms are removed. globals.css retains only short
+ * opacity fades and the deliberately slowed activity spinner.
+ */
+
+:root {
+  /* Durations — 120–200ms chrome band from the design guide. */
+  --motion-fast: 120ms; /* local controls, quick cross-fades */
+  --motion-base: 160ms; /* default reveal / dismiss for chrome */
+  --motion-slow: 200ms; /* larger panels / overlays */
+  /* Compact width + opacity reveal, 2026-09-10. */
+  --motion-tab-label: 80ms;
+  --ease-tab-label: ease;
+
+  /* User-requested text-only Thinking status, not a chrome transition. */
+  --thinking-shimmer-cycle: 2.2s;
+
+  /* Easing — native macOS ease-out for enter, ease-in for exit. */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Reveal primitive tuning: the catalog's standard 4px vertical offset. */
+  --reveal-translate: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+    --motion-tab-label: 0ms;
+    --reveal-translate: 0px;
+  }
+}
+
+[data-reduced-motion="true"] {
+  --motion-tab-label: 0ms;
+}

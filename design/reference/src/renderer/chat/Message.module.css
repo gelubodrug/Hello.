@@ -1,0 +1,545 @@
+/**
+ * Message row (DESIGNUIguide.md §Chat layout): roles are distinguished by
+ * structure and quiet surface differences — never bright color. User and
+ * assistant actions reserve stable rows beneath their messages. Built on the
+ * neutral tokens in tokens.css / typography.css.
+ */
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: 0;
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-15);
+  line-height: 22px;
+}
+
+/* User: a quiet, right-aligned tonal bubble with no border or shadow. */
+.row[data-role='user'] {
+  align-items: flex-end;
+}
+
+.row[data-role='user'] .bubble {
+  max-width: var(--chat-user-width, 68%);
+  padding: var(--sp-8) 14px;
+  border: none;
+  border-radius: var(--chat-user-radius, var(--r-18));
+  background: var(--color-surface-hover);
+}
+
+/* Assistant: plain left-aligned text on the conversation material. */
+.row[data-role='assistant'] {
+  align-items: stretch;
+}
+
+.row[data-role='assistant'] .bubble {
+  width: 100%;
+}
+
+/* System: centered and extra subdued metadata in the shared UI face. */
+.row[data-role='system'] {
+  align-items: center;
+}
+
+.row[data-role='system'] .bubble {
+  max-width: 80%;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  text-align: center;
+}
+
+.bubble {
+  position: relative;
+  min-width: 0;
+}
+
+.content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Message rows own the transcript's exact 15px/22px measure; Markdown keeps
+   its block rhythm but inherits this line box for conversational prose. */
+.content > :global(*) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Long prompts keep the conversation scannable. The toggle belongs to the
+   bubble (not the action row) and its lower edge is anchored in Message.tsx,
+   so opening it reveals the hidden text upward. */
+.longMessage {
+  min-width: 0;
+}
+
+.longMessageContent {
+  position: relative;
+  min-width: 0;
+}
+
+.longMessageContent[data-collapsed='true'] {
+  max-height: min(46vh, 420px);
+  overflow: hidden;
+}
+
+.longMessageContent[data-collapsed='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 64px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--color-surface-hover) 82%);
+}
+
+.longMessageToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--control-sm);
+  margin-top: var(--sp-4);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.longMessageToggle:hover {
+  color: var(--color-text-primary);
+}
+
+.longMessageToggle:focus-visible {
+  border-radius: var(--r-6);
+  outline: 2px solid var(--color-focus, var(--color-text-secondary));
+  outline-offset: 2px;
+}
+
+.longMessageChevron {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.longMessage[data-expanded='true'] .longMessageChevron {
+  transform: rotate(180deg);
+}
+
+/* Both roles share one stable action-row anatomy. Opacity reveals preserve the
+   reserved --control-sm footprint, so hovering never moves transcript text. */
+.messageActions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--control-sm);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-in);
+}
+
+.assistantActions {
+  margin-top: var(--sp-4);
+}
+
+.userActions {
+  justify-content: flex-end;
+}
+
+.assistantActions[data-latest='true'],
+.row:hover .messageActions:not([data-streaming]),
+.messageActions:focus-within {
+  opacity: 1;
+  transition-timing-function: var(--ease-out);
+}
+
+.assistantActions[data-streaming] {
+  pointer-events: none;
+}
+
+/* Link-bearing assistant replies expose a persistent, quiet source affordance
+   immediately after the reserved action row. */
+.sourcesRow {
+  display: flex;
+  align-items: center;
+  margin-top: var(--sp-4);
+}
+
+.sourcesTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-sm);
+  padding-inline: var(--sp-12);
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.sourcesTrigger:hover,
+.sourcesTrigger[data-open] {
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+}
+
+.sourcesPopover {
+  width: min(336px, calc(100vw - var(--sp-16)));
+  max-height: min(352px, calc(100vh - var(--sp-16)));
+  padding: var(--sp-4);
+  overflow-y: auto;
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--r-10);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+}
+
+.sourcesMenu {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sourceItem {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-6);
+  color: inherit;
+  font-family: var(--font-ui);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.sourceItem:hover,
+.sourceItem:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.sourceItem:active {
+  background: var(--color-surface-active);
+}
+
+.sourceTitle,
+.sourceUrl {
+  display: block;
+  min-width: 0;
+}
+
+.sourceTitle {
+  color: var(--color-text-primary);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-normal);
+}
+
+/* URLs deliberately use Geist too; mono is reserved for code (T141). */
+.sourceUrl {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-normal);
+}
+
+.actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: none;
+  border-radius: var(--r-6);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.actionButton:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+.actionButton:active {
+  background: var(--color-surface-active);
+}
+
+.actionButton:disabled {
+  cursor: default;
+}
+
+.actionIcon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Inline editor: replaces .content while a user message is being edited. */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.editorTextarea {
+  min-height: 3em;
+  padding: var(--sp-8);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-6);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--fs-14);
+  line-height: var(--lh-normal);
+  resize: vertical;
+}
+
+.editorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-8);
+}
+
+.editorCancel,
+.editorSave {
+  padding: var(--sp-4) var(--sp-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-6);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.editorSave {
+  border-color: var(--color-accent, var(--color-border));
+  color: var(--color-text-primary);
+}
+
+/* T143 agent step trail: quiet, one-font, above the answer. */
+.agentSteps {
+  margin: 0 0 var(--sp-8);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agentStep {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  font-family: var(--font-ui);
+  font-size: var(--fs-11);
+  color: var(--color-text-tertiary);
+}
+
+.agentStep[data-status='running'] .agentStepLabel::after {
+  content: '…';
+}
+
+.agentStep[data-status='failed'] .agentStepLabel {
+  text-decoration: line-through;
+}
+
+/* Truncation comes from the shared `truncate-fade` utility (T141). */
+.agentStepLabel {
+  min-width: 0;
+}
+
+.agentStepFlag {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+/* Whether the project runbook reached the model this turn (D1 criterion 6).
+   Same anatomy as an agent step — this is the same kind of quiet provenance —
+   with a leading icon so it reads as context rather than as an action taken. */
+.runbookContext {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  margin: 0 0 var(--sp-8);
+  font-family: var(--font-ui);
+  font-size: var(--fs-11);
+  color: var(--color-text-tertiary);
+  border-radius: var(--r-6);
+}
+
+/* Nothing was sent: the icon steps back, the words carry the rest. */
+.runbookContext[data-included='false'] .runbookContextIcon {
+  opacity: 0.5;
+}
+
+.runbookContextIcon {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  align-self: center;
+}
+
+.metrics {
+  margin-top: var(--sp-4);
+  font-family: var(--font-ui);
+  font-size: var(--fs-11);
+  color: var(--color-text-tertiary);
+}
+
+/* Visually hidden, screen-reader-only live region for the "Copied" cue. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+/* The model that produced a reply, shown only when it differs from the one
+   before it — a thread can change hands mid-conversation. The metrics line is
+   chrome, so no mono here either (DESIGNUIguide.md §Typography). */
+.metricsModel {
+  color: var(--color-text-secondary);
+}
+
+/* --- Visible terminal activity ------------------------------------------
+   Commands are grouped as one transcript event, then individually expandable
+   with Shiki-highlighted input and a bounded live stdout/stderr surface. */
+.terminalGroup {
+  width: 100%;
+  min-width: 0;
+  margin-block: var(--sp-4) var(--sp-12);
+}
+
+.terminalGroupSummary,
+.terminalCommandSummary {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.terminalGroupSummary::-webkit-details-marker,
+.terminalCommandSummary::-webkit-details-marker {
+  display: none;
+}
+
+.terminalGroupSummary {
+  gap: var(--sp-8);
+  min-height: 34px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+}
+
+.terminalGroupIcon,
+.terminalGroupChevron,
+.terminalCommandChevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.terminalGroupIcon {
+  color: var(--color-text-tertiary);
+}
+
+.terminalGroupChevron {
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.terminalGroup[open] > .terminalGroupSummary .terminalGroupChevron {
+  transform: rotate(90deg);
+}
+
+.terminalGroupBody {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-10);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+}
+
+.terminalCommand + .terminalCommand {
+  border-top: 1px solid var(--color-border);
+}
+
+.terminalCommandSummary {
+  gap: var(--sp-8);
+  min-height: 42px;
+  padding-inline: var(--sp-12);
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.terminalCommandSummary:hover {
+  background: var(--color-surface-hover);
+}
+
+.terminalCommandLabel {
+  min-width: 0;
+  color: var(--color-text-primary);
+}
+
+.terminalCommandChevron {
+  margin-left: auto;
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.terminalCommand[open] > .terminalCommandSummary .terminalCommandChevron {
+  transform: rotate(90deg);
+}
+
+.agentStepCode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-12) var(--sp-12);
+}
+
+.agentStepCode > * {
+  margin-block: 0;
+}
+
+/* Output can be a build log; it scrolls in place instead of pushing the
+   conversation down. */
+.terminalOutput {
+  max-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.terminalOutput > * {
+  margin: 0;
+}
+
+/* A waiting line is chrome, not output: it keeps the UI font, per the mono
+   contract enforced in tests/unit/typography-contract.test.ts. */
+.terminalWaiting {
+  padding: var(--sp-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+}

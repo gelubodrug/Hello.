@@ -1,0 +1,272 @@
+/**
+ * T100 prose surface. Every measurement and color comes from tokens.css or
+ * typography.css so light/dark themes share exactly the same reading rhythm.
+ */
+
+.root {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--color-text-primary);
+  font-size: var(--fs-15);
+  line-height: var(--lh-relaxed);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.root > :global(*) {
+  margin-block: unset;
+}
+
+.root > :global(* + *) {
+  margin-block-start: var(--sp-12);
+}
+
+.root > :global(h1 + *),
+.root > :global(h2 + *),
+.root > :global(h3 + *),
+.root > :global(h4 + *),
+.root > :global(h5 + *),
+.root > :global(h6 + *) {
+  margin-block-start: var(--sp-8);
+}
+
+.root :global(h1),
+.root :global(h2),
+.root :global(h3),
+.root :global(h4),
+.root :global(h5),
+.root :global(h6) {
+  color: var(--color-text-primary);
+  line-height: var(--lh-tight);
+}
+
+.root :global(h1) {
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+}
+
+.root :global(h2) {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+}
+
+.root :global(h3) {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+
+.root :global(h4),
+.root :global(h5),
+.root :global(h6) {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+}
+
+.root :global(ul),
+.root :global(ol) {
+  padding-inline-start: var(--sp-24);
+}
+
+.root :global(ul) {
+  list-style: disc;
+}
+
+.root :global(ol) {
+  list-style: decimal;
+}
+
+.root :global(li + li) {
+  margin-block-start: var(--sp-4);
+}
+
+.root :global(li) :global(ul),
+.root :global(li) :global(ol) {
+  margin-block: var(--sp-4);
+}
+
+.root :global(.contains-task-list) {
+  padding-inline-start: unset;
+  list-style: none;
+}
+
+.root :global(.task-list-item) {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+}
+
+.root :global(.task-list-item > input[type='checkbox']) {
+  flex: none;
+  inline-size: var(--sp-16);
+  block-size: var(--sp-16);
+  margin: unset;
+  accent-color: var(--color-accent);
+  vertical-align: text-bottom;
+}
+
+.root :global(blockquote) {
+  padding-block: var(--sp-8);
+  padding-inline: var(--sp-12);
+  border-inline-start: var(--border-hairline) solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+
+.root :global(blockquote > :first-child) {
+  margin-block-start: unset;
+}
+
+.root :global(blockquote > :last-child) {
+  margin-block-end: unset;
+}
+
+.tableScroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--r-8);
+  background: var(--color-surface);
+}
+
+.tableScroll table {
+  min-width: 100%;
+  width: max-content;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+}
+
+.tableScroll :global(th),
+.tableScroll :global(td) {
+  padding: var(--sp-8) var(--sp-12);
+  border-block-end: var(--border-hairline) solid var(--color-border);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.tableScroll :global(th + th),
+.tableScroll :global(td + td) {
+  border-inline-start: var(--border-hairline) solid var(--color-border);
+}
+
+.tableScroll :global(th) {
+  background: var(--color-surface-hover);
+  font-weight: var(--fw-medium);
+}
+
+.tableScroll :global(tbody tr:last-child td),
+.tableScroll :global(tfoot tr:last-child td) {
+  border-block-end: unset;
+}
+
+.root :global([data-footnotes]) {
+  padding-block-start: var(--sp-12);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+}
+
+.root :global([data-footnotes] > h2) {
+  margin-block-end: var(--sp-8);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+}
+
+.root :global([data-footnotes] ol) {
+  margin-block: unset;
+}
+
+.root :global(sup) {
+  font-size: var(--fs-11);
+  line-height: var(--lh-tight);
+}
+
+.root :global([data-footnote-backref]) {
+  margin-inline-start: var(--sp-4);
+  color: var(--color-text-tertiary);
+}
+
+.root :global(a) {
+  color: var(--color-accent);
+}
+
+/* Citation summary appended to a sourced paragraph. It stays quiet and
+   favicon-free: host first, then a compact count for additional links. */
+.inlineSources {
+  display: inline-flex;
+  align-items: center;
+  max-width: 176px;
+  height: 20px;
+  padding-inline: var(--sp-8);
+  border-radius: var(--r-pill);
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  line-height: 20px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.inlineSourceHost {
+  display: block;
+  min-width: 0;
+}
+
+.inlineSourceCount {
+  flex: none;
+  margin-inline-start: var(--sp-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-11);
+}
+
+.root :global(hr) {
+  border: unset;
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+.root :global(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-8);
+}
+
+/* Inline image attachment (T111 screenshots): tokened rounding, a subtle
+   hairline frame, and a max width bounded to the conversation column. The
+   frame reads in both themes via --color-border; the surface tint keeps
+   transparent PNGs legible without drawing attention to itself. */
+.image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--r-8);
+  background: var(--color-surface-active);
+}
+
+.inlineCode {
+  padding-inline: var(--sp-4);
+  border-radius: var(--r-6);
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  font-variant-ligatures: none;
+}
+
+.pre {
+  padding: var(--sp-12);
+  overflow-x: auto;
+  border-radius: var(--r-8);
+  background: var(--color-surface-active);
+}
+
+.pre code {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  font-variant-ligatures: none;
+}

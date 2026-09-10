@@ -1,0 +1,11 @@
+{
+  "name": "hello-text-tools",
+  "version": "1.0.0",
+  "description": "Example Hello plugin: one Pi extension that adds a deterministic text-statistics tool, plus a bundled skill that uses it.",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["extensions/text-stats.ts"],
+    "skills": ["skills/text-review"],
+    "prompts": ["prompts/concise.md"]
+  }
+}

@@ -1,0 +1,498 @@
+/**
+ * Root application shell: borderless Sidebar / Chat layout. Connection
+ * controls float over the chat surface so the conversation can use the full
+ * window height without a persistent header or footer strip.
+ *
+ * T135 — the sidebar is a docked column, not an overlay: `.app-main` is
+ * offset by the panel's width while it is open, so the conversation lays out
+ * beside the panel and returns to full width when it closes. That offset is
+ * the one sanctioned layout transition in the app (DESIGNUIguide.md
+ * §Sidebar): it runs on the panel's own tokens, in the same direction and at
+ * the same time as the panel's two-effect slide.
+ */
+
+.app {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: 'sidebar chat';
+  height: 100vh;
+  /* Transparent so the window vibrancy shows behind the translucent chrome;
+     each region below paints its own material/content surface. */
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+}
+
+/* T108 split container: chat | hairline divider | optional browser pane.
+   Flex-grow shares carry the persisted ratio, so widths never animate — they
+   follow the divider directly while dragging and reflow once on toggle.
+
+   T135: its left offset is the docked sidebar's width, animated in sync with
+   the panel — same 200ms --motion-slow, same --ease-out entering and
+   --ease-in leaving, so the column and the panel settle on the same frame. */
+.app-main {
+  grid-area: chat;
+  /* The settings page covers this whole region, so it is the region's own
+     containing block. */
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  margin-left: var(--sidebar-dock-width, 0px);
+  transition: margin-left var(--motion-slow) var(--ease-out);
+}
+
+/* Settings takes the content area over rather than replacing it: the chat
+   column and the browser dock stay mounted and keep their boxes — the
+   transcript its scroll position, the native pane its page and bounds — but
+   stop painting and leave the tab order while the page is up. */
+.app-main[data-settings='open'] > :not(.settings-layer) {
+  visibility: hidden;
+}
+
+.app[data-sidebar-state='collapsed'] .app-main {
+  margin-left: 0;
+  transition: margin-left var(--motion-slow) var(--ease-in);
+}
+
+/* Dragging the panel's edge is direct manipulation, not a reveal: the column
+   tracks the pointer with no easing, exactly as the panel does. */
+.app[data-sidebar-resizing='true'] .app-main {
+  transition: none;
+}
+
+/* Matches the panel's in-app reduced-motion treatment (Sidebar.css): the
+   offset still moves, briefly, rather than snapping. */
+.app[data-reduced-motion='true'] .app-main {
+  transition-duration: 80ms;
+}
+
+.app-chat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The seam is the divider itself: a single hairline with a wider invisible
+   hit area (::before), brightening on hover and taking the accent while
+   dragging (DESIGNUIguide.md §Borders, §Color — active state). */
+.app-split-divider {
+  position: relative;
+  flex: none;
+  width: var(--border-hairline);
+  background: var(--color-border);
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.app-split-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--sp-4));
+  right: calc(-1 * var(--sp-4));
+  cursor: col-resize;
+}
+
+.app-split-divider:hover {
+  background: var(--color-border-strong);
+}
+
+.app-split-divider[data-dragging='true'] {
+  background: var(--color-accent);
+}
+
+.app-browser {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The terminal, in whichever dock it is in: a fixed span on its own axis,
+   taken off the row (or off the chat column) before the flexible siblings
+   share what is left. Its width or height comes in as an inline style, and
+   everything else about it lives in TerminalPane.module.css. */
+.app-terminal {
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+}
+
+.app-chat-conversation {
+  /* Containing block for the floating close control above. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* Near-opaque backing so long-form conversation text stays legible over the
+     window vibrancy (only the chrome above is meant to read as translucent). */
+  background: var(--material-content);
+}
+
+/* ---- Zones ----------------------------------------------------------- */
+
+/* Each zone's tab rail, in one grammar for both sides of the window. It lives
+   in the window's top band and doubles as a window drag handle — except its
+   chips, which must stay clickable. It stacks above the titlebar overlay
+   (z-index 30) for the same reason the browser strip always did: anything
+   beneath that overlay's drag lane never receives a pointer. */
+.zone-strip {
+  position: absolute;
+  z-index: 31;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  height: var(--titlebar-height);
+  padding: 0 var(--sp-12) 0 var(--sp-8);
+  background: var(--zone-rail-fill);
+  -webkit-app-region: drag;
+}
+
+/* With the sidebar away the middle strip starts at the window's edge, on top
+   of the traffic lights and the sidebar toggle; keep that band clear. */
+.zone-strip[data-inset-left='true'] {
+  padding-left: 176px;
+}
+
+.zone-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+
+.zone-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex: none;
+  -webkit-app-region: no-drag;
+}
+
+.zone-tab-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 132px;
+  min-width: 72px;
+  max-width: 210px;
+  height: 32px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-10);
+  background: var(--zone-tab-idle-fill);
+  color: var(--color-text-secondary);
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.zone-tab-wrap:hover:not([data-active='true']) {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+/* The tabs on screen are the light pieces cut out of the darker rail. Shape
+   and fill alone carry selection; borders and separator rules would only add
+   noise to this compact Chrome-like strip. Both halves of a split wear it,
+   since both are visible bodies. */
+.zone-tab-wrap[data-active='true'] {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+.zone-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0 var(--sp-12);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.zone-tab-wrap:hover .zone-tab {
+  color: inherit;
+}
+
+.zone-tab-wrap[data-active='true'] .zone-tab {
+  color: var(--color-text-primary);
+  font-weight: var(--fw-medium);
+}
+
+.zone-tab-label {
+  min-width: 0;
+}
+
+.zone-tab-favicon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.zone-tab-favicon--empty {
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
+.zone-tab-close,
+.zone-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.zone-tab-close {
+  margin-right: var(--sp-4);
+  opacity: 0.72;
+}
+
+.zone-action {
+  width: var(--control-md);
+  height: var(--control-md);
+}
+
+.zone-tab-close:hover,
+.zone-action:hover:not(:disabled) {
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+  opacity: 1;
+}
+
+.zone-action:disabled {
+  color: var(--color-text-disabled);
+}
+
+.zone-strip-button {
+  flex: none;
+  width: var(--control-md);
+  height: var(--control-md);
+  margin: 0 var(--sp-4);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.zone-strip-button:hover:not(:disabled) {
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+}
+
+/* The zone's body sits under its strip; every body reserves the band itself
+   (the transcript already did, for the titlebar), so the strip overlays
+   nothing it should not. */
+.zone-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.zone-web {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Two tabs sharing one zone: equal halves, a hairline between. */
+.zone-split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.zone-split-half {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.zone-split-half + .zone-split-half {
+  border-left: var(--border-hairline) solid var(--color-border);
+}
+
+.zone-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: var(--sp-4);
+  min-height: 0;
+  text-align: center;
+}
+
+.zone-empty--titlebar {
+  padding-top: var(--titlebar-height);
+}
+
+.zone-empty-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+}
+
+.zone-empty-hint {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--fs-12);
+}
+
+/* A session's body fills what the transcript and composer would have. */
+.app-chat-session {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding-top: var(--titlebar-height);
+  overflow: hidden;
+}
+
+.app-chat-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-md);
+  height: var(--control-md);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.app-chat-close:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+.app-chat-close:active {
+  background: var(--color-surface-active);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-chat-close {
+    transition: none;
+  }
+}
+
+/* Layout-transparent wrapper: it only marks the transcript as click-in-chat
+   surface (DESIGNUIguide.md §Chat transcript), so MessageList stays a direct
+   flex item of the conversation column. */
+.app-chat-transcript {
+  display: contents;
+}
+
+/* Empty state (DESIGNUIguide.md §Empty states): the composer stays docked
+   below; the greeting is vertically centered in the space that remains. */
+.app-chat-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-32);
+}
+
+.greeting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* The quiet endpoint line sits 12px under the greeting. */
+  gap: var(--sp-12);
+  text-align: center;
+}
+
+/* The one display exception in the type scale (DESIGNUIguide.md §Typography). */
+.greeting-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
+  line-height: var(--lh-tight);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.welcome-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--color-text-tertiary);
+}
+
+.welcome-status-dot {
+  width: var(--sp-8);
+  height: var(--sp-8);
+  border-radius: var(--r-pill);
+  background: var(--color-text-disabled);
+  flex: none;
+}
+
+.welcome-status-dot[data-tone='ready'] {
+  background: var(--color-success);
+}
+
+.welcome-status-dot[data-tone='pending'] {
+  background: var(--color-accent);
+}

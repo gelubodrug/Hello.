@@ -1,0 +1,201 @@
+.stage {
+  /* Chat role aliases share the canonical palette without copying colors. */
+  --color-bg: var(--chat-panel-fill);
+  --color-surface: var(--chat-raised-fill);
+  --color-surface-hover: var(--chat-hover-fill);
+  --color-surface-active: var(--chat-pressed-fill);
+  --color-text-primary: var(--chat-ink);
+  --color-text-secondary: var(--chat-secondary);
+  --color-text-tertiary: var(--chat-muted);
+  --color-border: var(--chat-edge);
+  --chat-transcript-inset: var(--sp-4);
+  --chat-transcript-fill: transparent;
+  --chat-user-width: 92%;
+  --chat-user-radius: var(--r-10);
+  --composer-radius: var(--r-12);
+  --composer-margin: var(--sp-8) auto var(--sp-4);
+  --composer-gutter: var(--sp-24);
+  --composer-field-height: calc(var(--control-lg) + var(--sp-16));
+  --composer-controls-gap: var(--sp-4);
+
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  min-width: 0;
+  min-height: 0;
+  padding: calc(var(--titlebar-height) + var(--sp-12)) var(--sp-16) var(--sp-16);
+  container: chat-stage / inline-size;
+  background: var(--surface-workspace-background);
+  color: var(--chat-ink);
+  font-family: var(--chat-font-ui);
+  -webkit-app-region: no-drag;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 var(--chat-floating-height);
+  width: min(100%, var(--chat-floating-width));
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--chat-panel-radius);
+  /* Opaque fill covers the rim inside the card. The fading edge belongs to
+     its rounded perimeter, without an overlay or a popover-clipping mask. */
+  background:
+    var(--surface-panel-background) padding-box,
+    var(--surface-rim-layers);
+  box-shadow: var(--chat-panel-shadow);
+}
+
+.stage[data-presentation='pinned'] .panel,
+.stage[data-expanded='true'] .panel {
+  flex: 1 1 0;
+  width: 100%;
+}
+
+.stage[data-presentation='pinned'] .panel {
+  box-shadow: none;
+}
+
+.stage[data-minimized='true'] .panel {
+  flex: 0 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--sp-8);
+  min-height: calc(var(--titlebar-height) + var(--sp-8));
+  padding: var(--sp-8) var(--sp-12) var(--sp-8) var(--sp-16);
+}
+
+.mark {
+  flex: none;
+  color: var(--chat-secondary);
+}
+
+.title,
+.restore {
+  min-width: 0;
+  flex: 1;
+  color: var(--chat-ink);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  letter-spacing: -0.015em;
+}
+
+.restore {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex: none;
+  margin-left: auto;
+}
+
+.control,
+.mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: var(--control-md);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--chat-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.control {
+  width: var(--control-md);
+}
+
+.mode {
+  gap: var(--sp-4);
+  padding-inline: var(--sp-8);
+  background: var(--chat-raised-fill);
+  color: var(--chat-secondary);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+}
+
+.control:hover,
+.mode:hover {
+  background: var(--chat-hover-fill);
+  color: var(--chat-ink);
+}
+
+.control:active,
+.mode:active {
+  background: var(--chat-pressed-fill);
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding-bottom: var(--sp-8);
+}
+
+/* Preserve component state but remove minimized content from paint/tab order. */
+.body[hidden] {
+  display: none;
+}
+
+/* The real model picker also has to fit the compact card, leaving the mic
+   and Send targets intact instead of painting its label over them. */
+.stage :global(.model-selector) {
+  position: static;
+}
+
+.stage :global(.model-selector__popover) {
+  /* Anchor to the composer, not the short model label near its right edge. */
+  right: 0;
+  width: min(320px, 100%);
+}
+
+.stage :global(.model-selector__trigger) {
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: var(--sp-8);
+  font-size: var(--fs-13);
+}
+
+@container chat-stage (max-width: 440px) {
+  .header {
+    gap: var(--sp-4);
+    padding-inline: var(--sp-8);
+  }
+
+  .mode span {
+    display: none;
+  }
+
+  .mode {
+    width: var(--control-md);
+    padding: 0;
+  }
+}

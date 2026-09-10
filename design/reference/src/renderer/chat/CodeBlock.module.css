@@ -1,0 +1,299 @@
+/**
+ * CodeBlock: a fenced code block rendered with shiki (task T058 / FR-012).
+ *
+ * The outer container clips and refuses to grow (`overflow: hidden; min-width:
+ * 0`) so a long line can never widen the conversation column; the inner `<pre>`
+ * takes the horizontal scroll instead.
+ */
+
+.block {
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  margin: var(--sp-8) 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-10);
+  background: var(--color-surface);
+}
+
+/* Terminal activity already lives inside one structural container. Its
+   nested code surfaces use fill and whitespace—not another set of frames. */
+.block[data-appearance] {
+  position: relative;
+  margin: 0;
+  border: 0;
+}
+
+.block[data-appearance='terminal-command'] {
+  border-radius: var(--r-10);
+  background: var(--color-surface-hover);
+}
+
+.block[data-appearance='terminal-output'] {
+  border-radius: 0;
+  background: transparent;
+}
+
+/*
+ * Hover toolbar (T097): visible on hover/focus so the block reads as plain
+ * code at rest. `focus-within` keeps it visible while a control inside has
+ * keyboard focus, so Tab navigation never lands on an invisible button.
+ * `user-select: none` keeps a manual select-all-and-copy of the surrounding
+ * message from picking up toolbar text.
+ */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  min-height: 28px;
+  padding: 0 var(--sp-8) 0 var(--sp-12);
+  border-bottom: 1px solid var(--color-border);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-in);
+  user-select: none;
+}
+
+/* In terminal rows the tools float over the top-right corner. They remain
+   available on hover/focus without reserving an empty header above the text. */
+.block[data-appearance] .toolbar {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: var(--sp-4);
+  inset-inline-end: var(--sp-4);
+  width: fit-content;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-6);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.block[data-appearance] .language,
+.block[data-appearance] .headerSpacer {
+  display: none;
+}
+
+.block:hover .toolbar,
+.block:focus-within .toolbar {
+  opacity: 1;
+  transition-timing-function: var(--ease-out);
+}
+
+/* Never render the toolbar in printed/exported output. */
+@media print {
+  .toolbar {
+    display: none;
+  }
+}
+
+.language {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-inline-size: min(50%, 18ch);
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: var(--fs-11);
+  color: var(--color-text-tertiary);
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* Keep the copy button pinned right even when no language label is shown. */
+.headerSpacer {
+  flex: 1 1 auto;
+}
+
+.copyButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-6);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.copyButton:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+.copyIcon {
+  position: absolute;
+  inset: 0;
+  display: block;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.wrapButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-6);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.wrapButton:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+}
+
+.wrapButton[aria-pressed='true'] {
+  color: var(--color-accent);
+}
+
+.wrapIcon {
+  display: block;
+}
+
+/*
+ * The scroll surface. `overflow-x: auto` + `max-width: 100%` keep long lines
+ * inside the block. `pre` from shiki carries its own background/color, so we
+ * only own layout here. Shiki's output includes a nested <pre> when using
+ * codeToHtml, so both the wrapper and any inner pre must scroll cleanly.
+ */
+.scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.scroll :global(pre.shiki),
+.scroll :global(pre.shiki code),
+.scroll :global(pre.shiki span),
+.fallback {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  font-variant-ligatures: none;
+  tab-size: 2;
+}
+
+.scroll :global(pre.shiki),
+.fallback {
+  margin: 0;
+  padding: var(--sp-12);
+  white-space: pre;
+}
+
+.scroll :global(pre.shiki) {
+  overflow: visible;
+  max-width: none;
+  color: var(--shiki-light);
+  background: var(--shiki-light-bg);
+}
+
+.block[data-appearance] .scroll :global(pre.shiki),
+.block[data-appearance] .fallback {
+  padding-inline-end: 64px;
+  background: transparent !important;
+}
+
+.block[data-appearance='terminal-output'] .scroll :global(pre.shiki),
+.block[data-appearance='terminal-output'] .fallback {
+  padding-block: var(--sp-8);
+  padding-inline-start: 0;
+}
+
+.scroll :global(pre.shiki span) {
+  color: var(--shiki-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme='light'])) .scroll :global(pre.shiki) {
+    color: var(--shiki-dark);
+    background: var(--shiki-dark-bg);
+  }
+
+  :global(:root:not([data-theme='light'])) .scroll :global(pre.shiki span) {
+    color: var(--shiki-dark);
+  }
+}
+
+:global(:root[data-theme='dark']) .scroll :global(pre.shiki) {
+  color: var(--shiki-dark);
+  background: var(--shiki-dark-bg);
+}
+
+:global(:root[data-theme='dark']) .scroll :global(pre.shiki span) {
+  color: var(--shiki-dark);
+}
+
+/* Unstyled first-paint fallback: plain text before shiki resolves. */
+.fallback {
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Soft-wrap toggle: break long lines instead of scrolling horizontally. */
+.wrapped {
+  overflow-x: hidden;
+}
+
+.wrapped :global(pre.shiki),
+.wrapped :global(pre.shiki code),
+.wrapped :global(pre.shiki span.line),
+.fallback.wrapped {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.fallback code {
+  font: inherit;
+}
+
+.copyIcons {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.copyIconIdle {
+  opacity: 1;
+}
+
+.copyIconCopied {
+  opacity: 0;
+}
+
+.copyButton[data-copied='true'] .copyIconIdle {
+  opacity: 0;
+}
+
+.copyButton[data-copied='true'] .copyIconCopied {
+  opacity: 1;
+}
+
+/* Visually hidden live region announcing "Copied" to screen readers. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
