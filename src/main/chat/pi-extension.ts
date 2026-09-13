@@ -152,9 +152,25 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
   pi.on('before_agent_start', async () => {
     await refreshTools();
   });
+  // A reply keeps running across steers, and Pi snapshots the active tools for
+  // each next step right after turn_end. Refreshing here is what lets a folder
+  // attached mid-reply bring its tools to the very next step. A failed refresh
+  // keeps the current set — a thrown handler would end the reply — and the
+  // bridge still re-checks availability when a tool runs.
+  pi.on('turn_end', async () => {
+    try { await refreshTools(); } catch { /* next step keeps the current tools */ }
+  });
   pi.on('context', async event => {
     const messages = event.messages.filter(message =>
       message.role !== 'custom' || message.customType !== CONTEXT_TYPE);
+    // This step's tools were fixed before this hook ran. Anything that became
+    // available since is callable from the next step, and the model is told so
+    // rather than being shown a folder whose tools it cannot call yet.
+    let late: string[] = [];
+    try {
+      const before = new Set(pi.getActiveTools());
+      late = (await refreshTools()).filter(name => !before.has(name));
+    } catch { /* the live context below still describes the current state */ }
     let context: string;
     try {
       const response = await request<PiBridgeContextResponse>('/context');
@@ -163,6 +179,9 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
     } catch {
       context = 'Current Hello browser state is unavailable. Use browser_tabs to obtain current tab IDs and permissions before a browser operation; do not assume an earlier tab remains permitted.';
     }
+    if (late.length)
+      context = [context, `These Hello tools were just enabled and can be called from your next step, not in this one: ${late.join(', ')}.`]
+        .filter(Boolean).join('\n');
     if (context) messages.push({
       role: 'custom', customType: CONTEXT_TYPE,
       content: context, display: false, timestamp: Date.now(),
