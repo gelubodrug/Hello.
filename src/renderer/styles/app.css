@@ -1292,6 +1292,11 @@ svg {
 }
 .composer-attachment > svg { flex: none; }
 .composer-attachment .icon-button { width: var(--control-sm); height: var(--control-sm); }
+.composer-attachment[tabindex] { cursor: zoom-in; }
+.composer-attachment[tabindex]:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
 .composer-controls {
   display: flex;
   align-items: center;
@@ -1575,6 +1580,23 @@ svg {
 }
 .dialog-wide {
   width: min(560px, 100%);
+}
+.attachment-preview {
+  width: min(960px, 100%);
+}
+.attachment-preview > header h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - 160px);
+  margin-inline: auto;
+  object-fit: contain;
+  border-radius: var(--r-8);
 }
 .dialog > header {
   display: flex;

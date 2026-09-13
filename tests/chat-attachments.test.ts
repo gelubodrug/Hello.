@@ -90,6 +90,19 @@ describe('explicit chat attachment snapshots', () => {
     expect(statSync(join(root(), result.attachments[0].id, 'content')).mode & 0o777).toBe(0o600);
   });
 
+  it('previews only this chat\u2019s own image snapshots, as a data URL and never a path', async () => {
+    const image = file('capture.png', png);
+    const [picture, notes] = (await files.import(conversationId, [image, file('notes.md', 'words')])).attachments;
+    unlinkSync(image);
+    expect(await files.preview(conversationId, picture.id)).toBe(`data:image/png;base64,${png.toString('base64')}`);
+    await expect(files.preview(conversationId, notes.id)).rejects.toThrow('Only image attachments');
+    await expect(files.preview('another-conversation', picture.id)).rejects.toThrow();
+    await expect(files.preview(conversationId, image)).rejects.toThrow('valid attachments');
+    await expect(files.preview(conversationId, '../../etc/passwd')).rejects.toThrow('valid attachments');
+    writeFileSync(join(root(), picture.id, 'content'), Buffer.from('tampered'), { flag: 'r+' });
+    await expect(files.preview(conversationId, picture.id)).rejects.toThrow();
+  });
+
   it('returns only a canonical folder for a single directory and rejects mixed-folder drops', async () => {
     const folder = join(directory, 'project'); mkdirSync(folder);
     const alias = join(directory, 'project-alias'); symlinkSync(folder, alias);

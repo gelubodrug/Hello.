@@ -29,6 +29,7 @@ import type {
 import { api } from "../api";
 import { droppedPaths, hasFileDrop } from '../drop';
 import {
+  Dialog,
   ErrorNote,
   ContextMenu,
   IconButton,
@@ -46,6 +47,12 @@ import { chatCopySnapshot } from './selection';
 import { ChatModeSwitch } from './ChatModeSwitch';
 import { ChatDisclosure } from './ChatDisclosure';
 import { ExtensionsPicker } from './ExtensionsPicker';
+
+const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
+/** Chips main can show as a picture: an image snapshot, or a draft chip whose name says it is one. */
+function previewableAttachment(item: ChatAttachment): boolean {
+  return item.kind === 'image' || IMAGE_NAME.test(item.name);
+}
 
 function readableJson(text: string) {
   try {
@@ -507,6 +514,20 @@ export function ConversationView({
       return Array.isArray(saved) ? saved.filter(item => item && typeof item.id === 'string' && typeof item.name === 'string' && ['text', 'image'].includes(item.kind)).slice(0, 8) : [];
     } catch { return []; }
   });
+  // Kept after closing so the picture stays in the dialog while it fades out.
+  const [preview, setPreview] = useState<{ item: ChatAttachment; src?: string; error?: string } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const previewRequest = useRef(0);
+  const openPreview = (item: ChatAttachment) => {
+    if (!previewableAttachment(item)) return;
+    const request = ++previewRequest.current;
+    setPreview({ item });
+    setPreviewOpen(true);
+    void api.chat.previewAttachment(conversation.id, item.id).then(
+      src => { if (mounted.current && request === previewRequest.current) setPreview({ item, src }); },
+      reason => { if (mounted.current && request === previewRequest.current) setPreview({ item, error: errorText(reason) }); },
+    );
+  };
   const [dropActive, setDropActive] = useState(false);
   const [importing, setImporting] = useState(false);
   const importLock = useRef(false);
@@ -810,7 +831,17 @@ export function ConversationView({
           </p>}
           <PendingMessages items={queued} onChange={setQueued} onError={reason => setError(errorText(reason))} />
           {!!attachments.length && <div className="composer-attachments" aria-label="Message attachments">
-            {attachments.map(item => <span className="composer-attachment" key={item.id} title={item.name}>
+            {attachments.map(item => <span className="composer-attachment" key={item.id} title={item.name}
+              {...previewableAttachment(item) ? {
+                tabIndex: 0,
+                'aria-label': `${item.name}, double-click or press Enter to preview`,
+                onDoubleClick: event => { if (!(event.target as Element).closest('button')) openPreview(item); },
+                onKeyDown: event => {
+                  if (event.key !== 'Enter' || event.target !== event.currentTarget) return;
+                  event.preventDefault();
+                  openPreview(item);
+                },
+              } : {}}>
               {item.kind === 'image' ? <ImageIcon size={14} aria-hidden /> : <FileText size={14} aria-hidden />}
               <span className="truncate">{item.name}</span>
               <IconButton label={`Remove attachment ${item.name}`} onClick={() => setAttachments(current => current.filter(value => value.id !== item.id))}>
@@ -818,6 +849,12 @@ export function ConversationView({
               </IconButton>
             </span>)}
           </div>}
+          <Dialog open={previewOpen} title={preview?.item.name ?? 'Attachment preview'} className="attachment-preview" dismissOnBackdrop
+            onClose={() => { previewRequest.current++; setPreviewOpen(false); }}>
+            {preview?.src ? <img src={preview.src} alt={preview.item.name} />
+              : preview?.error ? <ErrorNote error={preview.error} />
+              : <p role="status">Loading preview…</p>}
+          </Dialog>
           {conversation.folder && (
             <div className="composer-folder">
               <button

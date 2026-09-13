@@ -110,6 +110,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.forgetConnection',(url)=>store.forgetConnection(str(url)));
   handle('settings.models',()=>chat.models());
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
+  handle('chat.previewAttachment',(id,attachmentId)=>chat.previewAttachment(str(id),str(attachmentId)));
   handle('chat.send',(id,text,attachmentIds)=>{
     if(typeof text!=='string'||text.length>200000)throw new Error('Invalid message.');
     if(attachmentIds!==undefined&&(!Array.isArray(attachmentIds)||attachmentIds.length>8||attachmentIds.some(value=>typeof value!=='string'||value.length>100)))throw new Error('Invalid attachments.');

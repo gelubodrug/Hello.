@@ -403,6 +403,13 @@ export class ChatService {
     }
   }
 
+  /** A composer chip's picture, read back only from this chat's own snapshots. */
+  previewAttachment(conversationId: string, attachmentId: unknown): Promise<string> {
+    this.assertAvailable(conversationId);
+    this.store.getConversation(conversationId);
+    return this.attachments.preview(conversationId, attachmentId);
+  }
+
   async send(conversationId: string, text: string, attachmentIds: string[] = []): Promise<void> {
     this.assertIdle(conversationId);
     if (typeof text !== 'string') throw new Error('Message must be text.');

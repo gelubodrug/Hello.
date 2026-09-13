@@ -28,7 +28,7 @@ function previewAPI(): HelloAPI {
       messages: async () => [], export: unsupported,
     },
     settings: {get:async()=>settings,save:async(patch)=>{const {apiKey,...safe}=patch; settings={...settings,...safe,apiKeySet:false};write('settings',settings);return settings;},models:unsupported,rememberConnection:unsupported,useConnection:unsupported,forgetConnection:unsupported},
-    chat:{attach:unsupported,send:unsupported,queue:unsupported,queued:async()=>[],reviseQueued:unsupported,dropQueued:unsupported,stop:async()=>{},retry:unsupported,approve:unsupported,onEvent:()=>()=>{}},
+    chat:{attach:unsupported,previewAttachment:unsupported,send:unsupported,queue:unsupported,queued:async()=>[],reviseQueued:unsupported,dropQueued:unsupported,stop:async()=>{},retry:unsupported,approve:unsupported,onEvent:()=>()=>{}},
     // The design preview has no library: importing runs in the desktop app.
     extensions:{list:async()=>[],importResource:unsupported,examples:async()=>[],importExample:unsupported,addMcp:unsupported,discover:async()=>({mcp:[],skills:[]}),importDiscovered:unsupported,update:unsupported,remove:unsupported,active:async()=>[],setActive:unsupported,status:async()=>[],probe:unsupported,disconnect:unsupported,onChange:()=>()=>{}},
     notebooks:{
@@ -77,6 +77,9 @@ export const api: HelloAPI = {
   chat: {...bridge.chat, attach: async (id,paths) => {
     if(typeof bridge.chat.attach!=='function')throw new Error('Attachments need the updated Hello. main process and preload. Reopen Hello. when ready.');
     return bridge.chat.attach(id,paths);
+  }, previewAttachment: async (id,attachmentId) => {
+    if(typeof bridge.chat.previewAttachment!=='function')throw new Error('Attachment previews need the updated Hello. main process and preload. Reopen Hello. when ready.');
+    return bridge.chat.previewAttachment(id,attachmentId);
   }, send: async (id,text,attachmentIds) => {
     if(attachmentIds?.length&&typeof bridge.chat.attach!=='function')throw new Error('Attachments need the updated Hello. main process and preload. Reopen Hello. when ready.');
     await bridge.chat.send(id,text,attachmentIds);

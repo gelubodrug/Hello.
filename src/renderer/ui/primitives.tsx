@@ -548,12 +548,17 @@ export function Dialog({
   children,
   onClose,
   wide = false,
+  className = "",
+  dismissOnBackdrop = false,
 }: {
   open: boolean;
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  className?: string;
+  /** A viewer, not a form: nothing typed is lost by a click beside it. */
+  dismissOnBackdrop?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const present = usePresence(open, ref);
@@ -568,6 +573,9 @@ export function Dialog({
     ? createPortal(
         <div
           className="dialog-backdrop"
+          onClick={(event) => {
+            if (dismissOnBackdrop && event.target === event.currentTarget) onClose();
+          }}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -597,7 +605,7 @@ export function Dialog({
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
-            className={`dialog ${wide ? "dialog-wide" : ""}`}
+            className={`dialog ${wide ? "dialog-wide" : ""} ${className}`}
           >
             <header>
               <h1 id={titleId}>{title}</h1>
