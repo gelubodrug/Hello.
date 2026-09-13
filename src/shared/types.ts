@@ -1,4 +1,5 @@
 import type { FileDocument, FileListing } from './files';
+import type { AnnotationShot } from './page-mode-format';
 export type NotebookKind = 'runbook' | 'tasks';
 export type AgentControl = 'off' | 'read' | 'full';
 export type WorkerId = 'claude' | 'codex' | 'qwen' | 'kimi' | 'opencode' | 'pi' | 'aider';
@@ -123,6 +124,8 @@ export type PageModeEvent =
   | { type: 'picked'; tabId: string; armId: string; pick: PagePick; point: { x: number; y: number } }
   /** The pick ended in the page (a click away from it); the mode stays armed. */
   | { type: 'released'; tabId: string; armId: string }
+  /** Annotate: the number of committed markers in the page changed. */
+  | { type: 'marks'; tabId: string; armId: string; count: number }
   | { type: 'exit'; tabId: string; armId: string; reason: PageModeExitReason };
 /** What a browser pane hands the chat composer besides words. */
 export interface ChatQuoteExtra {
@@ -221,8 +224,9 @@ export interface HelloAPI {
       disarm(tabId: string, armId?: string): Promise<void>;
       /** Ends the current pick so the page highlights again; the mode stays armed. */
       release(tabId: string, armId: string): Promise<void>;
-      /** A PNG of the page's viewport, or of `rect` inside it (page CSS pixels), saved in app data. */
-      capture(tabId: string, rect?: PageRect): Promise<{ path: string }>;
+      /** A PNG of the page's viewport, or of `rect` inside it (page CSS pixels), saved in app data.
+       *  While Annotate is armed, `annotations` lists the markers that picture shows. */
+      capture(tabId: string, rect?: PageRect): Promise<{ path: string; annotations?: AnnotationShot }>;
       /** Text, with a capture this controller saved, onto the clipboard as one item. */
       copy(text: string, path?: string): Promise<void>;
       onEvent(listener: (event: PageModeEvent) => void): () => void;

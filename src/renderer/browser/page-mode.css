@@ -54,3 +54,31 @@
 .design-composer button.design-composer-send:hover:not(:disabled){background:var(--color-accent-hover)}
 .design-composer-status{flex:none;color:var(--menu-muted);font-size:var(--fs-11);padding:0 var(--sp-4)}
 .design-composer-error{position:absolute;left:var(--sp-12);top:calc(100% + 6px);white-space:nowrap;color:var(--color-error);font-size:var(--fs-11)}
+
+/* Annotate: markers and notes are drawn in the page (so the picture has them);
+   this bar sits over the bottom of the page in the app's document, same
+   material and stacking as the Design composer. AnnotateBar places it. */
+.annotate-bar{
+  position:fixed;z-index:3;top:0;left:0;box-sizing:border-box;max-width:calc(100vw - 24px);
+  display:flex;align-items:center;gap:var(--sp-4);height:var(--control-lg);
+  padding:0 var(--sp-4) 0 var(--sp-12);border-radius:var(--r-pill);
+  background:var(--menu-fill);color:var(--menu-ink);
+  box-shadow:0 0 0 1px var(--menu-edge),var(--menu-shadow);
+  font:var(--fw-regular) var(--fs-13)/1.4 var(--font-ui);pointer-events:auto;white-space:nowrap;
+  animation:design-composer-in var(--motion-base) var(--ease-out) both;
+}
+.annotate-bar-count{display:inline-flex;align-items:center;gap:6px;flex:none;padding-right:var(--sp-8);color:var(--menu-muted);font-size:var(--fs-12)}
+.annotate-bar-count > svg{color:var(--color-accent)}
+.annotate-bar button{
+  height:var(--control-sm);min-width:var(--control-sm);flex:none;border:0;border-radius:var(--r-pill);padding:0;
+  display:inline-flex;align-items:center;justify-content:center;gap:4px;background:transparent;color:var(--menu-muted);cursor:pointer;
+  font:var(--fw-medium) var(--fs-12)/1 var(--font-ui);
+  transition:background-color var(--motion-fast) var(--ease-out),color var(--motion-fast) var(--ease-out);
+}
+.annotate-bar button:hover:not(:disabled){background:var(--menu-hover);color:var(--menu-ink)}
+.annotate-bar button:focus-visible{outline:var(--focus-ring-width) solid var(--color-focus-ring);outline-offset:var(--focus-ring-offset)}
+.annotate-bar button:disabled{opacity:.4;cursor:default}
+.annotate-bar button.annotate-bar-send{padding:0 10px 0 7px}
+.annotate-bar button.annotate-bar-send:not(:disabled){background:var(--color-accent);color:var(--color-text-inverse,#fff)}
+.annotate-bar button.annotate-bar-send:hover:not(:disabled){background:var(--color-accent-hover)}
+.annotate-bar-error{position:absolute;left:var(--sp-12);bottom:calc(100% + 6px);white-space:nowrap;color:var(--color-error);font-size:var(--fs-11)}

@@ -7,6 +7,7 @@ import './browser.css';
 import { PageModeSwitch } from './PageModeSwitch';
 import { usePageMode } from './usePageMode';
 import { DesignComposer } from './design/DesignComposer';
+import { AnnotateBar } from './annotate/AnnotateBar';
 
 interface Props { tab: BrowserTab; visible: boolean; onTabChange(tab: BrowserTab): void; onQuote(text: string, extra?: ChatQuoteExtra): void; }
 const modes: {value:AgentControl;label:string;detail:string}[] = [
@@ -136,6 +137,7 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
     <div ref={viewport} className="browser-viewport">
       {tab.error?<div className="browser-start"><Globe size={28}/><h2>Couldn’t open this page</h2><p>{tab.error}</p><button onClick={()=>void run(()=>api.browser.action(tab.id,'reload'))}>Try again</button></div>:isStartPage?<div className="browser-start"><Globe size={28}/><h2>A place to explore.</h2><p>Search the web, follow a reference, bring what matters back to your chat.</p><form onSubmit={event=>{event.preventDefault();void navigate();}}><input aria-label="Search the web" placeholder="Search or enter address" value={address} onChange={event=>setAddress(event.target.value)}/><button aria-label="Go to address"><ArrowRight size={16}/></button></form><small>{mode.detail}.</small></div>:null}
       {pageMode.mode==='design'&&pageMode.picked&&visible?<DesignComposer tab={tab} picked={pageMode.picked} slot={viewport} onQuote={onQuote} onRelease={pageMode.release} onExit={pageMode.disarm}/>:null}
+      {pageMode.mode==='annotate'&&visible?<AnnotateBar tab={tab} marks={pageMode.marks} slot={viewport} onQuote={onQuote} onExit={pageMode.disarm}/>:null}
     </div>
   </div>;
 }

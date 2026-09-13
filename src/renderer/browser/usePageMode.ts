@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserTab, PageModeKind, PagePick, PageRect } from '../../shared/types';
 import { api } from '../api';
 
-/** Kinds with a finished UI. Annotate's lane adds itself here. */
-export const PAGE_MODE_KINDS_READY: readonly PageModeKind[] = ['design'];
+/** Kinds with a finished UI. */
+export const PAGE_MODE_KINDS_READY: readonly PageModeKind[] = ['design', 'annotate'];
 
 export interface PageModePicked { pick: PagePick; point: { x: number; y: number }; }
 
@@ -18,12 +18,14 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
   const [hover, setHover] = useState<PageRect | null>(null);
   const [pending, setPending] = useState<PageModeKind | null>(null);
   const [error, setError] = useState('');
+  /** Annotate: committed markers in the page right now. */
+  const [marks, setMarks] = useState(0);
   const current = useRef(armed);
   current.current = armed;
   // Bridges from an older preload have no page modes; the switch simply stays off.
   const bridge = api.browser.mode as typeof api.browser.mode | undefined;
 
-  const clear = useCallback(() => { setArmed(null); setPicked(null); setHover(null); }, []);
+  const clear = useCallback(() => { setArmed(null); setPicked(null); setHover(null); setMarks(0); }, []);
 
   useEffect(() => bridge?.onEvent(event => {
     const active = current.current;
@@ -31,6 +33,7 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
     if (event.type === 'exit') clear();
     else if (event.type === 'picked') { setPicked({ pick: event.pick, point: event.point }); setHover(event.pick.rect); }
     else if (event.type === 'released') setPicked(null);
+    else if (event.type === 'marks') setMarks(event.count);
     else {
       setHover(event.rect);
       // The picked element moved with the page: the composer follows it.
@@ -52,7 +55,7 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
     setPending(kind);
     try {
       const { armId } = await bridge.arm(tab.id, kind);
-      setPicked(null); setHover(null);
+      setPicked(null); setHover(null); setMarks(0);
       setArmed({ kind, armId });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'This mode could not start.');
@@ -78,5 +81,5 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
     if (active) void bridge?.disarm(tab.id, active.armId).catch(() => {});
   }, [bridge, tab.id]);
 
-  return { available: Boolean(bridge), mode: armed?.kind ?? null, armId: armed?.armId ?? null, picked, hover, pending, error, clearError: () => setError(''), toggle, disarm, release };
+  return { available: Boolean(bridge), mode: armed?.kind ?? null, armId: armed?.armId ?? null, picked, hover, marks, pending, error, clearError: () => setError(''), toggle, disarm, release };
 }

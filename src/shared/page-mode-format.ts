@@ -80,7 +80,7 @@ export function parseDesignNotes(raw: string | null | undefined): DesignNote[] {
     typeof (note as DesignNote).selector === 'string' && typeof (note as DesignNote).tag === 'string');
 }
 
-// ── Annotate (for the Annotate lane; no UI uses these yet) ───────────────────
+// ── Annotate ─────────────────────────────────────────────────────────────────
 
 export interface AnnotationMark {
   n: number;
@@ -133,10 +133,12 @@ export interface ProbePick {
 export type ProbeEvent =
   | ProbePick
   | { type: 'hover'; rect: PageRect | null }
-  | { type: 'released' };
+  | { type: 'released' }
+  /** Annotate: how many committed markers the page holds; `mark` names a new one whose element main may read once. */
+  | { type: 'marks'; count: number; mark?: { n: number; token: string } };
 export interface ProbeBatch { armId: string; events: ProbeEvent[]; }
 
-const LIMITS = { tag: 40, selector: 1000, text: 200, styles: 600, dom: 400, url: 8192, token: 64, events: 60 } as const;
+const LIMITS = { tag: 40, selector: 1000, text: 200, styles: 600, dom: 400, url: 8192, token: 64, events: 60, marks: 500, note: 1000, at: 600 } as const;
 const CONTROL = /[\x00-\x1f\x7f]/g;
 const bounded = (value: unknown, limit: number): string =>
   typeof value === 'string' ? value.replace(CONTROL, ' ').slice(0, limit) : '';
@@ -162,6 +164,15 @@ export function parseProbeBatch(value: unknown): ProbeBatch | null {
     if (!raw || typeof raw !== 'object') continue;
     const event = raw as Record<string, unknown>;
     if (event.type === 'released') events.push({ type: 'released' });
+    else if (event.type === 'marks') {
+      const count = finite(event.count);
+      if (count === null || count < 0 || count > LIMITS.marks) continue;
+      const mark = event.mark as Record<string, unknown> | undefined;
+      const n = finite(mark?.n), token = bounded(mark?.token, LIMITS.token);
+      events.push(mark && n !== null && n > 0 && /^[a-z0-9]+$/i.test(token)
+        ? { type: 'marks', count, mark: { n, token } }
+        : { type: 'marks', count });
+    }
     else if (event.type === 'hover') events.push({ type: 'hover', rect: event.rect === null ? null : parseRect(event.rect) });
     else if (event.type === 'pick') {
       const rect = parseRect(event.rect);
@@ -183,6 +194,36 @@ export function parseProbeBatch(value: unknown): ProbeBatch | null {
     }
   }
   return { armId: batch.armId, events };
+}
+
+const MARK_COLORS = new Set(['yellow', 'blue', 'pink', 'green', 'orange', 'purple']);
+
+/**
+ * PURE: the markers a page reported for its picture, every field checked and
+ * bounded. The address is not the page's to give: `url` is main's.
+ */
+export function parseProbeAnnotations(value: unknown, url: string): AnnotationShot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const list = (value as { marks?: unknown }).marks;
+  if (!Array.isArray(list)) return null;
+  const marks: AnnotationMark[] = [];
+  const seen = new Set<number>();
+  for (const raw of list.slice(0, LIMITS.marks)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const mark = raw as Record<string, unknown>;
+    const n = finite(mark.n);
+    const text = bounded(mark.text, LIMITS.note).trim();
+    if (n === null || n < 1 || seen.has(n) || !text) continue;
+    seen.add(n);
+    const at = bounded(mark.at, LIMITS.at).trim();
+    marks.push({
+      n, text,
+      color: typeof mark.color === 'string' && MARK_COLORS.has(mark.color) ? mark.color : 'marker',
+      ...(at ? { at } : {}),
+      ...(typeof mark.inView === 'boolean' ? { inView: mark.inView } : {}),
+    });
+  }
+  return { url: bounded(url, LIMITS.url), marks };
 }
 
 /** PURE: what the page's own scripts said about the element — component trail and source line. */

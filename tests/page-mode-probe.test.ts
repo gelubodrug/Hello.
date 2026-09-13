@@ -24,8 +24,8 @@ describe('page mode probe', () => {
   it('installs once and knows only the kinds it implements', () => {
     expect(run(PAGE_MODE_PROBE)).toBe(true);
     expect(run(PAGE_MODE_PROBE)).toBe(true);
-    expect(bridge().kinds()).toEqual(['design']);
-    expect(bridge().arm('annotate', 'a1')).toBe(false);
+    expect(bridge().kinds()).toEqual(['design', 'annotate']);
+    expect(bridge().arm('sketch', 'a1')).toBe(false);
     expect(run(probeCall('arm', ['design', 'a2'], 'false'))).toBe(true);
   });
 

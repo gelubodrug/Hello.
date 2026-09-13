@@ -178,7 +178,7 @@ selected model, in main (`adoptedLimits` in `src/main/chat/service.ts`), and
 prefers a server's loaded `meta.n_ctx` over a model's trained context_length —
 the same priority the sibling app’s probe uses.
 
-## Browser page modes (Design; shared base for Annotate) — 2026-09-13
+## Browser page modes (Design, Annotate) — 2026-09-13
 
 At the owner's request, two sibling-app sources were read-only ported from
 `sibling-app`:
@@ -199,8 +199,7 @@ At the owner's request, two sibling-app sources were read-only ported from
   not in the page: Hello's page is a `<webview>` in its own document, so the
   composer is ordinary app DOM stacked above it (`DesignComposer.tsx`). The
   overlay uses a closed shadow root and a constructed stylesheet so a page CSP
-  cannot strip it. Annotate's markers are not ported yet; `KINDS.annotate` is the
-  documented slot.
+  cannot strip it. Annotate's markers came later (below).
 - `src/runtime/browserDesignMode.ts` → `src/shared/page-mode-format.ts`
   (`composeDesignNote(s)`, `parseDesignNotes`, `parseAnnotationShot`,
   `composeAnnotations`), made pure and extended with checked parsers for what the
@@ -210,6 +209,26 @@ At the owner's request, two sibling-app sources were read-only ported from
   clipboard from main. The picture is cropped from `webContents.capturePage()`
   of the viewport, scaled by the picture's own size, and saved under
   `<userData>/page-captures/<chat>/` (pruned after a day, removed with the chat).
+- Annotate — the sibling app `browser_view.rs` ANNOTATE block (:351-541: `MARK_COLORS`,
+  `ensureMarks`, `layoutMark`, `steerPending`, `commitPending`, `removeMark`,
+  `placeMark`, the click-away rule) and `annotationsForShot`/`afterShot`
+  (:628-660) → `KINDS.annotate` in `src/main/browser/page-mode-probe.ts`. Kept:
+  pins at page coordinates in a layer at the document origin (they scroll with
+  the page and are in the picture), six cyclic colours, stable numbers, click on
+  a pin removes it, empty notes dropped, no editing after commit, the note being
+  typed is hidden by opacity for the picture, `inView` per marker. Changed for
+  Hello: the layer is a closed shadow root in the isolated world; the core
+  swallows page clicks, so pin and note clicks are sorted by hit-test rather than
+  by their own listeners; `at` starts as the DOM path and main reads the React
+  component once per committed marker from the page world (`fiberProbe`) and
+  hands it back (`setAt`); Escape is main's (`before-input-event`) and disarming
+  drops every marker and the open note — there is no `clearAfterShot`, because
+  nothing is photographed on commit. Destination changed: nothing leaves on Enter;
+  `AnnotateBar.tsx` (app DOM over the page) counts markers and Send takes one
+  viewport capture — `capture()` returns the markers the page reported, checked by
+  `parseProbeAnnotations`, with main's URL — attaches it to the chat composer with
+  the `composeAnnotations` list and ends the mode; Copy puts the same on the
+  clipboard. No SQLite, no agent tool.
 - The toolbar pill grammar (icon at rest; label and X unfurl from zero width
   when armed) follows the sibling app `src/features/browser/browser.css`
   `.browser-design-btn`, drawn with Hello's tokens and motion variables.

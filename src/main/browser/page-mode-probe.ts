@@ -16,9 +16,8 @@
 // The overlay is a closed shadow root at the top of the stacking order; its
 // sheet is constructed, so a page's style-src CSP cannot strip it.
 //
-// Kinds: `design` is here. `annotate` plugs into KINDS with the same shape
-// (arm, move, click, exit, beforeShot, afterShot, plus any command reached
-// through `call`). Until it does, arming it answers false.
+// Kinds: `design` and `annotate`, each with the same shape (arm, move, click,
+// exit, beforeShot, afterShot, plus any command reached through `call`).
 
 /** Isolated world page modes run in. Electron's own preload world is 999. */
 export const PAGE_MODE_WORLD_ID = 1207;
@@ -203,6 +202,250 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
     }
   };
   // KINDS.annotate — added by the Annotate lane.
+  // Ported from an earlier annotate probe.
+  // Design names an element; Annotate marks a ZONE: a numbered, coloured pin
+  // dropped where the click was, with a sentence beside it. The pins live in
+  // their own layer at the document origin, so they scroll with the page — and
+  // that layer is NOT the overlay, so they stay in the picture (beforeShot hides
+  // only the note still being typed). Numbers are stable: removing #2 does not
+  // renumber #3, someone may already have read "#3". Everything is this page's
+  // memory only; leaving the mode or the document forgets it.
+  var MARK_COLORS=[["yellow","#f5c542"],["blue","#4c8dff"],["pink","#ff5fa2"],
+    ["green","#3ecf8e"],["orange","#ff8a3d"],["purple","#a77bff"]];
+  var MARK_CSS=
+    ".mark{position:absolute;width:0;height:0;pointer-events:none}"+
+    ".pinwrap{position:absolute;left:0;top:0;width:0;height:0;transform-origin:0 0;filter:drop-shadow(0 3px 8px rgba(0,0,0,.45))}"+
+    ".pin{position:absolute;left:0;top:-24px;width:24px;height:24px;border-radius:50% 50% 50% 0;transform-origin:0 100%;"+
+    "display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 0 0 2px rgba(0,0,0,.55);pointer-events:auto}"+
+    ".pin span{font:700 12px/1 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:#111}"+
+    ".label{position:absolute;left:0;top:0;width:max-content;max-width:240px;box-sizing:border-box;background:#1e1e1e;color:#d4d4d4;"+
+    "border-radius:8px;padding:5px 9px;font:400 13px/1.35 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;white-space:pre-wrap;"+
+    "word-break:break-word;border-left:3px solid var(--c);box-shadow:0 8px 24px rgba(0,0,0,.5);pointer-events:auto;"+
+    "transition:left .08s ease-out,top .08s ease-out}"+
+    ".label input{background:transparent;border:0;outline:none;color:#d4d4d4;font:inherit;width:210px;padding:0}"+
+    ".label input::placeholder{color:#6f6f6f}"+
+    ".mark.appear .pinwrap{animation:markPop .22s cubic-bezier(.2,.8,.2,1) both}"+
+    ".mark.appear .label{animation:markLabel .26s cubic-bezier(.2,.8,.2,1) both}"+
+    "@keyframes markPop{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:none}}"+
+    "@keyframes markLabel{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}"+
+    "@media (prefers-reduced-motion:reduce){.mark.appear .pinwrap,.mark.appear .label{animation:none}.label{transition:none}}";
+  // How far the pin reaches from its point; the label keeps a gap beyond it.
+  var PIN_REACH=35;
+  var A={host:null,root:null,marks:[],pending:null,nextN:1,cursor:null};
+
+  function ensureMarks(){
+    if(!A.host){
+      var host=document.createElement("div");
+      host.setAttribute("data-hello-annotations","");
+      var st=host.style;
+      // Absolute at the document origin, so the pins scroll WITH the page.
+      st.setProperty("position","absolute","important");
+      st.setProperty("left","0","important");
+      st.setProperty("top","0","important");
+      st.setProperty("width","0","important");
+      st.setProperty("height","0","important");
+      st.setProperty("z-index","2147483646","important");
+      st.setProperty("pointer-events","none","important");
+      st.setProperty("display","block","important");
+      var root=host.attachShadow({mode:"closed"});
+      try{
+        var sheet=new CSSStyleSheet();
+        sheet.replaceSync(MARK_CSS);
+        root.adoptedStyleSheets=[sheet];
+      }catch(_){
+        var tag=document.createElement("style");
+        tag.textContent=MARK_CSS;
+        root.appendChild(tag);
+      }
+      A.host=host;A.root=root;
+    }
+    if(!A.host.isConnected)(document.documentElement||document.body).appendChild(A.host);
+  }
+  /** Lay a marker out along its angle; the label's nearest edge stays PIN_REACH from the point. */
+  function layoutMark(m){
+    var deg=m.angle*180/Math.PI+45;
+    m.pin.style.transform="rotate("+deg+"deg)";
+    m.num.style.transform="rotate("+(-deg)+"deg)";
+    var w=m.label.offsetWidth,h=m.label.offsetHeight;
+    var ux=Math.cos(m.angle),uy=Math.sin(m.angle);
+    var reach=PIN_REACH+Math.abs(ux)*w/2+Math.abs(uy)*h/2;
+    m.label.style.left=Math.round(ux*reach-w/2)+"px";
+    m.label.style.top=Math.round(uy*reach-h/2)+"px";
+  }
+  function inMarks(e){
+    var path=e.composedPath?e.composedPath():[e.target];
+    for(var i=0;i<path.length;i++)if(path[i]===A.host)return true;
+    return false;
+  }
+  function hits(node,e){
+    if(!node)return false;
+    var r=node.getBoundingClientRect();
+    return e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom;
+  }
+  function markCount(){return A.marks.length;}
+  function dropPending(){
+    var p=A.pending;
+    if(!p)return;
+    A.pending=null;
+    try{p.input.blur();}catch(_){}
+    p.node.remove();
+  }
+  function commitPending(){
+    var p=A.pending;
+    if(!p)return;
+    A.pending=null;
+    var t=(p.input.value||"").replace(/\s+/g," ").trim().slice(0,1000);
+    // Leave the field first, so nothing can put the caret back into a finished note.
+    try{p.input.blur();}catch(_){}
+    // A marker with no words is not an annotation.
+    if(!t){p.node.remove();return;}
+    p.label.textContent=t;
+    layoutMark(p);
+    var token="";
+    if(p.target&&p.target.isConnected){
+      for(var i=0;i<2;i++)token+=Math.random().toString(36).slice(2,10);
+      token=token.replace(/[^a-z0-9]/g,"")||"m"+Date.now();
+      try{p.target.setAttribute("data-hello-pick",token);}catch(_){token="";}
+    }
+    A.marks.push({n:p.n,color:p.color,text:t,at:p.at,tag:p.tag,token:token,node:p.node,target:p.target});
+    var ev={type:"marks",count:markCount()};
+    // Main reads the component under the marker once, from the page world, and hands it back through setAt.
+    if(token)ev.mark={n:p.n,token:token};
+    emit(ev);
+  }
+  function clearMarkToken(m){
+    if(!m.token)return;
+    try{if(m.target&&m.target.getAttribute("data-hello-pick")===m.token)m.target.removeAttribute("data-hello-pick");}catch(_){}
+    m.token="";
+  }
+  function removeMark(n){
+    if(A.pending&&A.pending.n===n){dropPending();return;}
+    for(var i=0;i<A.marks.length;i++){
+      if(A.marks[i].n===n){
+        clearMarkToken(A.marks[i]);
+        A.marks[i].node.remove();
+        A.marks.splice(i,1);
+        emit({type:"marks",count:markCount()});
+        return;
+      }
+    }
+  }
+  function placeMark(e){
+    ensureMarks();
+    var cx=e.clientX,cy=e.clientY,x=cx+W.scrollX,y=cy+W.scrollY;
+    var n=A.nextN++;
+    var c=MARK_COLORS[(n-1)%MARK_COLORS.length];
+    var node=document.createElement("div");
+    node.className="mark appear";
+    node.style.left=x+"px";
+    node.style.top=y+"px";
+    node.style.setProperty("--c",c[1]);
+    // Up and to the right like a pin; left near the right edge, down near the top.
+    var angle=(cx>W.innerWidth-300?-3:-1)*Math.PI/4;
+    if(cy<90)angle=-angle;
+    var wrap=document.createElement("div");
+    wrap.className="pinwrap";
+    var pin=document.createElement("div");
+    pin.className="pin";
+    pin.style.background=c[1];
+    pin.title="Remove #"+n;
+    var num=document.createElement("span");
+    num.textContent=String(n);
+    pin.appendChild(num);
+    wrap.appendChild(pin);
+    var label=document.createElement("div");
+    label.className="label";
+    var input=document.createElement("input");
+    input.type="text";
+    input.maxLength=1000;
+    input.placeholder="#"+n+" what is wrong or wanted here";
+    input.setAttribute("aria-label","Note for marker "+n);
+    label.appendChild(input);
+    node.appendChild(wrap);node.appendChild(label);
+    A.root.appendChild(node);
+    var target=e.target&&e.target.nodeType===1?e.target:null;
+    A.pending={n:n,color:c[0],at:target?shortDomPath(target):"",tag:target?target.tagName.toLowerCase():"",
+      target:target,node:node,label:label,input:input,pin:pin,num:num,angle:angle,x:x,y:y};
+    layoutMark(A.pending);
+    input.addEventListener("keydown",function(ev){
+      // Escape never reaches the page: main catches it and ends the mode, which drops this note.
+      if(ev.key==="Enter"&&!ev.isComposing){ev.preventDefault();commitPending();}
+      ev.stopPropagation();
+    });
+    focusPending();
+  }
+  function focusPending(){
+    var p=A.pending;
+    // preventScroll: a note swung past the edge must not drag the page under its point.
+    if(p)setTimeout(function(){if(A.pending===p)try{p.input.focus({preventScroll:true});}catch(_){}},0);
+  }
+  KINDS.annotate={
+    arm:function(){
+      ensureMarks();
+      A.cursor=document.documentElement.style.getPropertyValue("cursor");
+      document.documentElement.style.setProperty("cursor","crosshair");
+    },
+    /** While a note is written its direction follows the mouse; over the note itself it holds still. */
+    move:function(e){
+      var p=A.pending;
+      if(!p||hits(p.label,e))return;
+      var dx=e.clientX+W.scrollX-p.x,dy=e.clientY+W.scrollY-p.y;
+      if(dx*dx+dy*dy<16*16)return;
+      p.angle=Math.atan2(dy,dx);
+      layoutMark(p);
+    },
+    // The core has already kept the click from the page. Our own layer's
+    // clicks arrive here too, so they are sorted by where they landed.
+    click:function(e){
+      if(inMarks(e)){
+        if(A.pending&&hits(A.pending.label,e)){focusPending();return;}
+        var all=A.pending?A.marks.concat([A.pending]):A.marks;
+        for(var i=all.length-1;i>=0;i--){
+          if(all[i].node.firstChild&&hits(all[i].node.firstChild.firstChild,e)){removeMark(all[i].n);return;}
+        }
+        return;
+      }
+      // A click away from an open note closes it — kept with words, dropped
+      // without — and does nothing else (user, 13.09).
+      if(A.pending){commitPending();return;}
+      placeMark(e);
+    },
+    exit:function(){
+      dropPending();
+      for(var i=0;i<A.marks.length;i++){clearMarkToken(A.marks[i]);A.marks[i].node.remove();}
+      A.marks=[];A.nextN=1;
+      if(A.host)A.host.remove();
+      if(A.cursor)document.documentElement.style.setProperty("cursor",A.cursor);
+      else document.documentElement.style.removeProperty("cursor");
+      A.cursor=null;
+    },
+    /** The note being typed leaves the picture; every committed pin says whether it is in it. */
+    beforeShot:function(){
+      // Opacity, not visibility: a field that turns invisible loses focus, and its words with it.
+      if(A.pending)A.pending.node.style.opacity="0";
+      var out=[],vw=W.innerWidth,vh=W.innerHeight;
+      for(var i=0;i<A.marks.length;i++){
+        var m=A.marks[i],r=m.node.getBoundingClientRect();
+        out.push({n:m.n,color:m.color,text:m.text,at:m.at,inView:r.top>=0&&r.left>=0&&r.top<vh&&r.left<vw});
+      }
+      return {marks:out};
+    },
+    afterShot:function(){
+      if(A.pending)A.pending.node.style.opacity="";
+    },
+    /** Main's reading of the component under marker n. */
+    setAt:function(n,component,file){
+      if(typeof component!=="string"||!component)return false;
+      for(var i=0;i<A.marks.length;i++){
+        var m=A.marks[i];
+        if(m.n!==n)continue;
+        m.at=component+(m.tag?" <"+m.tag+">":"")+(typeof file==="string"&&file?" ("+file+")":"");
+        m.token="";
+        return true;
+      }
+      return false;
+    }
+  };
 
   // ── Listeners ────────────────────────────────────────────────────────────
   var PRESSES=["pointerdown","mousedown","pointerup","mouseup","dblclick","auxclick","contextmenu","touchstart","touchend"];

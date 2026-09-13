@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import type { BrowserTab, PageModeEvent, PageModeExitReason, PageModeKind, PagePick, PageRect } from "../../shared/types";
-import { composeRefBlock, cropBox, parseFiberInfo, parseProbeBatch, parseRect, type ProbeEvent } from "../../shared/page-mode-format";
+import { composeRefBlock, cropBox, parseFiberInfo, parseProbeAnnotations, parseProbeBatch, parseRect, type AnnotationShot, type ProbeEvent } from "../../shared/page-mode-format";
 import type { BrowserPageEvent } from "./manager";
 import { PAGE_MODE_PROBE, PAGE_MODE_WAIT_MS, PAGE_MODE_WORLD_ID, fiberProbe, probeCall } from "./page-mode-probe";
 
@@ -144,7 +144,7 @@ export class PageModeController {
    * Reading pixels is reading the page, so it needs Read like any read. The
    * picture is taken without the mode's own overlay in it.
    */
-  async capture(tabId: string, rect?: PageRect): Promise<{ path: string }> {
+  async capture(tabId: string, rect?: PageRect): Promise<{ path: string; annotations?: AnnotationShot }> {
     const { tab, contents } = this.readable(tabId, "capture");
     if (!/^[\w-]{1,100}$/.test(tab.conversationId)) throw new Error("This tab belongs to no chat.");
     const box = rect === undefined ? undefined : parseRect(rect);
@@ -153,6 +153,7 @@ export class PageModeController {
     const hooks = arming && arming.contents === contents ? this.hooks.get(arming.kind) : undefined;
     const context = arming && hooks ? this.context(arming) : undefined;
     let viewport: { w: number; h: number } | null = null;
+    let extra: unknown = null;
     let image: Electron.NativeImage;
     try {
       if (context) await hooks?.beforeCapture?.(context);
@@ -163,6 +164,7 @@ export class PageModeController {
       const size = (prepared as { viewport?: { w?: unknown; h?: unknown } } | null)?.viewport;
       if (size && typeof size.w === "number" && typeof size.h === "number" && size.w > 0 && size.h > 0)
         viewport = { w: size.w, h: size.h };
+      extra = (prepared as { extra?: unknown } | null)?.extra ?? null;
       image = await contents.capturePage();
     } finally {
       if (!contents.isDestroyed()) await timeout(this.isolated(contents, probeCall("afterShot", [], "true")), SHOT_TIMEOUT_MS);
@@ -189,6 +191,12 @@ export class PageModeController {
     await mkdir(folder, { recursive: true, mode: 0o700 });
     const path = join(folder, `${randomUUID()}.png`);
     await writeFile(path, png, { mode: 0o600, flag: "wx" });
+    // Annotate's markers are drawn into the page, so they are in the picture;
+    // the list says what each one means and whether it made it into the frame.
+    if (arming?.kind === "annotate" && arming.contents === contents) {
+      const annotations = parseProbeAnnotations(extra, contents.getURL());
+      if (annotations) return { path, annotations };
+    }
     return { path };
   }
 
@@ -325,6 +333,11 @@ export class PageModeController {
       this.options.emit({ type: "released", tabId, armId });
       return;
     }
+    if (event.type === "marks") {
+      this.options.emit({ type: "marks", tabId, armId, count: event.count });
+      if (event.mark) await this.readMark(arming, event.mark);
+      return;
+    }
     const fiber = parseFiberInfo(await timeout(arming.contents.mainFrame.executeJavaScript(fiberProbe(event.token)), FIBER_TIMEOUT_MS));
     if (this.arms.get(tabId) !== arming || arming.contents.isDestroyed()) return;
     // The address is main's to report, never the page's.
@@ -337,6 +350,13 @@ export class PageModeController {
     };
     arming.lastHover = JSON.stringify(event.rect);
     this.options.emit({ type: "picked", tabId, armId, pick, point: event.point });
+  }
+
+  /** Annotate: what component a new marker sits on, read once from the page world and handed back to it. */
+  private async readMark(arming: Arming, mark: { n: number; token: string }): Promise<void> {
+    const fiber = parseFiberInfo(await timeout(arming.contents.mainFrame.executeJavaScript(fiberProbe(mark.token)), FIBER_TIMEOUT_MS));
+    if (!fiber.component || this.arms.get(arming.tabId) !== arming) return;
+    await this.context(arming).call("setAt", [mark.n, fiber.component, fiber.file]).catch(() => null);
   }
 
   private exit(arming: Arming, reason: PageModeExitReason): void {

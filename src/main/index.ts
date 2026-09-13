@@ -74,7 +74,7 @@ else {
     const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source)});
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>browser.adoptGuest(guest));
-    const pageModes=new PageModeController({pages:browser,dataDir,emit:event=>emit('hello:browser-mode',event)});
+    const pageModes=new PageModeController({pages:browser,dataDir,kinds:['design','annotate'],emit:event=>emit('hello:browser-mode',event)});
     const previews=new LocalPreviewServer();
     const artifactPreviews=new LocalPreviewServer();
     const artifacts=new HtmlArtifacts(dataDir);
