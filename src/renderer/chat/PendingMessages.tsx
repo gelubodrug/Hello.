@@ -84,7 +84,7 @@ export function PendingMessages({ items, onChange, onError }: {
                 {item.text}
               </button>
             )}
-            <IconButton label="Don’t send this message" onClick={() => run(api.chat.dropQueued(item.id))}>
+            <IconButton label="Don’t send this message" onClick={() => run(api.chat.dropQueued(item.id, item.conversationId))}>
               <X size={13} />
             </IconButton>
           </li>

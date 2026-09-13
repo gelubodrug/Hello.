@@ -552,6 +552,10 @@ export function ConversationView({
       .catch(() => { if (alive) setQueued([]); });
     return () => { alive = false; };
   }, [conversation.id, busy]);
+  // Main also changes it on its own — a steer said, a held message delivered.
+  useEffect(() => api.chat.onQueue?.(event => {
+    if (event.conversationId === conversation.id) setQueued(event.items);
+  }), [conversation.id]);
   const messageContext = useMemo(() => {
     const known = new Map<number, WebSource>();
     return messages.map(message => {

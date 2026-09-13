@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ChatDropResult,
   ChatEvent,
+  ChatQueueEvent,
   Message,
   MessagePart,
   QueuedMessage,
@@ -49,6 +50,14 @@ interface Run {
   attachments?: AttachmentContext;
   web: WebResearch;
   toolCalls: Map<string, { signature: string; result: Promise<string> }>;
+  /** Queued row id → the exact words Pi acknowledged holding for this run. */
+  steers: Map<string, string>;
+  /** Steer hand-offs, one at a time, so a take-back never races a push. */
+  steerWork: Promise<void>;
+  /** Pi is being asked for its queue back: its emptied queue is not a delivery. */
+  takingBack: boolean;
+  /** The reply has settled; nothing more is handed to Pi for it. */
+  steersClosed: boolean;
 }
 interface ResourceSnapshot {
   /** Skill folders passed to Pi with --skill. */
@@ -79,6 +88,8 @@ interface PendingApproval {
 export interface ChatServiceOptions {
   store: DataStore;
   emit(event: ChatEvent): void;
+  /** The waiting list changed without the renderer asking. */
+  emitQueue?(event: ChatQueueEvent): void;
   browser?: BrowserHooks;
   fetch?: typeof globalThis.fetch;
   /** Legacy option retained for callers; Pi now owns the tool loop. */
@@ -248,6 +259,7 @@ export function wireHistory(messages: Message[]): WireMessage[] {
 export class ChatService {
   private readonly store: DataStore;
   private readonly emit: ChatServiceOptions['emit'];
+  private readonly emitQueue?: ChatServiceOptions['emitQueue'];
   private readonly browser?: BrowserHooks;
   private readonly fetcher: typeof globalThis.fetch;
   private readonly requestTimeoutMs: number;
@@ -265,6 +277,8 @@ export class ChatService {
   private readonly preparations = new Map<string, Set<AbortController>>();
   private readonly generations = new Map<string, number>();
   private readonly deleting = new Set<string>();
+  /** Chats whose send is still preparing, before its reply is registered. */
+  private readonly starting = new Set<string>();
   private disposed = false;
 
   constructor(options: ChatServiceOptions) {
@@ -273,6 +287,7 @@ export class ChatService {
     this.library = options.library ?? new ResourceLibrary(options.store);
     this.mcp = options.mcp ?? new McpManager(options.store);
     this.emit = options.emit;
+    this.emitQueue = options.emitQueue;
     this.browser = options.browser;
     this.fetcher = options.fetch ?? globalThis.fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 300_000;
@@ -422,10 +437,16 @@ export class ChatService {
     const userId = randomUUID();
     let attachments: AttachmentContext | undefined;
     if (attachmentIds.length) {
-      attachments = await this.attachments.context(conversationId, attachmentIds);
-      this.assertPreparation(conversationId, generation);
-      await this.attachments.bind(conversationId, userId, attachmentIds);
-      this.assertPreparation(conversationId, generation);
+      // A held message must not be delivered into the gap before this reply exists.
+      this.starting.add(conversationId);
+      try {
+        attachments = await this.attachments.context(conversationId, attachmentIds);
+        this.assertPreparation(conversationId, generation);
+        await this.attachments.bind(conversationId, userId, attachmentIds);
+        this.assertPreparation(conversationId, generation);
+      } finally {
+        this.starting.delete(conversationId);
+      }
     }
     const prompt = text.trim() ? text : 'Please examine the attached files.';
     const displayed = attachments ? [text.trim() || 'Attached files',
@@ -573,7 +594,13 @@ export class ChatService {
       attachments,
       web: new WebResearch(this.store.listMessages(conversationId)),
       toolCalls: new Map(),
+      steers: new Map(),
+      steerWork: Promise.resolve(),
+      takingBack: false,
+      steersClosed: false,
     };
+    // A steer from before this reply belongs to no running turn any more.
+    this.holdOrphanSteers(conversationId);
     message.runtimePhase = 'starting';
     this.runs.set(conversationId, run);
     this.publish(run, true);
@@ -608,6 +635,7 @@ export class ChatService {
           this.publish(run, true);
         } finally {
           this.runs.delete(conversationId);
+          this.releaseSteers(conversationId);
           this.calibrateContext(run.message.usage?.input);
           // A message held for after this turn is said now — but never into a
           // turn that failed: the person should see what went wrong and decide.
@@ -647,67 +675,180 @@ export class ChatService {
    */
   async queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]> {
     this.store.getConversation(conversationId);
+    // A steer for a reply that has already finished lands as the next turn.
+    const run = this.runs.get(conversationId);
+    if (mode === 'steer' && !run) mode = 'next';
     const queued = this.store.queueMessage(conversationId, text, mode);
-    if (mode === 'steer') await this.pushSteer(conversationId, queued.text);
-    else if (mode === 'next' && !this.runs.has(conversationId)) this.deliverQueued(conversationId);
+    if (mode === 'steer' && run) await this.pushSteer(run, queued);
+    else if (mode === 'next' && !run) this.deliverQueued(conversationId);
     return this.store.listQueued(conversationId);
   }
   async reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]> {
     const before = this.store.getQueued(id);
-    const after = this.store.reviseQueued(id, patch);
+    const run = this.runs.get(before.conversationId);
+    // Re-aiming at a reply that is no longer running would strand the words.
+    const mode = patch.mode === 'steer' && !run ? 'next' : patch.mode;
+    const after = this.store.reviseQueued(id, { ...patch, mode });
     // Rewriting or re-aiming a steer means Pi must be holding the new words,
     // not the old ones.
-    if (before.mode === 'steer' || after.mode === 'steer')
-      await this.rebuildSteers(after.conversationId, before.mode === 'steer' ? before.text : undefined,
-        after.mode === 'steer' ? after.text : undefined);
+    if (run && (before.mode === 'steer' || after.mode === 'steer')) await this.rebuildSteers(run);
     return this.store.listQueued(after.conversationId);
   }
-  async dropQueued(id: string): Promise<QueuedMessage[]> {
-    const row = this.store.getQueued(id);
+  /**
+   * Taking back words that are already gone — said, or delivered — is not a
+   * failure: the person sees the list as it is now.
+   */
+  async dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]> {
+    const row = conversationId === undefined
+      ? this.store.getQueued(id)
+      : this.store.listQueued(conversationId).find(item => item.id === id);
+    if (!row) return this.store.listQueued(conversationId!);
     this.store.dropQueued(id);
-    if (row.mode === 'steer') await this.rebuildSteers(row.conversationId, row.text, undefined);
+    const run = this.runs.get(row.conversationId);
+    if (row.mode === 'steer' && run) await this.rebuildSteers(run);
     return this.store.listQueued(row.conversationId);
   }
   listQueued(conversationId: string): QueuedMessage[] {
+    if (!this.runs.has(conversationId)) this.holdOrphanSteers(conversationId, false);
     return this.store.listQueued(conversationId);
   }
-  private async pushSteer(conversationId: string, text: string): Promise<void> {
-    const session = this.sessions.get(conversationId);
-    if (!session?.rpc.isRunning || !this.runs.has(conversationId)) return;
-    await session.rpc.steer(text).catch(() => {});
+  private queueChanged(conversationId: string): void {
+    try {
+      this.emitQueue?.({ conversationId, items: this.store.listQueued(conversationId) });
+    } catch { /* chat gone */ }
+  }
+  private steerWork(run: Run, work: () => Promise<void>): Promise<void> {
+    const next = run.steerWork.then(work);
+    run.steerWork = next.catch(() => {});
+    return next;
+  }
+  /** Steers written while Pi was still starting reach the reply once it is running. */
+  private async handWaitingSteers(run: Run): Promise<void> {
+    for (const item of this.store.listQueued(run.conversationId))
+      if (item.mode === 'steer' && !run.steers.has(item.id)) await this.pushSteer(run, item);
+  }
+  private async pushSteer(run: Run, row: QueuedMessage): Promise<void> {
+    await this.steerWork(run, async () => {
+      const session = this.sessions.get(run.conversationId);
+      if (run.steersClosed || !session?.rpc.isRunning || run.steers.has(row.id)) return;
+      // A refused hand-off stays unhanded, and lands as the next turn instead.
+      try { await session.rpc.steer(row.text); } catch { return; }
+      run.steers.set(row.id, row.text);
+    });
   }
   /**
    * Pi holds steers we handed it, and only it knows which ones it has already
    * consumed. Taking the queue back tells us exactly what is still pending, so
    * the words we re-hand it are the ones that were never said.
    */
-  private async rebuildSteers(conversationId: string, removed?: string, added?: string): Promise<void> {
-    const session = this.sessions.get(conversationId);
-    if (!session?.rpc.isRunning || !this.runs.has(conversationId)) return;
-    let pending: string[] = [];
-    try {
-      pending = (await session.rpc.clearQueue()).data ?? [];
-    } catch { return; }
-    const holding = new Map<string, number>();
-    for (const text of pending) holding.set(text, (holding.get(text) ?? 0) + 1);
-    if (removed !== undefined && holding.get(removed)) holding.set(removed, holding.get(removed)! - 1);
-    for (const item of this.store.listQueued(conversationId)) {
-      if (item.mode !== 'steer') continue;
-      const left = holding.get(item.text) ?? 0;
-      if (item.text === added || left > 0) {
-        if (item.text !== added) holding.set(item.text, left - 1);
-        await session.rpc.steer(item.text).catch(() => {});
+  private async rebuildSteers(run: Run): Promise<void> {
+    await this.steerWork(run, async () => {
+      const session = this.sessions.get(run.conversationId);
+      if (run.steersClosed || !session?.rpc.isRunning) return;
+      if (!await this.takeBackSteers(run, session)) return;
+      for (const item of this.store.listQueued(run.conversationId)) {
+        if (item.mode !== 'steer') continue;
+        try { await session.rpc.steer(item.text); } catch { continue; }
+        run.steers.set(item.id, item.text);
       }
+    });
+  }
+  /**
+   * The reply settled: take back anything Pi still holds, so a steer it never
+   * reached is not silently injected into some later prompt. What was said
+   * leaves the list; what was not is released as the next turn.
+   */
+  private async reclaimSteers(run: Run, session: PiSession): Promise<void> {
+    await this.steerWork(run, async () => {
+      run.steersClosed = true;
+      if (run.steers.size && session.rpc.isRunning) await this.takeBackSteers(run, session);
+    }).catch(() => {});
+  }
+  /** Empties Pi's queue and forgets the rows it had already said. */
+  private async takeBackSteers(run: Run, session: PiSession): Promise<boolean> {
+    let held: string[];
+    run.takingBack = true;
+    try {
+      const data = (await session.rpc.clearQueue()).data;
+      held = Array.isArray(data?.steering) ? data.steering.filter(text => typeof text === 'string') : [];
+    } catch {
+      return false;
+    } finally {
+      run.takingBack = false;
     }
+    if (this.forgetSaid(run, held)) this.queueChanged(run.conversationId);
+    run.steers.clear();
+    return true;
+  }
+  /**
+   * A handed steer Pi no longer holds has been said, and its row goes — unless
+   * the person rewrote or re-aimed it since: those words were never said.
+   * Pi expands a /skill or /template steer before holding it, so such a steer
+   * is matched by what is left over rather than by its words.
+   */
+  private forgetSaid(run: Run, held: readonly string[]): boolean {
+    const left = [...held];
+    const unmatched: string[] = [];
+    for (const [id, text] of run.steers) {
+      const index = left.indexOf(text);
+      if (index === -1) unmatched.push(id);
+      else left.splice(index, 1);
+    }
+    const said = unmatched.filter(id => {
+      if (!run.steers.get(id)!.startsWith('/') || !left.length) return true;
+      left.shift();
+      return false;
+    });
+    if (!said.length) return false;
+    const rows = new Map(this.store.listQueued(run.conversationId).map(item => [item.id, item]));
+    let changed = false;
+    for (const id of said) {
+      const row = rows.get(id);
+      if (row?.mode === 'steer' && row.text === run.steers.get(id)) {
+        this.store.dropQueued(id);
+        changed = true;
+      }
+      run.steers.delete(id);
+    }
+    return changed;
+  }
+  /** A reply ended: a steer it never said is still the person's, now for the next turn. */
+  private releaseSteers(conversationId: string): void {
+    let changed = false;
+    try {
+      for (const item of this.store.listQueued(conversationId)) {
+        if (item.mode !== 'steer') continue;
+        this.store.reviseQueued(item.id, { mode: 'next' });
+        changed = true;
+      }
+    } catch { return; /* chat gone */ }
+    if (changed) this.queueChanged(conversationId);
+  }
+  /**
+   * A steer no running reply owns — left by an earlier app session — may or
+   * may not have been said. It is kept, never sent on its own: the person decides.
+   */
+  private holdOrphanSteers(conversationId: string, announce = true): void {
+    let changed = false;
+    try {
+      for (const item of this.store.listQueued(conversationId)) {
+        if (item.mode !== 'steer') continue;
+        this.store.reviseQueued(item.id, { mode: 'later' });
+        changed = true;
+      }
+    } catch { return; /* chat gone */ }
+    if (changed && announce) this.queueChanged(conversationId);
   }
   /** Says the next held message, if one is waiting for its own turn. */
   private deliverQueued(conversationId: string): void {
-    if (this.runs.has(conversationId)) return;
+    if (this.runs.has(conversationId) || this.starting.has(conversationId)) return;
     const next = this.store.takeQueued(conversationId, ['next']);
     if (!next) return;
+    this.queueChanged(conversationId);
     void this.send(conversationId, next.text).catch(() => {
       // A refused delivery is not a lost sentence: give it back to the person.
-      try { this.store.queueMessage(conversationId, next.text, 'later'); } catch { /* chat gone */ }
+      try { this.store.queueMessage(conversationId, next.text, 'later'); } catch { return; /* chat gone */ }
+      this.queueChanged(conversationId);
     });
   }
 
@@ -961,6 +1102,11 @@ export class ChatService {
       const mapper = new PiEventMapper(run.message);
       unsubscribe = session.rpc.subscribe(event => {
         try {
+          // Pi takes a steer off its queue the moment it puts it into the
+          // conversation, and says so: whatever it no longer holds was said.
+          if (event.type === 'queue_update' && Array.isArray(event.steering) && !run.takingBack &&
+              this.forgetSaid(run, event.steering.filter((text): text is string => typeof text === 'string')))
+            this.queueChanged(run.conversationId);
           const update = mapper.apply(event);
           const previousPhase = run.message.runtimePhase;
           run.message.runtimePhase = update.phase === 'compacting' ? 'compacting'
@@ -995,8 +1141,10 @@ export class ChatService {
       if (run.attachments?.text) prompt += `\n\n${run.attachments.text}`;
       if (run.attachments?.images.length) await session.rpc.prompt(prompt, { images: run.attachments.images });
       else await session.rpc.prompt(prompt);
+      await this.handWaitingSteers(run);
       await completion;
       run.controller.signal.throwIfAborted();
+      await this.reclaimSteers(run, session);
       run.message.status = 'complete';
       run.message.error = null;
     } catch (error) {

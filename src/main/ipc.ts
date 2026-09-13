@@ -128,7 +128,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(value.mode!==undefined){if(value.mode!=='steer'&&value.mode!=='next'&&value.mode!=='later')throw new Error('Unknown delivery.');clean.mode=value.mode;}
     return chat.reviseQueued(str(id,'id',200),clean);
   });
-  handle('chat.dropQueued',(id)=>chat.dropQueued(str(id,'id',200)));
+  handle('chat.dropQueued',(id,conversationId)=>chat.dropQueued(str(id,'id',200),conversationId===undefined?undefined:str(conversationId)));
   handle('chat.stop',(id)=>chat.stop(str(id)));
   handle('chat.retry',(id)=>chat.retry(str(id)));
   handle('chat.approve',(id,allow)=>{if(typeof allow!=='boolean')throw new Error('Invalid approval.');return chat.approve(str(id),allow);});

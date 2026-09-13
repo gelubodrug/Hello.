@@ -164,8 +164,8 @@ export class PiRpcProcess {
     return this.request({ type: 'steer', message: text, ...(images?.length ? { images } : {}) });
   }
   /** Takes back every steer and follow-up Pi is still holding, with their text. */
-  clearQueue(): Promise<PiRpcResponse<string[]>> {
-    return this.request<string[]>({ type: 'clear_queue' }, 5_000);
+  clearQueue(): Promise<PiRpcResponse<{ steering: string[]; followUp: string[] }>> {
+    return this.request<{ steering: string[]; followUp: string[] }>({ type: 'clear_queue' }, 5_000);
   }
 
   /** UI responses are not RPC commands: Pi does not acknowledge them. */

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions } from '../src/main/chat/pi-rpc';
 import type { PiToolBridgeOptions } from '../src/main/chat/pi-tool-bridge';
-import type { BrowserTab, ChatEvent, MessagePart } from '../src/shared/types';
+import type { BrowserTab, ChatEvent, ChatQueueEvent, MessagePart } from '../src/shared/types';
 
 // This suite exercises Hello's lifecycle/tool policy, never a real Pi child,
 // loopback listener, model server or CLI. Keep the transport mocks unconditional.
@@ -25,16 +25,28 @@ const harness = vi.hoisted(() => {
     /** Every command this fake was handed, and what Pi still holds unsaid. */
     readonly sent: Array<{ type: string; message?: string }> = [];
     queued: string[] = [];
+    // Like Pi, announce the queue before acknowledging the command that changed it.
     steer = vi.fn(async (message: string) => {
       this.sent.push({ type: 'steer', message });
+      this.queued.push(message);
+      this.emit({ type: 'queue_update', steering: [...this.queued], followUp: [] });
       return { type: 'response', id: 'fixture', command: 'steer', success: true } as const;
     });
     clearQueue = vi.fn(async () => {
       this.sent.push({ type: 'clear_queue' });
-      const data = this.queued;
+      const steering = this.queued;
       this.queued = [];
-      return { type: 'response', id: 'fixture', command: 'clear_queue', success: true, data } as const;
+      this.emit({ type: 'queue_update', steering: [], followUp: [] });
+      return { type: 'response', id: 'fixture', command: 'clear_queue', success: true,
+        data: { steering, followUp: [] } } as const;
     });
+    /** Pi puts the oldest held steer into the conversation. */
+    consumeSteer() {
+      const message = this.queued.shift();
+      this.emit({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: message }] } });
+      this.emit({ type: 'queue_update', steering: [...this.queued], followUp: [] });
+      this.emit({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: message }] } });
+    }
     abort = vi.fn(async () => {});
     respondToExtension = vi.fn(async () => {});
     subscribe(listener: (event: PiRpcEvent) => void) {
@@ -89,6 +101,7 @@ let store: DataStore;
 let service: ChatService | undefined;
 let conversationId: string;
 const events: ChatEvent[] = [];
+const queueEvents: ChatQueueEvent[] = [];
 beforeEach(() => {
   vi.clearAllMocks();
   harness.instances.length = 0;
@@ -104,6 +117,7 @@ beforeEach(() => {
   });
   conversationId = store.createConversation().id;
   events.length = 0;
+  queueEvents.length = 0;
 });
 afterEach(async () => {
   try {
@@ -119,7 +133,8 @@ afterEach(async () => {
 });
 
 function create(options: Pick<ChatServiceOptions, 'fetch' | 'browser'> = {}): ChatService {
-  service = new ChatService({ store, emit: event => events.push(structuredClone(event)), ...options });
+  service = new ChatService({ store, emit: event => events.push(structuredClone(event)),
+    emitQueue: event => queueEvents.push(structuredClone(event)), ...options });
   return service;
 }
 function assistant() {
@@ -449,13 +464,83 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(held).toMatchObject({ text: 'make the bars thinner', mode: 'steer' });
     // Changing your mind: Pi hands back what it has not said yet, and we hand
     // back only what survives — never the sentence that was withdrawn.
-    current.rpc.queued = ['make the bars thinner'];
+    expect(current.rpc.queued).toEqual(['make the bars thinner']);
     await chat.dropQueued(held.id);
     expect(current.rpc.sent.filter(line => line.type === 'clear_queue')).toHaveLength(1);
     expect(current.rpc.sent.filter(line => line.type === 'steer')).toHaveLength(1);
     expect(chat.listQueued(conversationId)).toEqual([]);
     settle(current.rpc, 'done');
     await send;
+  });
+
+  it('removes a steer once Pi has said it, and tells the renderer without being asked', async () => {
+    const chat = create();
+    const send = chat.send(conversationId, 'build a page');
+    const current = await runtime();
+    await chat.queue(conversationId, 'first correction', 'steer');
+    await chat.queue(conversationId, 'second correction', 'steer');
+    // Announcing what it holds is not saying it.
+    expect(chat.listQueued(conversationId).map(item => item.text)).toEqual(['first correction', 'second correction']);
+    expect(queueEvents).toEqual([]);
+
+    current.rpc.consumeSteer();
+    expect(chat.listQueued(conversationId).map(item => item.text)).toEqual(['second correction']);
+    expect(queueEvents.at(-1)).toMatchObject({ conversationId, items: [{ text: 'second correction', mode: 'steer' }] });
+
+    // Rewording what Pi still holds hands it the new words, never the old ones.
+    const [second] = chat.listQueued(conversationId);
+    await chat.reviseQueued(second.id, { text: 'second, reworded' });
+    expect(current.rpc.queued).toEqual(['second, reworded']);
+    current.rpc.consumeSteer();
+    expect(chat.listQueued(conversationId)).toEqual([]);
+    expect(queueEvents.at(-1)).toMatchObject({ conversationId, items: [] });
+
+    // The X on a row that was said a moment ago is not an error.
+    await expect(chat.dropQueued(second.id, conversationId)).resolves.toEqual([]);
+    settle(current.rpc, 'done');
+    await send;
+    // Nothing said is ever said twice.
+    expect(current.rpc.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a steer the reply never reached into the next turn, and a stopped one into a held next', async () => {
+    const chat = create();
+    const send = chat.send(conversationId, 'build a page');
+    const current = await runtime();
+    await chat.queue(conversationId, 'and then the footer', 'steer');
+    // The reply settles while Pi still holds it: taken back, and said on its own.
+    settle(current.rpc, 'done');
+    await send;
+    const next = await runtime(0, 2);
+    expect(current.rpc.sent.filter(line => line.type === 'clear_queue')).toHaveLength(1);
+    expect(next.rpc.prompt).toHaveBeenLastCalledWith('and then the footer');
+    expect(next.rpc.queued).toEqual([]);
+    expect(chat.listQueued(conversationId)).toEqual([]);
+
+    await chat.queue(conversationId, 'stop halfway', 'steer');
+    await chat.stop(conversationId);
+    // A stopped reply is the person's to look at: the words wait, as the next turn.
+    expect(chat.listQueued(conversationId)).toMatchObject([{ text: 'stop halfway', mode: 'next' }]);
+    expect(queueEvents.at(-1)).toMatchObject({ items: [{ text: 'stop halfway', mode: 'next' }] });
+  });
+
+  it('never loses or re-sends a steer that no running reply owns', async () => {
+    const chat = create();
+    // Left behind by an earlier app session: it may already have been said.
+    const orphan = store.queueMessage(conversationId, 'from yesterday', 'steer');
+    expect(chat.listQueued(conversationId)).toMatchObject([{ id: orphan.id, mode: 'later' }]);
+    // A row that is gone comes back as the current list, not as an error.
+    await expect(chat.dropQueued('missing-row', conversationId)).resolves.toMatchObject([{ id: orphan.id }]);
+    await expect(chat.dropQueued(orphan.id, conversationId)).resolves.toEqual([]);
+    await expect(chat.dropQueued(orphan.id)).rejects.toThrow(/no longer waiting/);
+
+    // A steer typed just after the reply ended is said as the next turn.
+    await chat.queue(conversationId, 'one more thing', 'steer');
+    const current = await runtime();
+    expect(current.rpc.prompt).toHaveBeenLastCalledWith('one more thing');
+    expect(current.rpc.sent.filter(line => line.type === 'steer')).toEqual([]);
+    settle(current.rpc, 'ok');
+    await vi.waitFor(() => expect(chat.isRunning(conversationId)).toBe(false));
   });
 
   it('says a held message on its own turn, but never into a turn that failed', async () => {
