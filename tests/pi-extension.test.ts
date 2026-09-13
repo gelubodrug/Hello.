@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import helloTools from '../src/main/chat/pi-extension';
 import type { ToolDefinition } from '../src/main/chat/tools';
+import { createPiToolBridge } from '../src/main/chat/pi-tool-bridge';
+import type { ToolOutput } from '../src/main/chat/tool-output';
 
 // The Pi child's side of the bridge, driven by a fake ExtensionAPI and a fake
 // loopback: no Pi process, no listener, no model.
@@ -12,6 +14,7 @@ type Handler = (event: unknown) => Promise<unknown>;
 
 let offered: ToolDefinition[];
 let toolsFail: boolean;
+let executed: unknown;
 let pi: {
   api: ExtensionAPI;
   handlers: Map<string, Handler>;
@@ -22,6 +25,7 @@ let pi: {
 beforeEach(() => {
   offered = [tool('web_search'), tool('notebook_paths')];
   toolsFail = false;
+  executed = 'done';
   vi.stubEnv('HELLO_PI_BRIDGE_URL', 'http://127.0.0.1:4555/');
   vi.stubEnv('HELLO_PI_BRIDGE_TOKEN', 'b'.repeat(64));
   vi.stubGlobal('fetch', vi.fn(async (input: URL | string) => {
@@ -30,6 +34,7 @@ beforeEach(() => {
     if (route === '/tools') return toolsFail ? reply({ error: 'bridge gone' }, 500) : reply({ tools: offered });
     if (route === '/ready') return reply({ ready: true });
     if (route === '/context') return reply({ context: 'Attached folder (tools use relative paths): /work' });
+    if (route === '/execute') return reply({ result: executed });
     return reply({ error: 'unexpected' }, 404);
   }));
   const handlers = new Map<string, Handler>();
@@ -83,5 +88,68 @@ describe('Hello tools inside a running Pi reply', () => {
     // Activated now, so the step after this one really has it.
     expect(pi.active).toContain('command_run');
     expect(await text()).not.toMatch(/just enabled/);
+  });
+});
+
+type Registered = { execute(id: string, params: unknown, signal?: AbortSignal): Promise<{ content: unknown[] }> };
+const png = Buffer.from('picture bytes').toString('base64');
+
+describe('tool results with pictures', () => {
+  it('keeps a plain string result a single text block', async () => {
+    await started();
+    const result = await (pi.registered.get('web_search') as Registered).execute('call-1', {});
+    expect(result.content).toEqual([{ type: 'text', text: 'done' }]);
+  });
+
+  it('maps pictures to Pi image content after the text', async () => {
+    await started();
+    executed = { text: 'Screenshot 640x400, 1 frame', images: [{ mimeType: 'image/png', data: png }] };
+    const result = await (pi.registered.get('web_search') as Registered).execute('call-2', {});
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Screenshot 640x400, 1 frame' },
+      { type: 'image', data: png, mimeType: 'image/png' },
+    ]);
+  });
+
+  it.each([
+    { text: 'x', images: [] },
+    { text: 'x', images: [{ mimeType: 'image/svg+xml', data: png }] },
+    { text: 'x', images: [{ mimeType: 'image/png', data: '/tmp/shot.png' }] },
+    { text: 'x', images: Array.from({ length: 5 }, () => ({ mimeType: 'image/png', data: png })) },
+    { images: [{ mimeType: 'image/png', data: png }] },
+  ])('refuses a result the bridge may not carry: %j', async (bad) => {
+    await started();
+    executed = bad;
+    await expect((pi.registered.get('web_search') as Registered).execute('call-3', {})).rejects.toThrow(/invalid result/);
+  });
+
+  it('carries pictures end to end, from main through the real loopback bridge to Pi content', async () => {
+    vi.unstubAllGlobals();
+    let output: ToolOutput = 'plain';
+    const bridge = await createPiToolBridge({
+      getTools: () => [tool('browser_screenshot'), tool('web_search')],
+      execute: async () => output,
+    });
+    try {
+      vi.stubEnv('HELLO_PI_BRIDGE_URL', bridge.env.HELLO_PI_BRIDGE_URL);
+      vi.stubEnv('HELLO_PI_BRIDGE_TOKEN', bridge.env.HELLO_PI_BRIDGE_TOKEN);
+      await helloTools(pi.api);
+      await pi.handlers.get('session_start')!({ type: 'session_start' });
+      const run = (name: string, id: string) => (pi.registered.get(name) as Registered).execute(id, {});
+      expect((await run('web_search', 'e2e-1')).content).toEqual([{ type: 'text', text: 'plain' }]);
+      output = { text: 'Screenshot 2x2, 2 frames', images: [
+        { mimeType: 'image/png', data: png }, { mimeType: 'image/jpeg', data: png },
+      ] };
+      expect((await run('browser_screenshot', 'e2e-2')).content).toEqual([
+        { type: 'text', text: 'Screenshot 2x2, 2 frames' },
+        { type: 'image', data: png, mimeType: 'image/png' },
+        { type: 'image', data: png, mimeType: 'image/jpeg' },
+      ]);
+      // Main refuses to send what it may not carry, before it reaches the child.
+      output = { text: 'x', images: [{ mimeType: 'image/png', data: 'a'.repeat(2 * 1024 * 1024 + 4) }] };
+      await expect(run('browser_screenshot', 'e2e-3')).rejects.toThrow(/invalid result/);
+    } finally {
+      await bridge.close();
+    }
   });
 });

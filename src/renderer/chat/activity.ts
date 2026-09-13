@@ -150,6 +150,16 @@ const NAMES: Record<string, Naming> = {
   browser_click: named('Click on page', 'Clicked on page', count => `Clicked ${count} times`),
   browser_type: named('Type text', 'Typed text', count => `Typed ${count} times`),
   browser_scroll: named('Scroll page', 'Scrolled page', count => `Scrolled ${count} times`),
+  browser_pointer: {
+    one: part => {
+      const action = field(part, 'action');
+      if (action === 'drag') return past(part) ? 'Dragged on page' : 'Drag on page';
+      if (action === 'hover') return past(part) ? 'Pointed at page' : 'Point at page';
+      return past(part) ? 'Clicked on page' : 'Click on page';
+    },
+    many: count => `Used the pointer ${count} times`,
+  },
+  browser_screenshot: named('Look at page', 'Looked at page', count => `Looked at page ${count} times`),
   skill_load: {
     one: part => { const name = field(part, 'name'); return name ? `Read ${name} skill` : 'Read skill'; },
     many: count => `Read ${count} skills`,

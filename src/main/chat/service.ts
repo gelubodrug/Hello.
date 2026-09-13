@@ -17,7 +17,8 @@ import { PiEventMapper } from './pi-events';
 import { createPiToolBridge, type PiToolBridge } from './pi-tool-bridge';
 import { piConversationDir, preparePiLaunch } from './pi-session';
 import { helloSystemPrompt } from './pi-instructions';
-import { browserOperation, executeTool, toolDefinitions, type BrowserHooks, type ExtensionTools } from './tools';
+import { browserOperation, executeToolOutput, toolDefinitions, type BrowserHooks, type ExtensionTools } from './tools';
+import { toolOutputText, type ToolOutput } from './tool-output';
 import { ResourceLibrary } from '../extensions/library';
 import { McpManager, type McpToolHandle } from '../extensions/mcp';
 import { WebResearch } from './web-tools';
@@ -49,7 +50,7 @@ interface Run {
   isRetry: boolean;
   attachments?: AttachmentContext;
   web: WebResearch;
-  toolCalls: Map<string, { signature: string; result: Promise<string> }>;
+  toolCalls: Map<string, { signature: string; result: Promise<ToolOutput> }>;
   /** Queued row id → the exact words Pi acknowledged holding for this run. */
   steers: Map<string, string>;
   /** Steer hand-offs, one at a time, so a take-back never races a push. */
@@ -1034,7 +1035,7 @@ export class ChatService {
     return live.join('\n');
   }
 
-  private async executePiTool(conversationId: string, name: string, args: Record<string, unknown>, bridgeSignal: AbortSignal, toolCallId: string): Promise<string> {
+  private async executePiTool(conversationId: string, name: string, args: Record<string, unknown>, bridgeSignal: AbortSignal, toolCallId: string): Promise<ToolOutput> {
     const run = this.runs.get(conversationId);
     if (!run || run.finished) throw new Error('No active Hello request owns this tool call.');
     const signal = AbortSignal.any([run.controller.signal, bridgeSignal]);
@@ -1056,14 +1057,15 @@ export class ChatService {
       this.publish(run, true);
       const started = Date.now();
       try {
-        const output = await executeTool(name, args, {
+        const output = await executeToolOutput(name, args, {
           store: this.store, conversationId, signal, browser: this.browser, web: run.web,
           approve: () => this.approvalFor(name, run, part!, signal),
           skills: { read: (id, skill, file) => this.library.readSkillFile(
             this.sessions.get(id)?.resources.skillDirectories ?? [], skill, file) },
           mcp: { call: (tool, input, abort) => this.callMcpTool(conversationId, tool, input, abort) },
         });
-        part.output = output;
+        // The transcript keeps the words; pictures go to the model only.
+        part.output = toolOutputText(output);
         part.status = 'complete';
         return output;
       } catch (error) {

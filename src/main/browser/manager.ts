@@ -15,6 +15,18 @@ import {
   isAgentControl,
   safeBounds,
 } from "./policy";
+import {
+  AGENT_INPUT_WORLD_ID,
+  VIEWPORT_SCRIPT,
+  checkPointerInViewport,
+  checkRegionInViewport,
+  encodeFrame,
+  pause,
+  pointerEvents,
+  type PointerAction,
+  type Screenshot,
+  type ScreenshotRequest,
+} from "./agent-input";
 
 interface PendingOperation {
   cancel(error: Error): void;
@@ -847,6 +859,79 @@ export class BrowserManager {
     if (typeof result !== "string")
       throw new Error("The page did not return an action result.");
     return result.slice(0, 1000);
+  }
+  /**
+   * The page's viewport in CSS pixels, read in a world of its own: a page
+   * script cannot redefine what it reports there.
+   */
+  private async viewport(record: RecordTab, contents: WebContents, signal?: AbortSignal): Promise<Screenshot["viewport"]> {
+    const size = await this.operation(record,
+      () => contents.executeJavaScriptInIsolatedWorld(AGENT_INPUT_WORLD_ID, [{ code: VIEWPORT_SCRIPT }]),
+      { signal });
+    const { w, h } = (size ?? {}) as { w?: unknown; h?: unknown };
+    if (typeof w !== "number" || typeof h !== "number" || !(w > 0) || !(h > 0))
+      throw new Error("The page did not report its viewport size.");
+    return { width: Math.floor(w), height: Math.floor(h) };
+  }
+  /** The attached, loaded page an agent tool may act on, checked like agentAction. */
+  private async agentPage(record: RecordTab, conversationId: string, mutation: boolean, signal?: AbortSignal): Promise<WebContents> {
+    checkAgentAccess(record.tab, conversationId, mutation);
+    const contents = await this.whenAttached(record, signal);
+    if (contents.isLoading())
+      throw new Error("Wait for this page to finish loading before using it.");
+    checkAgentAccess(this.record(record.tab.id).tab, conversationId, mutation);
+    return contents;
+  }
+  /**
+   * Real mouse input, sent by main to the tab's guest. Coordinates are page
+   * CSS pixels and must lie inside the viewport. Every event is re-checked
+   * against the grant and the page first: revoked, stopped, navigated or
+   * unmounted, and nothing more reaches the page.
+   */
+  async agentPointer(conversationId: string, id: string, action: PointerAction, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const record = this.record(id);
+    const contents = await this.agentPage(record, conversationId, true, signal);
+    const navigation = record.navigation;
+    checkPointerInViewport(action, await this.viewport(record, contents, signal));
+    const events = pointerEvents(action, contents.getZoomFactor());
+    let stopped = false;
+    await this.operation(record, async () => {
+      for (const { event, delayMs } of events) {
+        if (delayMs) await pause(delayMs);
+        if (stopped) return;
+        checkAgentAccess(this.record(id).tab, conversationId, true);
+        if (record.contents !== contents || contents.isDestroyed() || record.navigation !== navigation)
+          throw new Error("The page changed during this pointer action.");
+        contents.sendInputEvent(event);
+      }
+    }, { signal, mutation: true, onCancel: () => { stopped = true; } });
+  }
+  /**
+   * Pictures of what the tab is painting, taken by main. Reading pixels is
+   * reading the page, so it needs Read like any read, checked again after
+   * every picture: Off chosen while one was taken means no picture.
+   */
+  async agentScreenshot(conversationId: string, id: string, request: ScreenshotRequest, signal?: AbortSignal): Promise<Screenshot> {
+    signal?.throwIfAborted();
+    const record = this.record(id);
+    const contents = await this.agentPage(record, conversationId, false, signal);
+    const navigation = record.navigation;
+    const viewport = await this.viewport(record, contents, signal);
+    if (request.region) checkRegionInViewport(request.region, viewport);
+    const frames: Screenshot["frames"] = [];
+    for (let index = 0; index < request.frames; index++) {
+      if (index) await pause(request.intervalMs, signal);
+      checkAgentAccess(this.record(id).tab, conversationId);
+      if (record.contents !== contents || contents.isDestroyed() || record.navigation !== navigation)
+        throw new Error("The page changed during this screenshot.");
+      const image = await this.operation(record, () => contents.capturePage(), { signal });
+      checkAgentAccess(this.record(id).tab, conversationId);
+      if (image.isEmpty())
+        throw new Error("The page returned no picture. A tab whose pane is not on screen may have nothing painted; say so rather than retrying.");
+      frames.push(encodeFrame(image, viewport, request.region));
+    }
+    return { frames, viewport };
   }
   close(id: string, notify = false): void {
     const record = this.records.get(id);

@@ -4,6 +4,7 @@
 import type { ExtensionAPI, ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { PiBridgeContextResponse, PiBridgeExecuteRequest } from './pi-tool-bridge';
 import type { ToolDefinition } from './tools';
+import { readToolOutput } from './tool-output';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const CONTEXT_TYPE = 'hello-live-browser-context';
@@ -120,11 +121,18 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
         executionMode: 'sequential',
         async execute(toolCallId, params, signal) {
           if (!object(params)) throw new Error('Hello tool arguments must be an object.');
-          const result = await request<{ result: string }>('/execute', {
+          const result = await request<{ result: unknown }>('/execute', {
             name: tool.name, args: params, toolCallId,
           }, signal);
-          if (typeof result.result !== 'string') throw new Error('Hello tool bridge returned an invalid result.');
-          return { content: [{ type: 'text', text: result.result }], details: {} };
+          const output = readToolOutput(result.result);
+          if (typeof output === 'string') return { content: [{ type: 'text', text: output }], details: {} };
+          return {
+            content: [
+              { type: 'text', text: output.text },
+              ...output.images.map(image => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType })),
+            ],
+            details: {},
+          };
         },
       });
       registered.set(tool.name, signature);

@@ -12,6 +12,18 @@ const native = vi.hoisted(() => ({
   partition: null as unknown,
   partitions: new Map<string, unknown>(),
   nextLoad: undefined as Promise<void> | undefined,
+  /** Enough of a NativeImage for a capture: its size, a crop, a resize, bytes. */
+  picture(width: number, height: number): unknown {
+    return {
+      width, height,
+      isEmpty: () => width === 0,
+      getSize: () => ({ width, height }),
+      crop: (box: { width: number; height: number }) => native.picture(box.width, box.height),
+      resize: ({ width: w }: { width: number }) => native.picture(w, Math.round(height * w / width)),
+      toPNG: () => Buffer.from(`png ${width}x${height}`),
+      toJPEG: () => Buffer.from(`jpeg ${width}x${height}`),
+    };
+  },
 }));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
@@ -42,6 +54,13 @@ vi.mock("electron", async () => {
       isDestroyed: () => this.destroyed,
     };
     executeJavaScript = vi.fn();
+    zoom = 1;
+    viewport: unknown = { w: 800, h: 600 };
+    /** Real input main sent this page, in order. */
+    sendInputEvent = vi.fn();
+    getZoomFactor = () => this.zoom;
+    executeJavaScriptInIsolatedWorld = vi.fn(async () => this.viewport);
+    capturePage = vi.fn(async () => native.picture(1600, 1200));
     setWindowOpenHandler = vi.fn();
     isDestroyed = () => this.destroyed;
     isLoading = () => this.loading;
@@ -113,6 +132,11 @@ type FakeGuest = EventEmitter & {
   reload: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   setWindowOpenHandler: ReturnType<typeof vi.fn>;
+  zoom: number;
+  viewport: unknown;
+  sendInputEvent: ReturnType<typeof vi.fn>;
+  executeJavaScriptInIsolatedWorld: ReturnType<typeof vi.fn>;
+  capturePage: ReturnType<typeof vi.fn>;
 };
 type FakePartition = EventEmitter & {
   setPermissionCheckHandler: ReturnType<typeof vi.fn>;
@@ -1033,5 +1057,112 @@ describe("native browser lifecycle and grants", () => {
     ).toBe(0);
     expect(f.window.webContents.listenerCount("did-start-loading")).toBe(0);
     expect(() => f.manager.create("chat")).toThrow(/closed/);
+  });
+});
+
+describe("agent pointer and screenshot", () => {
+  const drag = { action: "drag", from: { x: 10, y: 10 }, to: { x: 110, y: 60 }, steps: 5, durationMs: 0 } as const;
+  const shot = { frames: 1, intervalMs: 100 };
+
+  it("gates both on the tab's own grant and chat: Off neither, Read a screenshot, Full both", async () => {
+    const f = fixture();
+    const tab = f.open();
+    const guest = guestAt();
+    await expect(f.manager.agentScreenshot("chat", tab.id, shot)).rejects.toThrow(/Off/);
+    await expect(f.manager.agentPointer("chat", tab.id, drag)).rejects.toThrow(/Off/);
+    f.manager.control(tab.id, "read");
+    await expect(f.manager.agentPointer("chat", tab.id, drag)).rejects.toThrow(/read only/);
+    expect(guest.sendInputEvent).not.toHaveBeenCalled();
+    await expect(f.manager.agentScreenshot("chat", tab.id, shot)).resolves.toMatchObject({
+      viewport: { width: 800, height: 600 }, frames: [{ mimeType: "image/png", width: 1280, height: 960 }],
+    });
+    f.manager.control(tab.id, "full");
+    await expect(f.manager.agentScreenshot("other", tab.id, shot)).rejects.toThrow(/different chat/);
+    await expect(f.manager.agentPointer("other", tab.id, drag)).rejects.toThrow(/different chat/);
+    expect(guest.sendInputEvent).not.toHaveBeenCalled();
+    expect(guest.capturePage).toHaveBeenCalledOnce();
+    await f.manager.agentPointer("chat", tab.id, drag);
+    expect(guest.sendInputEvent).toHaveBeenCalledTimes(8);
+    // The viewport is read in a world of its own, never the page's.
+    expect(guest.executeJavaScriptInIsolatedWorld.mock.calls[0][0]).not.toBe(0);
+    expect(guest.mainFrame.executeJavaScript).not.toHaveBeenCalled();
+    // Nothing about the tab changed: not shown, hidden, reloaded or navigated.
+    expect(guest.loadURL).toHaveBeenCalledOnce();
+    expect(guest.reload).not.toHaveBeenCalled();
+    expect(guest.close).not.toHaveBeenCalled();
+  });
+
+  it("sends a drag as button down, every move with the button held, then button up, in page zoom", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    guest.zoom = 2;
+    guest.viewport = { w: 400, h: 300 };
+    await f.manager.agentPointer("chat", tab.id, drag);
+    const sent = guest.sendInputEvent.mock.calls.map(([event]) => event as { type: string; x: number; y: number; modifiers?: string[] });
+    expect(sent.map(event => event.type)).toEqual(
+      ["mouseMove", "mouseDown", "mouseMove", "mouseMove", "mouseMove", "mouseMove", "mouseMove", "mouseUp"]);
+    expect(sent[1]).toMatchObject({ x: 20, y: 20, button: "left" });
+    expect(sent.slice(2, 7).every(event => event.modifiers?.[0] === "leftbuttondown")).toBe(true);
+    expect(sent[7]).toMatchObject({ type: "mouseUp", x: 220, y: 120 });
+  });
+
+  it("refuses a point outside the viewport and sends nothing", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    await expect(f.manager.agentPointer("chat", tab.id, { action: "click", x: 800, y: 5, button: "left", clickCount: 1 }))
+      .rejects.toThrow(/outside this tab's viewport, which is 800x600/);
+    await expect(f.manager.agentScreenshot("chat", tab.id, { ...shot, region: { x: 0, y: 590, width: 10, height: 20 } }))
+      .rejects.toThrow(/does not fit/);
+    guestAt().viewport = null;
+    await expect(f.manager.agentPointer("chat", tab.id, { action: "hover", x: 1, y: 1 })).rejects.toThrow(/viewport size/);
+    expect(guestAt().sendInputEvent).not.toHaveBeenCalled();
+    expect(guestAt().capturePage).not.toHaveBeenCalled();
+  });
+
+  it("stops a drag the moment control is lowered, without sending the rest", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    const pending = f.manager.agentPointer("chat", tab.id, { ...drag, steps: 10, durationMs: 1000 });
+    await vi.waitFor(() => expect(guest.sendInputEvent).toHaveBeenCalledTimes(2));
+    f.manager.control(tab.id, "read");
+    await expect(pending).rejects.toThrow(/revoked/);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(guest.sendInputEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it("takes each frame apart, crops a region and stops when Off is chosen between frames", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    const result = await f.manager.agentScreenshot("chat", tab.id,
+      { frames: 3, intervalMs: 100, region: { x: 100, y: 100, width: 200, height: 100 } });
+    expect(guest.capturePage).toHaveBeenCalledTimes(3);
+    expect(result.frames.map(frame => [frame.width, frame.height])).toEqual([[400, 200], [400, 200], [400, 200]]);
+    expect(Buffer.from(result.frames[0].data, "base64").toString()).toBe("png 400x200");
+    const next = f.manager.agentScreenshot("chat", tab.id, { frames: 2, intervalMs: 200 });
+    await vi.waitFor(() => expect(guest.capturePage).toHaveBeenCalledTimes(4));
+    f.manager.control(tab.id, "off");
+    await expect(next).rejects.toThrow(/Off/);
+    expect(guest.capturePage).toHaveBeenCalledTimes(4);
+  });
+
+  it("refuses a loading page and an empty picture with a clear error", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    guest.loading = true;
+    await expect(f.manager.agentScreenshot("chat", tab.id, shot)).rejects.toThrow(/finish loading/);
+    await expect(f.manager.agentPointer("chat", tab.id, drag)).rejects.toThrow(/finish loading/);
+    guest.loading = false;
+    guest.capturePage.mockResolvedValueOnce(native.picture(0, 0));
+    await expect(f.manager.agentScreenshot("chat", tab.id, shot)).rejects.toThrow(/no picture/);
+    expect(guest.sendInputEvent).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ToolDefinition } from './tools';
+import { readToolOutput, type ToolOutput } from './tool-output';
 
 // One bridge belongs to one headless Pi process and one Hello conversation.
 // Keep execution in Hello's main process: Pi never receives a filesystem or
@@ -17,7 +18,7 @@ export interface PiToolBridgeOptions {
     args: Record<string, unknown>,
     signal: AbortSignal,
     toolCallId: string,
-  ): Promise<string>;
+  ): Promise<ToolOutput>;
   /** Current browser/tab guidance, computed afresh before every model request. */
   getContext?(): string | Promise<string>;
 }
@@ -167,7 +168,7 @@ export async function createPiToolBridge(options: PiToolBridgeOptions): Promise<
       if (calls.has(toolCallId)) throw new BridgeError(409, 'Hello tool call is already running.');
       calls.add(toolCallId);
       try {
-        const result = await withAbort(signal, options.execute(name, args, signal, toolCallId));
+        const result = readToolOutput(await withAbort(signal, options.execute(name, args, signal, toolCallId)));
         signal.throwIfAborted();
         send(response, 200, { result });
       } finally {

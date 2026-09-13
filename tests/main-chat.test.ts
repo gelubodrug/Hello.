@@ -95,6 +95,7 @@ vi.mock('node:child_process', () => ({ spawn: harness.forbiddenSpawn }));
 import { createDataStore, type DataStore } from '../src/main/data/store';
 import { ChatService, completionURL, modelsURL, wireHistory, type ChatServiceOptions } from '../src/main/chat/service';
 import { piConversationDir } from '../src/main/chat/pi-session';
+import { toolOutputText } from '../src/main/chat/tool-output';
 
 let directory: string;
 let store: DataStore;
@@ -177,7 +178,8 @@ function tool(
 ): Promise<string> {
   current.rpc.emit({ type: 'tool_execution_start', toolCallId: id, toolName: name, args });
   return current.bridge.execute(name, args, new AbortController().signal, id).then(
-    output => {
+    result => {
+      const output = toolOutputText(result);
       current.rpc.emit({ type: 'tool_execution_end', toolCallId: id, toolName: name,
         result: { content: [{ type: 'text', text: output }] }, isError: false });
       return output;
@@ -385,6 +387,25 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
       expect.objectContaining({ id: 'open-preview', status: 'complete' }),
       expect.objectContaining({ id: 'no-implicit-read', status: 'error' }),
     ]);
+  });
+
+  it('hands a screenshot to the model through the bridge and stores only its summary', async () => {
+    const data = Buffer.from('pixels').toString('base64');
+    const hooks = {
+      getTabs: () => [tab('canvas', 'read')],
+      read: vi.fn(), navigate: vi.fn(), click: vi.fn(), type: vi.fn(), scroll: vi.fn(),
+      screenshot: vi.fn(async () => ({ frames: [{ mimeType: 'image/png' as const, data, width: 800, height: 600 }],
+        viewport: { width: 800, height: 600 } })),
+    };
+    const running = create({ browser: hooks }).send(conversationId, 'Check the canvas');
+    const current = await runtime();
+    const output = await current.bridge.execute('browser_screenshot', { tabId: 'canvas' }, new AbortController().signal, 'shot');
+    expect(output).toMatchObject({ text: expect.stringMatching(/^Screenshot 800x600, 1 frame/), images: [{ mimeType: 'image/png', data }] });
+    settle(current.rpc, 'The canvas draws.');
+    await running;
+    const part = assistant().parts?.find(item => item.type === 'tool') as Extract<MessagePart, { type: 'tool' }>;
+    expect(part).toMatchObject({ id: 'shot', status: 'complete', output: expect.stringMatching(/^Screenshot 800x600/) });
+    expect(JSON.stringify(store.listMessages(conversationId))).not.toContain(data);
   });
 
   it('cancels a browser read that never resolves instead of holding the session open', async () => {
