@@ -37,6 +37,8 @@ export function DesignComposer({ tab, picked, slot, onQuote, onRelease, onExit }
   const [error, setError] = useState('');
   const [shotState, setShotState] = useState<'pending' | 'ready' | 'none'>('pending');
   const shot = useRef<Promise<string | null>>(Promise.resolve(null));
+  /** Copy lets its status show before releasing; a new pick or closing cancels that. */
+  const releaseTimer = useRef<number | undefined>(undefined);
   const [, setLayout] = useState(0);
 
   // One picture per pick, taken before anyone types a word.
@@ -50,7 +52,11 @@ export function DesignComposer({ tab, picked, slot, onQuote, onRelease, onExit }
     void taking.then(path => { if (alive) setShotState(path ? 'ready' : 'none'); });
     setText(''); setStatus(''); setError('');
     field.current?.focus();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      window.clearTimeout(releaseTimer.current);
+      releaseTimer.current = undefined;
+    };
     // pick.at names the pick; its rect changing as the page scrolls is not a new one.
   }, [tab.id, pick.armId, pick.at]);
 
@@ -107,7 +113,8 @@ export function DesignComposer({ tab, picked, slot, onQuote, onRelease, onExit }
       const path = await shot.current;
       await api.browser.mode.copy(note(), path ?? undefined);
       setStatus(path ? 'Copied with picture' : 'Copied');
-      window.setTimeout(onRelease, 700);
+      window.clearTimeout(releaseTimer.current);
+      releaseTimer.current = window.setTimeout(onRelease, 700);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'The note could not be copied.');
     } finally {

@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PAGE_MODE_PROBE, probeCall } from '../src/main/browser/page-mode-probe';
 import { composeAnnotations, parseProbeAnnotations, parseProbeBatch } from '../src/shared/page-mode-format';
 import type { BrowserTab, PageModeEvent } from '../src/shared/types';
+import { dispatchTrusted } from './trusted-event';
 
 vi.mock('electron', () => ({ clipboard: { writeText: vi.fn(), write: vi.fn() }, ClipboardItem: class {} }));
 const { PageModeController } = await import('../src/main/browser/page-mode');
@@ -35,7 +36,7 @@ beforeAll(() => {
 });
 const markerRoot = () => roots.find(root => (root.host as HTMLElement).hasAttribute('data-hello-annotations'))!;
 const click = (target: EventTarget, x: number, y: number) =>
-  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
+  dispatchTrusted(target, new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
 
 describe('annotate probe', () => {
   afterEach(() => {
@@ -77,10 +78,16 @@ describe('annotate probe', () => {
     expect(input().placeholder).toBe('#3 what is wrong or wanted here');
 
     // The component main read from the page world becomes the marker's `at`.
-    expect(run(probeCall('call', ['annotate', 'setAt', [1, 'Card › Button', 'src/Button.tsx:4']]))).toBe(true);
-    expect(run(probeCall('call', ['design', 'setAt', [1, 'X', null]]))).toBeNull();
+    expect(run(probeCall('call', ['annotate', 'setAt', ['ann-1', 1, 'Card › Button', 'src/Button.tsx:4']]))).toBe(true);
+    expect(run(probeCall('call', ['design', 'setAt', ['ann-1', 1, 'X', null]]))).toBeNull();
 
+    // A pin is in the picture only when it has a box on screen.
+    const pinBox = { left: 40, top: 176, right: 64, bottom: 200, width: 24, height: 24 } as DOMRect;
+    const measure = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return this.classList.contains('pin') ? pinBox : { left: 40, top: 200, right: 40, bottom: 200, width: 0, height: 0 } as DOMRect;
+    });
     const shot = await bridge().beforeShot();
+    measure.mockRestore();
     const pending = root.querySelector<HTMLElement>('.mark:last-child')!;
     expect(pending.style.opacity).toBe('0');
     expect(shot.extra).toEqual({ marks: [{ n: 1, color: 'yellow', text: 'Too dim', at: 'Card › Button <button> (src/Button.tsx:4)', inView: true }] });
@@ -109,12 +116,17 @@ describe('annotate probe', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await tick();
     click(document.getElementById('zone')!, 50, 50);
-    root.querySelector<HTMLInputElement>('input')!.value = 'typed, never committed';
+    root.querySelector<HTMLInputElement>('input')!.value = 'typed, then Send';
 
-    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 30, top: -400, right: 30, bottom: -400, width: 0, height: 0 } as DOMRect);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 30, top: -400, right: 54, bottom: -376, width: 24, height: 24 } as DOMRect);
     const shot = await bridge().beforeShot();
     bridge().afterShot();
-    expect(shot.extra).toEqual({ marks: [expect.objectContaining({ n: 1, text: 'Move this', inView: false })] });
+    // Send/Copy commits a note that has words: it goes with the picture.
+    expect(shot.extra).toEqual({ marks: [
+      expect.objectContaining({ n: 1, text: 'Move this', inView: false }),
+      expect.objectContaining({ n: 2, text: 'typed, then Send', inView: false }),
+    ] });
+    expect(root.querySelector('input')).toBeNull();
 
     // Escape reaches main, which disarms: the note being typed goes, and so does every marker.
     expect(bridge().disarm('ann-2')).toBe(true);
@@ -211,7 +223,7 @@ describe('annotate in the controller', () => {
     for (let i = 0; i < 5; i++) await tick();
     expect(events).toContainEqual({ type: 'marks', tabId: 'tab-1', armId, count: 1 });
     expect(contents.mainFrame.executeJavaScript).toHaveBeenCalledTimes(1);
-    expect(contents.calls.some(code => code.includes('.call("annotate","setAt",[1,"Card › Button","src/Button.tsx:3"])'))).toBe(true);
+    expect(contents.calls.some(code => code.includes(`.call("annotate","setAt",[${JSON.stringify(armId)},1,"Card › Button","src/Button.tsx:3"])`))).toBe(true);
 
     contents.extra = { marks: [{ n: 1, color: 'yellow', text: 'Too dim', inView: true }] };
     const captured = await controller.capture('tab-1');

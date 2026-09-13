@@ -17,7 +17,7 @@ const KINDS: Array<{ kind: PageModeKind; label: string; Icon: typeof Brush; idle
     on: 'Design on — click an element to describe a change. Esc or click here to stop' },
   { kind: 'annotate', label: 'Annotate', Icon: Brush,
     idle: 'Annotate — mark a zone of the page',
-    on: 'Annotate on — click here to stop' },
+    on: 'Annotate on — click the page to drop a marker. Esc or click here to stop' },
 ];
 
 /**

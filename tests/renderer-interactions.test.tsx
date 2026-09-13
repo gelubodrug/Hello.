@@ -181,7 +181,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.copy.mockResolvedValue(undefined);
   window.getSelection()?.removeAllRanges();
-  localStorage.clear();
+  // Node ≥ 25 exposes its own (unconfigured, undefined) localStorage over jsdom's; give the composer a real one.
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, String(value)); },
+    removeItem: (key: string) => { store.delete(key); }, clear: () => store.clear(), key: (i: number) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {

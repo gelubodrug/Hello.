@@ -37,12 +37,10 @@ describe('browser invariant: an armed page mode and the agent', () => {
     expect(clicks).toBe(1);
   });
 
-  // FINDING (RISK): the probe swallows every click on window in capture phase,
-  // trusted or not. An agent with Full runs `el.click()` (manager.agentAction)
-  // and is told "Clicked element." while the page never sees it, and the
-  // click is reported to the human as their own pick. Flips to passing once
-  // the probe ignores `!event.isTrusted` (or agentAction refuses while armed).
-  it.fails("lets a Full-control agent's scripted el.click() reach the page while Design is armed", async () => {
+  // Fixed: the probe only takes the person's own (trusted) input. An agent with
+  // Full runs `el.click()` (manager.agentAction): the page gets that click, and
+  // it is never reported to the human as their own pick.
+  it("lets a Full-control agent's scripted el.click() reach the page while Design is armed", async () => {
     document.body.innerHTML = '<button id="save">Save</button>';
     const button = document.querySelector('button')!;
     let clicks = 0;

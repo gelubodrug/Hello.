@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 // Annotate, the half that lives in the page: criteria A1, A5, A7, A8 against the
-// real PAGE_MODE_PROBE. Tests titled [RISC] pin current behaviour that is worth a
-// decision; they are not claims that the behaviour is wanted.
+// real PAGE_MODE_PROBE. The [RISC] findings of the first test round are fixed;
+// their tests now pin the fixed behaviour.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PAGE_MODE_PROBE, probeCall } from '../src/main/browser/page-mode-probe';
 import { parseProbeAnnotations, parseProbeBatch } from '../src/shared/page-mode-format';
+import { dispatchTrusted } from './trusted-event';
 
 interface Bridge {
   arm(kind: string, armId: string): boolean;
@@ -28,8 +29,9 @@ beforeAll(() => {
   run(PAGE_MODE_PROBE);
 });
 const markerRoot = () => roots.find(root => (root.host as HTMLElement).hasAttribute('data-hello-annotations'))!;
+/** The person's click (trusted); the probe ignores anything a script dispatches. */
 const click = (target: EventTarget, x: number, y: number) =>
-  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
+  dispatchTrusted(target, new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
 const pendingInput = () => markerRoot().querySelector<HTMLInputElement>('.mark input');
 const key = (target: EventTarget, init: KeyboardEventInit) =>
   target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, composed: true, ...init }));
@@ -75,7 +77,7 @@ describe('annotate probe — criteria', () => {
     expect(bridge().arm('design', 'sw-2')).toBe(true);
     expect(document.querySelector('[data-hello-annotations]')).toBeNull();
     expect(document.documentElement.style.getPropertyValue('cursor')).toBe('');
-    expect(bridge().call('annotate', 'setAt', [1, 'X', null])).toBeNull();
+    expect(bridge().call('annotate', 'setAt', ['sw-1', 1, 'X', null])).toBeNull();
   });
 
   it('A8: a cursor the page set itself is put back on exit', () => {
@@ -221,8 +223,10 @@ describe('annotate probe — criteria', () => {
     click(p, 60, 240);
     const nodes = [...markerRoot().querySelectorAll<HTMLElement>('.mark')];
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-      const top = this === nodes[1] ? 5000 : 10;
-      return { left: 10, top, right: 10, bottom: top, width: 0, height: 0 } as DOMRect;
+      const top = this === nodes[1] || this.parentElement?.parentElement === nodes[1] ? 5000 : 10;
+      // The marker point is 0×0; its pin has a box.
+      const size = this.classList.contains('pin') ? 24 : 0;
+      return { left: 10, top, right: 10 + size, bottom: top + size, width: size, height: size } as DOMRect;
     });
     const shot = await bridge().beforeShot();
     expect(nodes[0].style.opacity).toBe('');
@@ -233,15 +237,46 @@ describe('annotate probe — criteria', () => {
     expect(nodes[2].style.opacity).toBe('');
   });
 
+  it('A6: Send/Copy with a note typed but not committed commits it into the picture and the list; an empty one is dropped as before', async () => {
+    document.body.innerHTML = '<p id="p">text</p>';
+    const p = document.getElementById('p')!;
+    bridge().arm('annotate', 'a6-typed');
+    note(p, 20, 200, 'kept');
+    click(p, 40, 220);
+    pendingInput()!.value = '  typed   but not entered ';
+    await drain('a6-typed');
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 10, top: 10, right: 34, bottom: 34, width: 24, height: 24 } as DOMRect);
+    const shot = await bridge().beforeShot();
+    bridge().afterShot();
+    expect(pendingInput()).toBeNull();
+    const nodes = [...markerRoot().querySelectorAll<HTMLElement>('.mark')];
+    expect(nodes).toHaveLength(2);
+    expect(nodes[1].style.opacity).toBe('');
+    expect(nodes[1].querySelector('.label')!.textContent).toBe('typed but not entered');
+    expect((shot.extra as { marks: Array<{ n: number; text: string; inView: boolean }> }).marks.map(m => [m.n, m.text, m.inView]))
+      .toEqual([[1, 'kept', true], [2, 'typed but not entered', true]]);
+    expect(await drain('a6-typed')).toEqual([expect.objectContaining({ type: 'marks', count: 2, mark: expect.objectContaining({ n: 2 }) })]);
+
+    click(p, 60, 240);
+    pendingInput()!.value = '   ';
+    const empty = await bridge().beforeShot();
+    bridge().afterShot();
+    expect((empty.extra as { marks: unknown[] }).marks).toHaveLength(2);
+    expect(markerRoot().querySelectorAll('.mark')).toHaveLength(3);
+    expect(await drain('a6-typed')).toEqual([]);
+  });
+
   it('setAt: refuses non-strings, and a marker already deleted', async () => {
     document.body.innerHTML = '<p id="p">text</p>';
     const p = document.getElementById('p')!;
     bridge().arm('annotate', 'setat');
     note(p, 20, 200, 'one');
-    const call = (args: unknown[]) => run(probeCall('call', ['annotate', 'setAt', args]));
+    const call = (args: unknown[]) => run(probeCall('call', ['annotate', 'setAt', ['setat', ...args]]));
     expect(call([1, '', null])).toBe(false);
     expect(call([1, 42, null])).toBe(false);
     expect(call([99, 'Card', null])).toBe(false);
+    expect(run(probeCall('call', ['annotate', 'setAt', ['another-arming', 1, 'Card', null]]))).toBe(false);
+    expect(run(probeCall('call', ['annotate', 'setAt', [1, 'Card', null]]))).toBe(false);
     const pin = markerRoot().querySelector<HTMLElement>('.mark .pin')!;
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
       return (this === pin ? { left: 0, top: 0, right: 24, bottom: 24, width: 24, height: 24 } : { left: -9, top: -9, right: -9, bottom: -9, width: 0, height: 0 }) as DOMRect;
@@ -254,7 +289,7 @@ describe('annotate probe — criteria', () => {
     document.body.innerHTML = '<button id="b">Go</button>';
     bridge().arm('annotate', 'setat-file');
     note(document.getElementById('b')!, 20, 200, 'one');
-    expect(run(probeCall('call', ['annotate', 'setAt', [1, 'Card', { evil: true }]]))).toBe(true);
+    expect(run(probeCall('call', ['annotate', 'setAt', ['setat-file', 1, 'Card', { evil: true }]]))).toBe(true);
     expect((await shotMarks())[0].at).toBe('Card <button>');
   });
 
@@ -280,7 +315,7 @@ describe('annotate probe — criteria', () => {
     expect((await shotMarks())[0].n).toBe(1);
   });
 
-  it('[RISC] setAt carries no armId: after a re-arm, a late setAt for #1 lands on the NEW #1 (main alone prevents it)', async () => {
+  it('setAt names its arming: after a re-arm, a late setAt for the old #1 does not land on the new #1', async () => {
     document.body.innerHTML = '<p id="p">text</p>';
     const p = document.getElementById('p')!;
     bridge().arm('annotate', 'r-old');
@@ -288,54 +323,82 @@ describe('annotate probe — criteria', () => {
     bridge().disarm('r-old');
     bridge().arm('annotate', 'r-new');
     note(p, 20, 200, 'new note');
-    expect(run(probeCall('call', ['annotate', 'setAt', [1, 'StaleFromOldArming', null]]))).toBe(true);
-    expect((await shotMarks())[0].at).toBe('StaleFromOldArming <p>');
+    expect(run(probeCall('call', ['annotate', 'setAt', ['r-old', 1, 'StaleFromOldArming', null]]))).toBe(false);
+    expect((await shotMarks())[0].at).toBe('p#p');
+    expect(run(probeCall('call', ['annotate', 'setAt', ['r-new', 1, 'Fresh', null]]))).toBe(true);
+    expect((await shotMarks())[0].at).toBe('Fresh <p>');
   });
 
-  it('[RISC] untrusted (page-dispatched) clicks drop markers too — the probe never checks isTrusted', () => {
+  it('untrusted (page- or agent-dispatched) clicks drop no marker and reach the page', async () => {
     document.body.innerHTML = '<p id="p">text</p>';
+    const p = document.getElementById('p')!;
+    let pageSawClick = 0;
+    p.addEventListener('click', () => { pageSawClick += 1; });
     bridge().arm('annotate', 'untrusted');
     const event = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 });
     expect(event.isTrusted).toBe(false);
-    document.getElementById('p')!.dispatchEvent(event);
+    p.dispatchEvent(event);
+    p.click();
+    expect(markerRoot().querySelectorAll('.mark')).toHaveLength(0);
+    expect(pageSawClick).toBe(2);
+    expect(event.defaultPrevented).toBe(false);
+    // Nor can a script remove a pin the person dropped.
+    note(p, 20, 200, 'mine');
+    const pin = markerRoot().querySelector<HTMLElement>('.mark .pin')!;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 24, bottom: 24, width: 24, height: 24 } as DOMRect);
+    pin.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: 5, clientY: 5 }));
     expect(markerRoot().querySelectorAll('.mark')).toHaveLength(1);
+    expect(await drain('untrusted')).toEqual([expect.objectContaining({ type: 'marks', count: 1 })]);
   });
 
-  it('[RISC] a page that detaches or hides the marker layer still gets its pins reported inView (not in the picture)', async () => {
+  it('a page that detaches the marker layer, or collapses it to no box, gets its pins reported outside the picture', async () => {
     document.body.innerHTML = '<p id="p">text</p>';
     bridge().arm('annotate', 'detached');
     note(document.getElementById('p')!, 20, 200, 'visible?');
     const host = document.querySelector<HTMLElement>('[data-hello-annotations]')!;
+    // Connected but with no box (display:none by script): 0,0,0,0 — not in the picture.
+    const measure = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } as DOMRect);
+    expect((await shotMarks())[0].inView).toBe(false);
+    // Detached, even if something still measures: not in the picture.
     host.remove(); // page script: document.querySelector('[data-hello-annotations]').remove()
-    // A detached node measures 0,0,0,0 in Chromium too — which passes the inView test.
-    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } as DOMRect);
+    measure.mockReturnValue({ left: 10, top: 10, right: 34, bottom: 34, width: 24, height: 24 } as DOMRect);
     const [mark] = await shotMarks();
     expect(host.isConnected).toBe(false);
-    expect(mark.inView).toBe(true);
+    expect(mark.inView).toBe(false);
   });
 
-  it('[RISC] mousedown inside the open note is preventDefault-ed (inOverlay knows only the Design overlay) — no caret placement or text selection by mouse', () => {
+  it('mousedown inside the open note keeps its default (caret placement, selection) and does not bubble to the page', () => {
     document.body.innerHTML = '<p id="p">text</p>';
     bridge().arm('annotate', 'mousedown');
     click(document.getElementById('p')!, 20, 200);
+    const pageSaw = vi.fn();
+    document.addEventListener('mousedown', pageSaw);
     const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true });
-    pendingInput()!.dispatchEvent(down);
-    expect(down.defaultPrevented).toBe(true);
+    dispatchTrusted(pendingInput()!, down);
+    document.removeEventListener('mousedown', pageSaw);
+    expect(down.defaultPrevented).toBe(false);
+    expect(pageSaw).not.toHaveBeenCalled();
+    // Outside the marker layer a press is still the mode's.
+    const outside = new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true });
+    dispatchTrusted(document.getElementById('p')!, outside);
+    expect(outside.defaultPrevented).toBe(true);
   });
 
-  it('[RISC] keyup/keypress from typing a note reach the page’s own document listeners (site hotkeys)', () => {
+  it('keydown/keyup/keypress from typing a note stop at the marker layer — the page’s own document listeners (site hotkeys) never see them', () => {
     document.body.innerHTML = '<p id="p">text</p>';
     bridge().arm('annotate', 'keys');
     click(document.getElementById('p')!, 20, 200);
     const seen: string[] = [];
     const onKey = (event: Event) => seen.push(event.type);
-    document.addEventListener('keyup', onKey);
-    window.addEventListener('keydown', onKey, true);
+    const types = ['keydown', 'keyup', 'keypress'];
+    for (const type of types) { document.addEventListener(type, onKey); window.addEventListener(type, onKey); }
     const input = pendingInput()!;
     key(input, { key: 'k' });
+    input.dispatchEvent(new KeyboardEvent('keypress', { key: 'k', bubbles: true, composed: true }));
     input.dispatchEvent(new KeyboardEvent('keyup', { key: 'k', bubbles: true, composed: true }));
-    document.removeEventListener('keyup', onKey);
-    window.removeEventListener('keydown', onKey, true);
-    expect(seen).toEqual(['keydown', 'keyup']);
+    for (const type of types) { document.removeEventListener(type, onKey); window.removeEventListener(type, onKey); }
+    // A page listener in the capture phase runs before any of this; no layer can stop that.
+    expect(seen).toEqual([]);
+    expect(pendingInput()).not.toBeNull();
   });
 });

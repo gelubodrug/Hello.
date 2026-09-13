@@ -157,6 +157,16 @@ describe('Design switch and usePageMode', () => {
     expect(mocks.disarm).toHaveBeenCalledWith('tab-1', 'n1');
   });
 
+  it('each armed pill says how to stop it, Esc included', async () => {
+    mocks.arm.mockResolvedValueOnce({ armId: 'd2' }).mockResolvedValueOnce({ armId: 'n2' });
+    const view = mountHook();
+    await act(async () => { await view.hook.toggle('design'); });
+    expect(view.button('design').title).toMatch(/\bEsc\b/);
+    await act(async () => { await view.hook.toggle('annotate'); });
+    expect(view.button('annotate').getAttribute('aria-pressed')).toBe('true');
+    expect(view.button('annotate').title).toBe('Annotate on — click the page to drop a marker. Esc or click here to stop');
+  });
+
   it('shows main\'s refusal as the error and stays off', async () => {
     mocks.arm.mockRejectedValue(new Error('Allow Read on this tab to use Design.'));
     const view = mountHook();
@@ -165,10 +175,9 @@ describe('Design switch and usePageMode', () => {
     expect(view.hook.error).toBe('Allow Read on this tab to use Design.');
   });
 
-  // RISC: the window disarms whenever tab.url changes, including a same-document
-  // move (hash, pushState/replaceState) that main deliberately keeps the mode
-  // through. On an SPA dev server that rewrites its URL, Design switches off.
-  it.fails('RISC: a same-document URL change (hash) does not end Design from the window', async () => {
+  // Decision: main alone ends a mode on navigation. A same-document move (hash,
+  // pushState/replaceState) keeps it there, so the window does not end it either.
+  it('a same-document URL change (hash) does not end Design from the window', async () => {
     mocks.arm.mockResolvedValue({ armId: 'arm-1' });
     const view = mountHook();
     await act(async () => { await view.hook.toggle('design'); });
@@ -177,10 +186,9 @@ describe('Design switch and usePageMode', () => {
     expect(view.hook.mode).toBe('design');
   });
 
-  // RISC: `current.current` is only updated on render. An exit that main sends
-  // right after arm() resolved, before React re-rendered, is compared against
-  // the old (null) arming and dropped — the pill stays "on" for a dead armId.
-  it.fails('RISC: an exit that lands before the re-render after arm still clears the switch', async () => {
+  // Fixed: the arming is known to the event listener as soon as arm() resolves,
+  // not on the next render, so an exit main sends at once still clears the pill.
+  it('an exit that lands before the re-render after arm still clears the switch', async () => {
     mocks.arm.mockResolvedValue({ armId: 'arm-1' });
     const view = mountHook();
     await act(async () => {
@@ -322,9 +330,9 @@ describe('DesignComposer', () => {
     expect(view.field().value).toBe('');
   });
 
-  // RISC: Copy schedules onRelease 700 ms later and never cancels it. A new pick
-  // made inside that window gets released by the old Copy — its composer closes.
-  it.fails('RISC: a Copy of one pick does not release the next pick made within 700 ms', async () => {
+  // Fixed: the 700 ms release after Copy belongs to its pick; a new pick (or the
+  // composer closing) cancels it.
+  it('a Copy of one pick does not release the next pick made within 700 ms', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const view = mountComposer();
     await act(flush);
@@ -333,6 +341,18 @@ describe('DesignComposer', () => {
     view.render(makePick({ at: 'the next pick' }));
     await act(flush);
     act(() => { vi.advanceTimersByTime(700); });
+    expect(view.onRelease).not.toHaveBeenCalled();
+  });
+
+  it('a Copy whose composer closes within 700 ms releases nothing afterwards', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const view = mountComposer();
+    await act(flush);
+    view.type('x');
+    await act(async () => { view.button('Copy note').click(); await flush(); });
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.advanceTimersByTime(700);
     expect(view.onRelease).not.toHaveBeenCalled();
   });
 });

@@ -140,11 +140,13 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
     S.ring.style.height=rect.h+"px";
     S.ring.classList.add("on");
   }
-  function inOverlay(e){
+  function inHost(e,host){
+    if(!host)return false;
     var path=e.composedPath?e.composedPath():[e.target];
-    for(var i=0;i<path.length;i++)if(path[i]===S.host)return true;
+    for(var i=0;i<path.length;i++)if(path[i]===host)return true;
     return false;
   }
+  function inOverlay(e){return inHost(e,S.host);}
 
   // ── Pick ─────────────────────────────────────────────────────────────────
   function clearToken(){
@@ -257,6 +259,10 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
         tag.textContent=MARK_CSS;
         root.appendChild(tag);
       }
+      // Typing a note is not typing on the page: its keys (site hotkeys) and the
+      // presses that place the caret end at this layer, in the bubble phase.
+      var own=["keydown","keyup","keypress"].concat(PRESSES);
+      for(var j=0;j<own.length;j++)root.addEventListener(own[j],function(ev){ev.stopPropagation();});
       A.host=host;A.root=root;
     }
     if(!A.host.isConnected)(document.documentElement||document.body).appendChild(A.host);
@@ -272,11 +278,7 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
     m.label.style.left=Math.round(ux*reach-w/2)+"px";
     m.label.style.top=Math.round(uy*reach-h/2)+"px";
   }
-  function inMarks(e){
-    var path=e.composedPath?e.composedPath():[e.target];
-    for(var i=0;i<path.length;i++)if(path[i]===A.host)return true;
-    return false;
-  }
+  function inMarks(e){return inHost(e,A.host);}
   function hits(node,e){
     if(!node)return false;
     var r=node.getBoundingClientRect();
@@ -307,7 +309,7 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
       token=token.replace(/[^a-z0-9]/g,"")||"m"+Date.now();
       try{p.target.setAttribute("data-hello-pick",token);}catch(_){token="";}
     }
-    A.marks.push({n:p.n,color:p.color,text:t,at:p.at,tag:p.tag,token:token,node:p.node,target:p.target});
+    A.marks.push({n:p.n,color:p.color,text:t,at:p.at,tag:p.tag,token:token,node:p.node,pin:p.pin,target:p.target});
     var ev={type:"marks",count:markCount()};
     // Main reads the component under the marker once, from the page world, and hands it back through setAt.
     if(token)ev.mark={n:p.n,token:token};
@@ -370,7 +372,6 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
     input.addEventListener("keydown",function(ev){
       // Escape never reaches the page: main catches it and ends the mode, which drops this note.
       if(ev.key==="Enter"&&!ev.isComposing){ev.preventDefault();commitPending();}
-      ev.stopPropagation();
     });
     focusPending();
   }
@@ -419,23 +420,28 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
       else document.documentElement.style.removeProperty("cursor");
       A.cursor=null;
     },
-    /** The note being typed leaves the picture; every committed pin says whether it is in it. */
+    /** A note with words goes with the picture as if committed; an empty one leaves
+     *  it. Every committed pin says whether it is in the picture. */
     beforeShot:function(){
+      // Send/Copy with a note still open means the person meant it (coordinator, 13.09).
+      if(A.pending&&(A.pending.input.value||"").trim())commitPending();
       // Opacity, not visibility: a field that turns invisible loses focus, and its words with it.
       if(A.pending)A.pending.node.style.opacity="0";
-      var out=[],vw=W.innerWidth,vh=W.innerHeight;
+      var out=[],vw=W.innerWidth,vh=W.innerHeight,shown=!!A.host&&A.host.isConnected;
       for(var i=0;i<A.marks.length;i++){
-        var m=A.marks[i],r=m.node.getBoundingClientRect();
-        out.push({n:m.n,color:m.color,text:m.text,at:m.at,inView:r.top>=0&&r.left>=0&&r.top<vh&&r.left<vw});
+        var m=A.marks[i],r=m.node.getBoundingClientRect(),pr=m.pin.getBoundingClientRect();
+        // A layer the page detached or collapsed measures zero: those pins are not in the picture.
+        out.push({n:m.n,color:m.color,text:m.text,at:m.at,
+          inView:shown&&pr.width>0&&pr.height>0&&r.top>=0&&r.left>=0&&r.top<vh&&r.left<vw});
       }
       return {marks:out};
     },
     afterShot:function(){
       if(A.pending)A.pending.node.style.opacity="";
     },
-    /** Main's reading of the component under marker n. */
-    setAt:function(n,component,file){
-      if(typeof component!=="string"||!component)return false;
+    /** Main's reading of the component under marker n, for the arming that asked. */
+    setAt:function(armId,n,component,file){
+      if(armId!==S.armId||typeof component!=="string"||!component)return false;
       for(var i=0;i<A.marks.length;i++){
         var m=A.marks[i];
         if(m.n!==n)continue;
@@ -449,18 +455,21 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
 
   // ── Listeners ────────────────────────────────────────────────────────────
   var PRESSES=["pointerdown","mousedown","pointerup","mouseup","dblclick","auxclick","contextmenu","touchstart","touchend"];
+  // Only the person's own input is a pick. A click a script made — the page's,
+  // or an agent's el.click() under Full — goes to the page as if no mode were on.
   function swallow(e){
-    if(!S.armed||inOverlay(e))return;
+    // Presses in the marker layer keep their default (caret, selection); the layer stops them itself.
+    if(!e.isTrusted||!S.armed||inOverlay(e)||inHost(e,A.host))return;
     e.preventDefault();e.stopImmediatePropagation();
   }
   function onClick(e){
-    if(!S.armed||inOverlay(e))return;
+    if(!e.isTrusted||!S.armed||inOverlay(e))return;
     e.preventDefault();e.stopImmediatePropagation();
     var k=KINDS[S.kind];
     if(k&&k.click)k.click(e);
   }
   function onMove(e){
-    if(!S.armed)return;
+    if(!e.isTrusted||!S.armed)return;
     var k=KINDS[S.kind];
     if(k&&k.move)k.move(e);
   }

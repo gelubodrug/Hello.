@@ -229,13 +229,12 @@ describe('Design mode — controller gating', () => {
     expect(calls('release')).toHaveLength(0);
   });
 
-  // RISC: release() checks only the arming, never the grant. Today every path to
-  // Off publishes an "updated" event, so the arming is already gone — but main
-  // does not refuse release on Off by itself, as arm and capture do.
-  it.fails('RISC: release on an Off tab is refused in main on its own (not only via the arming being gone)', async () => {
+  // Fixed: release() checks the grant itself, as arm and capture do — not only
+  // through the arming an "updated" event would already have ended.
+  it('release on an Off tab is refused in main on its own (not only via the arming being gone)', async () => {
     const { armId } = await controller.arm('tab-1', 'design');
     tab.control = 'off'; // no page event: an Off that did not go through publish()
-    await controller.release('tab-1', armId).catch(() => {});
+    await expect(controller.release('tab-1', armId)).rejects.toThrow('Allow Read on this tab to use Design.');
     expect(calls('release')).toHaveLength(0);
   });
 
@@ -309,10 +308,9 @@ describe('Design mode — controller gating', () => {
     }
   });
 
-  // RISC: PagePick.url and the `page:` line come from contents.getURL() with no
-  // bound, while the same field for Annotate is cut to 8192. A page can grow its
-  // own URL (history.replaceState) far beyond the 8192 browserURL() allows.
-  it.fails('RISC: the Design pick URL is bounded like the Annotate one (8192)', async () => {
+  // Fixed: PagePick.url and the `page:` line are cut to 8192 like Annotate's. A
+  // page can grow its own URL (history.replaceState) far beyond that.
+  it('the Design pick URL is bounded like the Annotate one (8192)', async () => {
     const { armId } = await controller.arm('tab-1', 'design');
     await settle();
     guest.url = `https://example.test/app?${'q'.repeat(100_000)}`;
@@ -321,6 +319,7 @@ describe('Design mode — controller gating', () => {
     const event = events.find(item => item.type === 'picked');
     if (event?.type !== 'picked') throw new Error('No pick.');
     expect(event.pick.url.length).toBeLessThanOrEqual(8192);
+    expect(event.pick.ref.split('\n').find(line => line.startsWith('page: '))!.length).toBeLessThanOrEqual(8192 + 'page: '.length);
   });
 });
 
@@ -421,7 +420,7 @@ describe('Design mode — with BrowserManager', () => {
     f.modes.dispose();
   });
 
-  it('hide (another tab shown, or none), unmount and close each end Design with their reason', async () => {
+  it('hide (another tab shown), unmount and close each end Design with their reason; no tab shown is not a hide', async () => {
     const f = fixture();
     const a = f.manager.create('chat', 'https://a.example/');
     const b = f.manager.create('chat', 'https://b.example/');
@@ -431,14 +430,16 @@ describe('Design mode — with BrowserManager', () => {
     await f.modes.arm(a.id, 'design');
     f.manager.setActive(b.id);
     await f.modes.arm(a.id, 'design');
+    // A hidden pane mounting says "no tab" too (BrowserPane): main keeps the mode;
+    // the pane that really stops showing its tab disarms it from the window.
     f.manager.setActive(null);
-    await f.modes.arm(a.id, 'design');
+    expect(f.modes.armed(a.id)?.kind).toBe('design');
     f.manager.detach(a.id, undefined as never);
     expect(f.modes.armed(a.id)).toBeNull();
     f.attach(a.id);
     await f.modes.arm(a.id, 'design');
     f.manager.close(a.id);
-    expect(exits(f.events)).toEqual(['hidden', 'hidden', 'hidden', 'closed']);
+    expect(exits(f.events)).toEqual(['hidden', 'hidden', 'closed']);
     await expect(f.modes.arm(a.id, 'design')).rejects.toThrow('This browser tab is closed.');
     f.modes.dispose();
   });

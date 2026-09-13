@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { PAGE_MODE_PROBE, fiberProbe, probeCall } from '../src/main/browser/page-mode-probe';
 import { parseProbeBatch } from '../src/shared/page-mode-format';
+import { dispatchTrusted } from './trusted-event';
 
 interface Bridge {
   arm(kind: string, armId: string): boolean;
@@ -38,8 +39,8 @@ describe('page mode probe', () => {
     expect(bridge().arm('design', 'arm-1')).toBe(true);
     expect(document.querySelector('[data-hello-page-mode]')).not.toBeNull();
 
-    button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 9 }));
+    dispatchTrusted(button, new MouseEvent('mousemove', { bubbles: true }));
+    dispatchTrusted(button, new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 9 }));
     expect(pageSawClick).toBe(false);
 
     const batch = parseProbeBatch(await bridge().wait('arm-1', 50));
@@ -52,7 +53,7 @@ describe('page mode probe', () => {
     // Another arming's wait gets nothing.
     expect(await bridge().wait('someone-else', 50)).toBeNull();
 
-    document.querySelector('p')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    dispatchTrusted(document.querySelector('p')!, new MouseEvent('click', { bubbles: true, cancelable: true }));
     const after = parseProbeBatch(await bridge().wait('arm-1', 50));
     expect(after?.events[0]).toEqual({ type: 'released' });
     expect(button.hasAttribute('data-hello-pick')).toBe(false);
@@ -66,13 +67,30 @@ describe('page mode probe', () => {
     expect(bridge().disarm('old')).toBe(false);
     const waiting = bridge().wait('new', 5000);
     const started = Date.now();
-    document.querySelector('a')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    dispatchTrusted(document.querySelector('a')!, new MouseEvent('click', { bubbles: true, cancelable: true }));
     const batch = parseProbeBatch(await waiting);
     expect(Date.now() - started).toBeLessThan(1000);
     expect(batch?.events.some(event => event.type === 'pick')).toBe(true);
     expect(bridge().disarm('new')).toBe(true);
     expect(document.querySelector('[data-hello-page-mode]')).toBeNull();
     expect(await bridge().wait('new', 50)).toBeNull();
+  });
+
+  it('leaves a script-made click, move and press to the page: no pick, no highlight, nothing swallowed', async () => {
+    run(PAGE_MODE_PROBE);
+    document.body.innerHTML = '<button>Save</button>';
+    const button = document.querySelector('button')!;
+    const seen: string[] = [];
+    for (const type of ['mousedown', 'click']) button.addEventListener(type, () => seen.push(type));
+    bridge().arm('design', 'scripted');
+    button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    button.dispatchEvent(down);
+    button.click();
+    expect(seen).toEqual(['mousedown', 'click']);
+    expect(down.defaultPrevented).toBe(false);
+    expect(parseProbeBatch(await bridge().wait('scripted', 50))?.events).toEqual([]);
+    expect(button.hasAttribute('data-hello-pick')).toBe(false);
   });
 
   it('hides its overlay for a picture and gives it back', async () => {

@@ -139,11 +139,19 @@ export type ProbeEvent =
 export interface ProbeBatch { armId: string; events: ProbeEvent[]; }
 
 const LIMITS = { tag: 40, selector: 1000, text: 200, styles: 600, dom: 400, url: 8192, token: 64, events: 60, marks: 500, note: 1000, at: 600 } as const;
-const CONTROL = /[\x00-\x1f\x7f]/g;
+/**
+ * Everything that can break or reorder a line: C0/C1 controls, zero-width marks,
+ * Unicode line and paragraph separators, bidi embeddings, overrides and isolates.
+ * A page must not be able to print a line of its own ("change:", "#2 …") into a note.
+ */
+const CONTROL = /[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 const bounded = (value: unknown, limit: number): string =>
   typeof value === 'string' ? value.replace(CONTROL, ' ').slice(0, limit) : '';
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? Math.max(-1e6, Math.min(1e6, Math.round(value))) : null;
+
+/** PURE: a page address as a note may print it — one line, bounded. */
+export const boundedPageUrl = (url: unknown): string => bounded(url, LIMITS.url);
 
 /** PURE: a rect in page CSS pixels, or null when any side is not a number. */
 export function parseRect(value: unknown): PageRect | null {
@@ -223,7 +231,7 @@ export function parseProbeAnnotations(value: unknown, url: string): AnnotationSh
       ...(typeof mark.inView === 'boolean' ? { inView: mark.inView } : {}),
     });
   }
-  return { url: bounded(url, LIMITS.url), marks };
+  return { url: boundedPageUrl(url), marks };
 }
 
 /** PURE: what the page's own scripts said about the element — component trail and source line. */

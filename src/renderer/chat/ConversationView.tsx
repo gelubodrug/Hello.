@@ -559,9 +559,15 @@ export function ConversationView({
     setDraft((current) => `${current}${current ? "\n\n" : ""}${body}\n\n`);
     const added = quote.attachments ?? [];
     if (added.length) {
-      if (attachments.length + added.length > 8)
-        setError("Attach up to 8 files per message. Remove an attachment before adding more.");
-      setAttachments((current) => [...current, ...added.filter((item) => !current.some((kept) => kept.id === item.id))].slice(0, 8));
+      // Measured against the list as it is now, not as this effect last saw it.
+      // The words always land; a page picture with no room is said out loud.
+      setAttachments((current) => {
+        const fresh = added.filter((item) => !current.some((kept) => kept.id === item.id));
+        const room = Math.max(0, 8 - current.length);
+        if (fresh.length > room)
+          setError("Attach up to 8 files per message. The page picture was not attached — remove an attachment, then capture the page again.");
+        return fresh.length ? [...current, ...fresh.slice(0, room)] : current;
+      });
     }
     onQuoteConsumed();
     field.current?.focus();

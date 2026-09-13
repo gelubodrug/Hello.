@@ -296,8 +296,11 @@ describe("browser invariant: an armed page mode never changes the browser", () =
     const before = names.map((name) => guest.listenerCount(name));
     await modes.arm(tab.id, "annotate");
     expect(names.map((name) => guest.listenerCount(name))).not.toEqual(before);
-    // The pane closes: the mode ends, the page does not.
+    // The pane closes: main keeps the page parked, and the pane's own hook lets
+    // go of the mode (usePageMode on unmount / hide); the page is not touched.
     f.manager.setActive(null);
+    expect(modes.armed(tab.id)).not.toBeNull();
+    modes.disarm(tab.id);
     expect(modes.armed(tab.id)).toBeNull();
     expect(guest.close).not.toHaveBeenCalled();
     expect(guest.destroyed).toBe(false);

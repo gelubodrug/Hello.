@@ -1,6 +1,6 @@
 // Annotate in main: criteria A2, A4, A5, A6 against the real PageModeController,
-// with the guest page scripted. [BUG] / [RISC] titles pin CURRENT behaviour — a
-// fix is expected to flip that assertion.
+// with the guest page scripted. The [BUG] / [RISC] findings of the first test
+// round are fixed; their tests now pin the fixed behaviour.
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -110,7 +110,6 @@ describe('Annotate — PageModeController', () => {
       ['cross-document navigation', (c: Contents) => c.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }), 'navigated'],
       ['tab closed', (_c: Contents) => page({ type: 'closed', id: 'tab-1' }), 'closed'],
       ['another tab shown', (_c: Contents) => page({ type: 'active', id: 'tab-2' }), 'hidden'],
-      ['no tab shown', (_c: Contents) => page({ type: 'active', id: null }), 'hidden'],
       ['page detached', (_c: Contents) => page({ type: 'detached', id: 'tab-1' }), 'hidden'],
       ['renderer gone', (c: Contents) => c.emit('render-process-gone'), 'hidden'],
     ] as const)('disarms on %s (%s) and tells the page to forget', async (_name, act, reason) => {
@@ -132,10 +131,23 @@ describe('Annotate — PageModeController', () => {
       expect(events.at(-1)).toEqual({ type: 'exit', tabId: 'tab-1', armId, reason: 'escape' });
     });
 
-    it('[RISC] Escape during IME composition still ends the mode and loses every marker', async () => {
+    it('no tab shown (a hidden pane mounting) is not a hide: the mode stays, the page is not told to forget', async () => {
       await controller.arm('tab-1', 'annotate');
-      contents.emit('before-input-event', { preventDefault: vi.fn() }, { type: 'keyDown', key: 'Escape', isComposing: true });
-      expect(controller.armed('tab-1')).toBeNull();
+      const before = contents.calls.length;
+      page({ type: 'active', id: null });
+      expect(controller.armed('tab-1')).not.toBeNull();
+      expect(events.some(event => event.type === 'exit')).toBe(false);
+      expect(contents.calls.slice(before).some(code => code.includes(bridgeCall('disarm')))).toBe(false);
+      page({ type: 'active', id: 'tab-1' });
+      expect(controller.armed('tab-1')).not.toBeNull();
+    });
+
+    it('Escape during IME composition cancels the composition, not the mode; the page keeps that Escape', async () => {
+      await controller.arm('tab-1', 'annotate');
+      const event = { preventDefault: vi.fn() };
+      contents.emit('before-input-event', event, { type: 'keyDown', key: 'Escape', isComposing: true });
+      expect(controller.armed('tab-1')).not.toBeNull();
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
     it('a subframe navigation does not end the mode', async () => {
@@ -144,7 +156,7 @@ describe('Annotate — PageModeController', () => {
       expect(controller.armed('tab-1')).not.toBeNull();
     });
 
-    it('[RISC] A5 — a same-document navigation (pushState / #hash) is NOT an exit in main; only the renderer’s tab.url effect disarms', async () => {
+    it('A5 — a same-document navigation (pushState / #hash) is not an exit: main is the only authority, and it keeps the mode', async () => {
       await controller.arm('tab-1', 'annotate');
       contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true });
       expect(controller.armed('tab-1')).not.toBeNull();
@@ -159,7 +171,7 @@ describe('Annotate — PageModeController', () => {
       await settle();
       expect(events).toContainEqual({ type: 'marks', tabId: 'tab-1', armId, count: 2 });
       expect(contents.mainFrame.executeJavaScript.mock.calls[0][0]).toContain('"tok2"');
-      expect(contents.calls.some(code => code.includes('.call("annotate","setAt",[2,"Card › Button","src/Button.tsx:3"])'))).toBe(true);
+      expect(contents.calls.some(code => code.includes(`.call("annotate","setAt",[${JSON.stringify(armId)},2,"Card › Button","src/Button.tsx:3"])`))).toBe(true);
     });
 
     it('a marks event without a valid token never runs the page-world probe', async () => {
@@ -249,7 +261,7 @@ describe('Annotate — PageModeController', () => {
       expect(contents.calls.some(code => code.includes(bridgeCall('afterShot')))).toBe(true);
     });
 
-    it('[BUG] mode ended (Escape) while the picture was being taken → annotations are still returned, for a picture taken after the pins were removed', async () => {
+    it('mode ended (Escape) while the picture was being taken → no annotations for a picture taken after the pins were removed', async () => {
       let shoot!: (value: typeof image) => void;
       contents.capturePage.mockImplementationOnce(() => new Promise(resolve => { shoot = resolve; }));
       await controller.arm('tab-1', 'annotate');
@@ -259,11 +271,11 @@ describe('Annotate — PageModeController', () => {
       expect(controller.armed('tab-1')).toBeNull();
       shoot(image);
       const shot = await capturing;
-      // Wanted: annotations undefined (or a rejection). Current: the stale list rides along.
-      expect(shot.annotations?.marks).toEqual([{ n: 1, color: 'yellow', text: 'Too dim', inView: true }]);
+      expect(shot.path.endsWith('.png')).toBe(true);
+      expect(shot.annotations).toBeUndefined();
     });
 
-    it('[BUG] mode switched Annotate → Design during the capture → annotations of the old arming are still returned', async () => {
+    it('mode switched Annotate → Design during the capture → no annotations of the old arming', async () => {
       let shoot!: (value: typeof image) => void;
       contents.capturePage.mockImplementationOnce(() => new Promise(resolve => { shoot = resolve; }));
       await controller.arm('tab-1', 'annotate');
@@ -271,7 +283,7 @@ describe('Annotate — PageModeController', () => {
       await settle();
       await controller.arm('tab-1', 'design');
       shoot(image);
-      expect((await capturing).annotations).toBeDefined();
+      expect((await capturing).annotations).toBeUndefined();
     });
   });
 

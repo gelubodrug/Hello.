@@ -10,7 +10,8 @@ export interface PageModePicked { pick: PagePick; point: { x: number; y: number 
 /**
  * One tab's page mode, as the window sees it. Main decides whether a mode may
  * run and ends it on its own (grant lowered, navigation, hide, close, Escape);
- * this hook only asks, listens, and lets go when its pane stops showing.
+ * this hook only asks, listens, and lets go when its pane stops showing. Where
+ * the page goes is main's call alone: a same-document move keeps the mode.
  */
 export function usePageMode(tab: BrowserTab, visible: boolean) {
   const [armed, setArmed] = useState<{ kind: PageModeKind; armId: string } | null>(null);
@@ -25,7 +26,7 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
   // Bridges from an older preload have no page modes; the switch simply stays off.
   const bridge = api.browser.mode as typeof api.browser.mode | undefined;
 
-  const clear = useCallback(() => { setArmed(null); setPicked(null); setHover(null); setMarks(0); }, []);
+  const clear = useCallback(() => { current.current = null; setArmed(null); setPicked(null); setHover(null); setMarks(0); }, []);
 
   useEffect(() => bridge?.onEvent(event => {
     const active = current.current;
@@ -55,6 +56,8 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
     setPending(kind);
     try {
       const { armId } = await bridge.arm(tab.id, kind);
+      // Main may speak about this arming before React renders it: events match against it from now.
+      current.current = { kind, armId };
       setPicked(null); setHover(null); setMarks(0);
       setArmed({ kind, armId });
     } catch (reason) {
@@ -75,7 +78,6 @@ export function usePageMode(tab: BrowserTab, visible: boolean) {
   // keeps the switch honest without waiting for its word.
   const readable = tab.control !== 'off';
   useEffect(() => { if (!visible || !readable) disarm(); }, [visible, readable, disarm]);
-  useEffect(() => { disarm(); }, [tab.url, disarm]);
   useEffect(() => () => {
     const active = current.current;
     if (active) void bridge?.disarm(tab.id, active.armId).catch(() => {});

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import type { BrowserTab, PageModeEvent, PageModeExitReason, PageModeKind, PagePick, PageRect } from "../../shared/types";
-import { composeRefBlock, cropBox, parseFiberInfo, parseProbeAnnotations, parseProbeBatch, parseRect, type AnnotationShot, type ProbeEvent } from "../../shared/page-mode-format";
+import { boundedPageUrl, composeRefBlock, cropBox, parseFiberInfo, parseProbeAnnotations, parseProbeBatch, parseRect, type AnnotationShot, type ProbeEvent } from "../../shared/page-mode-format";
 import type { BrowserPageEvent } from "./manager";
 import { PAGE_MODE_PROBE, PAGE_MODE_WAIT_MS, PAGE_MODE_WORLD_ID, fiberProbe, probeCall } from "./page-mode-probe";
 
@@ -136,7 +136,10 @@ export class PageModeController {
   async release(tabId: string, armId: string): Promise<void> {
     const arming = this.arms.get(tabId);
     if (!arming || arming.armId !== armId || arming.contents.isDestroyed()) return;
-    await this.isolated(arming.contents, probeCall("release", [armId], "false")).catch(() => {});
+    // The grant is main's to check on every call, not something an arming vouches for.
+    const { contents } = this.readable(tabId, LABELS[arming.kind]);
+    if (contents !== arming.contents) return;
+    await this.isolated(contents, probeCall("release", [armId], "false")).catch(() => {});
   }
 
   /**
@@ -193,7 +196,8 @@ export class PageModeController {
     await writeFile(path, png, { mode: 0o600, flag: "wx" });
     // Annotate's markers are drawn into the page, so they are in the picture;
     // the list says what each one means and whether it made it into the frame.
-    if (arming?.kind === "annotate" && arming.contents === contents) {
+    // A mode that ended or changed while the picture was taken has no list to give.
+    if (arming?.kind === "annotate" && arming.contents === contents && this.arms.get(tabId) === arming) {
       const annotations = parseProbeAnnotations(extra, contents.getURL());
       if (annotations) return { path, annotations };
     }
@@ -258,7 +262,8 @@ export class PageModeController {
   private wire(arming: Arming): () => void {
     const { contents } = arming;
     const onInput = (event: Electron.Event, input: Input) => {
-      if (input.type !== "keyDown" || input.key !== "Escape") return;
+      // Escape inside an IME composition cancels the composition, not the mode.
+      if (input.type !== "keyDown" || input.key !== "Escape" || input.isComposing) return;
       event.preventDefault();
       this.exit(arming, "escape");
     };
@@ -282,6 +287,10 @@ export class PageModeController {
 
   private onPage(event: BrowserPageEvent): void {
     if (event.type === "active") {
+      // Another tab shown hides this one. No tab shown is not proof of that: a
+      // hidden pane mounting says so too, and the pane that really stops showing
+      // its tab lets go of the mode itself.
+      if (event.id === null) return;
       for (const arming of [...this.arms.values()]) if (arming.tabId !== event.id) this.exit(arming, "hidden");
       return;
     }
@@ -341,7 +350,7 @@ export class PageModeController {
     const fiber = parseFiberInfo(await timeout(arming.contents.mainFrame.executeJavaScript(fiberProbe(event.token)), FIBER_TIMEOUT_MS));
     if (this.arms.get(tabId) !== arming || arming.contents.isDestroyed()) return;
     // The address is main's to report, never the page's.
-    const url = arming.contents.getURL();
+    const url = boundedPageUrl(arming.contents.getURL());
     const pick: PagePick = {
       kind: arming.kind, armId, tabId, url,
       selector: event.selector, tag: event.tag, text: event.text, styles: event.styles,
@@ -356,7 +365,7 @@ export class PageModeController {
   private async readMark(arming: Arming, mark: { n: number; token: string }): Promise<void> {
     const fiber = parseFiberInfo(await timeout(arming.contents.mainFrame.executeJavaScript(fiberProbe(mark.token)), FIBER_TIMEOUT_MS));
     if (!fiber.component || this.arms.get(arming.tabId) !== arming) return;
-    await this.context(arming).call("setAt", [mark.n, fiber.component, fiber.file]).catch(() => null);
+    await this.context(arming).call("setAt", [arming.armId, mark.n, fiber.component, fiber.file]).catch(() => null);
   }
 
   private exit(arming: Arming, reason: PageModeExitReason): void {

@@ -133,15 +133,32 @@ describe("annotations arriving in the composer", () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
-  it("[BUG] composer already holds 8 attachments → the annotated picture is dropped, and the text carries no `shot:` path either", async () => {
+  it("composer already holds 8 attachments → the words still land, and the error says the page picture was not attached (no local path in the draft)", async () => {
     const eight = Array.from({ length: 8 }, (_, i) => ({ id: `kept-${i}`, name: `kept-${i}.txt`, kind: "text", size: 1 }));
     localStorage.setItem(`hello.draft.${conversation.id}.attachments`, JSON.stringify(eight));
     await act(async () => { root.render(view({ text: TEXT, verbatim: true, attachments: [picture] })); });
     const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
-    // AnnotateBar only writes `shot:` when attach FAILED; here attach succeeded, so the text has no picture reference.
+    expect(field.value).toBe(`${TEXT}\n\n`);
     expect(field.value).not.toContain("shot:");
+    expect(field.value).not.toMatch(/\/data\/|page-captures/);
     expect(attachmentNames()).toHaveLength(8);
     expect(attachmentNames()).not.toContain("capture.png");
     expect(document.body.textContent).toContain("Attach up to 8 files per message.");
+    expect(document.body.textContent).toContain("The page picture was not attached");
+  });
+
+  it("the last free slot takes the first page picture; a second quote keeps its words, is refused its picture and says so", async () => {
+    const seven = Array.from({ length: 7 }, (_, i) => ({ id: `kept-${i}`, name: `kept-${i}.txt`, kind: "text", size: 1 }));
+    localStorage.setItem(`hello.draft.${conversation.id}.attachments`, JSON.stringify(seven));
+    const second: ChatAttachment = { id: "capture-2", name: "capture-2.png", kind: "image", size: 10 };
+    await act(async () => { root.render(view({ text: "first", verbatim: true, attachments: [picture] })); });
+    expect(attachmentNames()).toHaveLength(8);
+    expect(document.body.textContent).not.toContain("The page picture was not attached");
+    await act(async () => { root.render(view({ text: "second", verbatim: true, attachments: [second] })); });
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+    expect(field.value).toBe("first\n\n\n\nsecond\n\n");
+    expect(attachmentNames()).toContain("capture.png");
+    expect(attachmentNames()).not.toContain("capture-2.png");
+    expect(document.body.textContent).toContain("The page picture was not attached");
   });
 });

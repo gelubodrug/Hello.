@@ -229,6 +229,18 @@ At the owner's request, two sibling-app sources were read-only ported from
   `parseProbeAnnotations`, with main's URL — attaches it to the chat composer with
   the `composeAnnotations` list and ends the mode; Copy puts the same on the
   clipboard. No SQLite, no agent tool.
+- Changed after the page-mode test round (2026-09-13), departing from the sibling app:
+  the probe acts only on trusted (the person's) clicks, moves and presses — a
+  script's or an agent's `el.click()` goes to the page; a note still being typed
+  with words is committed when Send/Copy takes the picture (an empty one still
+  leaves it); a marker is `inView` only while its layer is connected and its pin
+  has a box; the marker layer keeps its keys and presses from the page's bubble
+  listeners and keeps the caret default; `setAt` names its arming. In main,
+  Escape inside an IME composition does not end a mode, a same-document
+  navigation keeps it, and only another tab becoming active hides it. Text a
+  page supplies is stripped of C1 controls, zero-width marks, Unicode line
+  separators and bidi controls, and the Design pick URL is bounded like
+  Annotate's.
 - The toolbar pill grammar (icon at rest; label and X unfurl from zero width
   when armed) follows the sibling app `src/features/browser/browser.css`
   `.browser-design-btn`, drawn with Hello's tokens and motion variables.

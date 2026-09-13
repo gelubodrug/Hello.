@@ -238,7 +238,6 @@ describe('usePageMode — the marks counter', () => {
   it.each([
     ['grant lowered to Off', { ...tab, control: 'off' as const }, true],
     ['pane hidden', tab, false],
-    ['url changed (includes same-document navigation)', { ...tab, url: 'https://example.test/app#other' }, true],
   ])('the window disarms on %s and zeroes the count', async (_name, next, visible) => {
     mount();
     await arm('arm-6');
@@ -247,6 +246,19 @@ describe('usePageMode — the marks counter', () => {
     expect(hook.mode).toBeNull();
     expect(hook.marks).toBe(0);
     expect(mocks.disarm).toHaveBeenCalledWith('tab-1', 'arm-6');
+  });
+
+  it('A5: a url change (same-document navigation) keeps the mode and its count — main alone ends it on a new document', async () => {
+    mount();
+    await arm('arm-7');
+    emit({ type: 'marks', tabId: 'tab-1', armId: 'arm-7', count: 4 });
+    mount({ ...tab, url: 'https://example.test/app#other' }, true);
+    expect(hook.mode).toBe('annotate');
+    expect(hook.marks).toBe(4);
+    expect(mocks.disarm).not.toHaveBeenCalled();
+    emit({ type: 'exit', tabId: 'tab-1', armId: 'arm-7', reason: 'navigated' });
+    expect(hook.mode).toBeNull();
+    expect(hook.marks).toBe(0);
   });
 
   it('a failed arm shows the main-process reason and leaves nothing armed', async () => {
