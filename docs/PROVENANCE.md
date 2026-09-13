@@ -177,3 +177,44 @@ and a hardcoded budget, and re-probes the running server for the loaded context
 selected model, in main (`adoptedLimits` in `src/main/chat/service.ts`), and
 prefers a server's loaded `meta.n_ctx` over a model's trained context_length —
 the same priority the sibling app’s probe uses.
+
+## Browser page modes (Design; shared base for Annotate) — 2026-09-13
+
+At the owner's request, two sibling-app sources were read-only ported from
+`sibling-app`:
+
+- `src-tauri/src/cmd/browser_view.rs` `DESIGN_INIT_JS` → `src/main/browser/page-mode-probe.ts`.
+  Kept: hover ring, click-to-pick, click-away ends a pick, `armId` so a late
+  disarm cannot end a newer arming, `refBlock` parts (`getFiber`,
+  `componentTrail`, `debugSourceOf`, `shortDomPath`, `styleSummary`, `cssPath`),
+  and one bridge for every kind. Changed for Hello: the guest has no preload or
+  initialization script, so main injects the probe when a mode is armed; it runs
+  in an **isolated world** (id 1207), so the page cannot read, forge or switch off
+  the mode. React's fiber is a page-world expando, so a pick marks its element
+  with a token and main reads component trail and source line once, from the page
+  world (`fiberProbe`), treating the answer as untrusted text. The sibling app’s
+  `take()` timer poll became a long poll (`wait(armId, ms)` resolves on the next
+  event or after 400 ms). Escape is caught in main through `before-input-event`,
+  not in the page. The comment bubble, clipboard toast and Annotate markers are
+  not in the page: Hello's page is a `<webview>` in its own document, so the
+  composer is ordinary app DOM stacked above it (`DesignComposer.tsx`). The
+  overlay uses a closed shadow root and a constructed stylesheet so a page CSP
+  cannot strip it. Annotate's markers are not ported yet; `KINDS.annotate` is the
+  documented slot.
+- `src/runtime/browserDesignMode.ts` → `src/shared/page-mode-format.ts`
+  (`composeDesignNote(s)`, `parseDesignNotes`, `parseAnnotationShot`,
+  `composeAnnotations`), made pure and extended with checked parsers for what the
+  page hands back and `cropBox`. The marker line reads `⟦Hello-ref⟧`. Destination
+  changed: a note goes to the chat composer with the element's picture attached
+  through the existing attachment import; Copy puts text and picture on the
+  clipboard from main. The picture is cropped from `webContents.capturePage()`
+  of the viewport, scaled by the picture's own size, and saved under
+  `<userData>/page-captures/<chat>/` (pruned after a day, removed with the chat).
+- The toolbar pill grammar (icon at rest; label and X unfurl from zero width
+  when armed) follows the sibling app `src/features/browser/browser.css`
+  `.browser-design-btn`, drawn with Hello's tokens and motion variables.
+
+No sibling-app state, IPC names, clipboard helpers or Tauri code were copied. The
+browser manager gained only a read-only `pageFor(tabId)` and an
+`observePages` notification; its navigation, attach/park and grant behaviour is
+unchanged.

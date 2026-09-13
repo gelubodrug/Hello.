@@ -43,6 +43,15 @@ interface RecordTab {
   pending: Set<PendingOperation>;
   navigation: number;
 }
+/**
+ * What happened to a tab's page, for main-process observers that must stop
+ * using it (page modes). Observers see; they never decide anything here.
+ */
+export type BrowserPageEvent =
+  | { type: "updated"; tab: BrowserTab }
+  | { type: "active"; id: string | null }
+  | { type: "detached"; id: string }
+  | { type: "closed"; id: string };
 /** How long a main-process operation waits for the window to host a page. */
 export const BROWSER_ATTACH_TIMEOUT_MS = 10_000;
 export const BROWSER_OPERATION_TIMEOUT_MS = 15_000;
@@ -84,6 +93,7 @@ export class BrowserManager {
   private blockDownload = (event: { preventDefault(): void }) =>
     event.preventDefault();
   private hideForShellLoad = () => this.setActive(null);
+  private pageObservers = new Set<(event: BrowserPageEvent) => void>();
   constructor(private options: BrowserOptions) {
     for (const saved of options.initial) {
       let url = "about:blank";
@@ -268,6 +278,23 @@ export class BrowserManager {
     void selected.clearStorageData().catch(() => {});
     void selected.clearCache().catch(() => {});
   }
+  /** Read-only: a tab as it is now and the page hosting it, if one is attached. */
+  pageFor(tabId: string): { tab: BrowserTab; contents?: WebContents } | undefined {
+    const record = this.records.get(tabId);
+    if (!record || this.disposed) return undefined;
+    const contents = record.contents && !record.contents.isDestroyed() ? record.contents : undefined;
+    return { tab: { ...record.tab }, ...(contents ? { contents } : {}) };
+  }
+  /** Told after a tab changes, is shown or hidden, loses its page or closes. */
+  observePages(listener: (event: BrowserPageEvent) => void): () => void {
+    this.pageObservers.add(listener);
+    return () => this.pageObservers.delete(listener);
+  }
+  private notifyPage(event: BrowserPageEvent): void {
+    for (const listener of [...this.pageObservers]) {
+      try { listener(event); } catch { /* An observer never breaks the browser. */ }
+    }
+  }
   list(conversationId?: string): BrowserTab[] {
     return [...this.records.values()]
       .map(({ tab }) => ({ ...tab }))
@@ -296,6 +323,7 @@ export class BrowserManager {
     else if (!record.tab.pageOwned && !record.tab.sessionOnly)
       this.options.save({ ...record.tab, control: "off" });
     this.options.emit({ ...record.tab });
+    this.notifyPage({ type: "updated", tab: { ...record.tab } });
   }
   private cancelPending(
     record: RecordTab,
@@ -319,6 +347,7 @@ export class BrowserManager {
     record.detaching = false;
     if (contents && !contents.isDestroyed()) contents.close();
     if (this.activeId === record.tab.id) this.activeId = null;
+    if (contents) this.notifyPage({ type: "detached", id: record.tab.id });
     if (error) {
       record.tab.error = `${error.message} Reload this page to continue.`;
       record.tab.loading = false;
@@ -666,11 +695,13 @@ export class BrowserManager {
     record.contents = undefined;
     record.attachNonce = undefined;
     if (this.activeId === id) this.activeId = null;
+    this.notifyPage({ type: "detached", id });
   }
   /** The page this window is showing, as the agent's tab list reports it. */
   setActive(id: string | null): void {
     if (this.disposed) return;
     this.activeId = id && this.records.has(id) ? id : null;
+    this.notifyPage({ type: "active", id: this.activeId });
     if (this.activeId) void this.serveAgain(this.records.get(this.activeId)!);
   }
   /**
@@ -826,6 +857,7 @@ export class BrowserManager {
     this.releasePreviewPartition(record.partition);
     if (this.activeId === id) this.activeId = null;
     if (!record.tab.pageOwned && !record.tab.sessionOnly) this.options.remove(id);
+    this.notifyPage({ type: "closed", id });
     if (notify && !this.disposed) this.options.lifecycle?.({
       type: "closed", id, conversationId: record.tab.conversationId,
       openerId: record.tab.openerId && this.records.has(record.tab.openerId) ? record.tab.openerId : undefined,

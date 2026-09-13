@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Globe, Loader2, MessageSquarePlus, RotateCw, X } from 'lucide-react';
-import type { AgentControl, BrowserTab } from '../../shared/types';
+import type { AgentControl, BrowserTab, ChatQuoteExtra } from '../../shared/types';
 import { api } from '../api';
 import { MenuButton } from '../ui/primitives';
 import './browser.css';
+import { PageModeSwitch } from './PageModeSwitch';
+import { usePageMode } from './usePageMode';
+import { DesignComposer } from './design/DesignComposer';
 
-interface Props { tab: BrowserTab; visible: boolean; onTabChange(tab: BrowserTab): void; onQuote(text: string): void; }
+interface Props { tab: BrowserTab; visible: boolean; onTabChange(tab: BrowserTab): void; onQuote(text: string, extra?: ChatQuoteExtra): void; }
 const modes: {value:AgentControl;label:string;detail:string}[] = [
   {value:'off',label:'Off',detail:'Open pages on request; no page reading or interaction'},
   {value:'read',label:'Read only',detail:'Open and read pages; no clicking or typing'},
@@ -108,6 +111,7 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
   const run=async(task:()=>Promise<unknown>)=>{setError('');try{await task();}catch(e){setError((e as Error).message);}};
   const navigate=()=>run(()=>api.browser.navigate(tab.id,address));
   const mode=modes.find(item=>item.value===tab.control)!;
+  const pageMode=usePageMode(tab,visible);
   return <div className="browser-pane">
     <div className="browser-toolbar">
       <div className="browser-navigation">
@@ -124,11 +128,14 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
           </MenuButton>
         </div>
       </form>
+      <PageModeSwitch tab={tab} mode={pageMode.mode} pending={pageMode.pending} available={pageMode.available} onToggle={kind=>void pageMode.toggle(kind)}/>
       <button className="browser-quote" title={tab.control==='off'?'Enable read access to add this page to chat':'Add page to chat'} aria-label="Add page to chat" disabled={quoting||tab.control==='off'||tab.url==='about:blank'} onClick={()=>void run(async()=>{setQuoting(true);try{const page=await api.browser.read(tab.id);onQuote(`Page: ${page.title}\nSource: ${page.url}\n\n${page.text}`);}finally{setQuoting(false);}})}><MessageSquarePlus size={16}/></button>
     </div>
     {error&&<div className="browser-error" role="alert">{error}<button aria-label="Dismiss browser error" onClick={()=>setError('')}><X size={14}/></button></div>}
+    {pageMode.error&&<div className="browser-error" role="alert">{pageMode.error}<button aria-label="Dismiss page mode error" onClick={pageMode.clearError}><X size={14}/></button></div>}
     <div ref={viewport} className="browser-viewport">
       {tab.error?<div className="browser-start"><Globe size={28}/><h2>Couldn’t open this page</h2><p>{tab.error}</p><button onClick={()=>void run(()=>api.browser.action(tab.id,'reload'))}>Try again</button></div>:isStartPage?<div className="browser-start"><Globe size={28}/><h2>A place to explore.</h2><p>Search the web, follow a reference, bring what matters back to your chat.</p><form onSubmit={event=>{event.preventDefault();void navigate();}}><input aria-label="Search the web" placeholder="Search or enter address" value={address} onChange={event=>setAddress(event.target.value)}/><button aria-label="Go to address"><ArrowRight size={16}/></button></form><small>{mode.detail}.</small></div>:null}
+      {pageMode.mode==='design'&&pageMode.picked&&visible?<DesignComposer tab={tab} picked={pageMode.picked} slot={viewport} onQuote={onQuote} onRelease={pageMode.release} onExit={pageMode.disarm}/>:null}
     </div>
   </div>;
 }

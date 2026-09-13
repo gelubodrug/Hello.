@@ -54,7 +54,7 @@ function previewAPI(): HelloAPI {
       }else await navigator.clipboard.writeText(text);
     }},
     terminal:{list:async()=>[],workers:async()=>[],create:unsupported,attach:unsupported,write:unsupported,resize:async()=>{},close:async()=>{},onData:()=>()=>{},onExit:()=>()=>{}},
-    browser:{create:unsupported,navigate:unsupported,action:unsupported,setActive:async()=>{},attach:unsupported,detach:async()=>{},control:unsupported,read:unsupported,close:async()=>{},onUpdate:()=>()=>{}},
+    browser:{create:unsupported,navigate:unsupported,action:unsupported,setActive:async()=>{},attach:unsupported,detach:async()=>{},control:unsupported,read:unsupported,close:async()=>{},onUpdate:()=>()=>{},mode:{arm:unsupported,disarm:async()=>{},release:async()=>{},capture:unsupported,copy:unsupported,onEvent:()=>()=>{}}},
   };
 }
 

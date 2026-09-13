@@ -7,10 +7,11 @@ import type { DataStore } from './data/store';
 import type { ChatService } from './chat/service';
 import type { MainTerminalService } from './terminal/service';
 import type { BrowserManager } from './browser/manager';
+import type { PageModeController } from './browser/page-mode';
 import { WorkspaceFiles } from './files/service';
 import { resolveDropPaths } from './files/drop-paths';
 import { discoverMcpServers, discoverSkills, withoutSecrets } from './extensions/discovery';
-import type { NotebookKind, SettingsPatch, WorkerId, AgentControl, McpServerInput } from '../shared/types';
+import type { NotebookKind, SettingsPatch, WorkerId, AgentControl, McpServerInput, PageRect } from '../shared/types';
 
 function str(value:unknown,label='ID',limit=500): string {
   if(typeof value!=='string'||value.length>limit||!value.trim())throw new Error(`Invalid ${label}.`);
@@ -22,7 +23,7 @@ function record(value:unknown): Record<string,unknown> {
 }
 function kind(value:unknown):NotebookKind {if(value!=='runbook'&&value!=='tasks')throw new Error('Unknown notebook.');return value;}
 
-export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatService, terminal: MainTerminalService, browser: BrowserManager, revokePreviews: (id: string) => void = () => {}, deleteArtifacts: (id: string) => Promise<void> = async () => {}, announceExtensions: ()=>void = () => {}): ()=>void {
+export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatService, terminal: MainTerminalService, browser: BrowserManager, revokePreviews: (id: string) => void = () => {}, deleteArtifacts: (id: string) => Promise<void> = async () => {}, announceExtensions: ()=>void = () => {}, pageModes?: PageModeController): ()=>void {
   const registered: string[]=[];
   const files = new WorkspaceFiles(id => store.getConversation(id).folder);
   const handle=(name:string,run:(...args:any[])=>unknown)=>{
@@ -311,5 +312,26 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('browser.control',(id,mode)=>browser.control(str(id),mode as AgentControl));
   handle('browser.read',(id)=>browser.read(str(id)));
   handle('browser.close',(id)=>browser.close(str(id)));
+  // Design / Annotate: the human's own gestures on a page. Grants are checked
+  // in the controller against the tab as main holds it, never as sent here.
+  if(pageModes){
+    const modeKind=(value:unknown)=>{if(value!=='design'&&value!=='annotate')throw new Error('Unknown page mode.');return value;};
+    const optionalId=(value:unknown)=>value===undefined||value===null?undefined:str(value,'mode',100);
+    handle('browser.mode.arm',(id,value)=>pageModes.arm(str(id),modeKind(value)));
+    handle('browser.mode.disarm',(id,armId)=>pageModes.disarm(str(id),optionalId(armId)));
+    handle('browser.mode.release',(id,armId)=>pageModes.release(str(id),str(armId,'mode',100)));
+    handle('browser.mode.capture',(id,rect)=>{
+      if(rect!==undefined&&rect!==null){
+        const box=record(rect);
+        if(Object.keys(box).some(key=>!['x','y','w','h'].includes(key))||['x','y','w','h'].some(key=>typeof box[key]!=='number'||!Number.isFinite(box[key])))throw new Error('Invalid capture area.');
+        return pageModes.capture(str(id),box as unknown as PageRect);
+      }
+      return pageModes.capture(str(id));
+    });
+    handle('browser.mode.copy',(text,path)=>{
+      if(typeof text!=='string')throw new Error('Clipboard content must be text.');
+      return pageModes.copy(text,path===undefined||path===null?undefined:str(path,'path',8192));
+    });
+  }
   return()=>{for(const channel of registered)ipcMain.removeHandler(channel);};
 }

@@ -9,6 +9,7 @@ import { createWorkerNotebookContext } from './terminal/notebook-context';
 import { BrowserManager } from './browser/manager';
 import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
+import { PageModeController } from './browser/page-mode';
 import { registerIPC } from './ipc';
 import { disposeInOrder } from './lifecycle';
 
@@ -73,6 +74,7 @@ else {
     const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source)});
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>browser.adoptGuest(guest));
+    const pageModes=new PageModeController({pages:browser,dataDir,emit:event=>emit('hello:browser-mode',event)});
     const previews=new LocalPreviewServer();
     const artifactPreviews=new LocalPreviewServer();
     const artifacts=new HtmlArtifacts(dataDir);
@@ -134,7 +136,8 @@ else {
     const unregister=registerIPC(window,store,chat,terminal,browser,id=>previews.closeConversation(id),async id=>{
       artifactPreviews.closeConversation(id);
       await artifacts.removeConversation(id);
-    },()=>emit('hello:extensions-changed',{}));
+      await pageModes.removeConversation(id).catch(()=>{});
+    },()=>emit('hello:extensions-changed',{}),pageModes);
     cleanup=async()=>{
       cleanup=null;
       const failures=await disposeInOrder([
@@ -142,6 +145,7 @@ else {
         {name:'notebook events',dispose:unsubscribeNotebooks},
         {name:'chat',dispose:()=>chat.dispose()},
         {name:'terminals',dispose:()=>terminal.dispose()},
+        {name:'page modes',dispose:()=>pageModes.dispose()},
         {name:'browser',dispose:()=>browser.dispose()},
         {name:'previews',dispose:()=>previews.dispose()},
         {name:'artifact previews',dispose:()=>artifactPreviews.dispose()},

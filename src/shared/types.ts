@@ -90,6 +90,47 @@ export type BrowserLifecycleEvent =
   | { type: 'closed'; id: string; conversationId: string; openerId?: string };
 export interface ViewBounds { x: number; y: number; width: number; height: number; }
 export interface BrowserContent { title: string; url: string; text: string; }
+/**
+ * Page modes: the human points at a page and says something about it. One mode
+ * per tab at a time; both need at least Read on that tab. `design` names an
+ * element; `annotate` marks a zone (its UI arrives separately).
+ */
+export type PageModeKind = 'design' | 'annotate';
+/** A box in the page's own viewport, in its CSS pixels. */
+export interface PageRect { x: number; y: number; w: number; h: number; }
+export interface PagePick {
+  kind: PageModeKind; armId: string; tabId: string;
+  /** The document the pick was made in. */
+  url: string;
+  /** A CSS selector that finds the element again. */
+  selector: string;
+  tag: string;
+  /** Its visible text, collapsed and shortened. */
+  text: string;
+  /** Computed styles worth naming: font, colour, spacing, radius, border, layout. */
+  styles: string;
+  /** The reference block a note about this element starts with. */
+  ref: string;
+  rect: PageRect;
+  /** The page's viewport when the pick was made; rects scale against it. */
+  viewport: { w: number; h: number };
+  at: string;
+}
+export type PageModeExitReason = 'escape' | 'navigated' | 'revoked' | 'hidden' | 'closed';
+export type PageModeEvent =
+  /** Where the highlight is now: the element under the pointer, or the picked one as the page scrolls. */
+  | { type: 'hover'; tabId: string; armId: string; rect: PageRect | null }
+  | { type: 'picked'; tabId: string; armId: string; pick: PagePick; point: { x: number; y: number } }
+  /** The pick ended in the page (a click away from it); the mode stays armed. */
+  | { type: 'released'; tabId: string; armId: string }
+  | { type: 'exit'; tabId: string; armId: string; reason: PageModeExitReason };
+/** What a browser pane hands the chat composer besides words. */
+export interface ChatQuoteExtra {
+  attachments?: ChatAttachment[];
+  /** Insert the text as written rather than as a block quote. */
+  verbatim?: boolean;
+}
+export interface ChatQuote extends ChatQuoteExtra { text: string; }
 export interface ChatEvent { conversationId: string; message: Message; }
 export interface NotebookPaths { runbook: string; tasks: string; }
 export interface Bootstrap { conversations: Conversation[]; settings: AppSettings; workers: WorkerInfo[]; terminals: TerminalSession[]; browsers: BrowserTab[]; dataPath: string; version: string; extensionsCount: number; }
@@ -172,6 +213,20 @@ export interface HelloAPI {
     onLifecycle?(listener: (event: BrowserLifecycleEvent) => void): () => void;
     /** Optional during renderer hot updates against an older desktop preload. */
     onFocus?(listener: () => void): () => void;
+    /** Design / Annotate. Human-only: no agent tool reaches these. */
+    mode: {
+      /** Needs Read or Full on the tab and a page that finished loading. Replaces another mode on the same tab. */
+      arm(tabId: string, kind: PageModeKind): Promise<{ armId: string }>;
+      /** Without armId, ends whatever is armed on the tab. */
+      disarm(tabId: string, armId?: string): Promise<void>;
+      /** Ends the current pick so the page highlights again; the mode stays armed. */
+      release(tabId: string, armId: string): Promise<void>;
+      /** A PNG of the page's viewport, or of `rect` inside it (page CSS pixels), saved in app data. */
+      capture(tabId: string, rect?: PageRect): Promise<{ path: string }>;
+      /** Text, with a capture this controller saved, onto the clipboard as one item. */
+      copy(text: string, path?: string): Promise<void>;
+      onEvent(listener: (event: PageModeEvent) => void): () => void;
+    };
   };
 }
 

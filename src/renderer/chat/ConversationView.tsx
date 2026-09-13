@@ -17,6 +17,7 @@ import {
 import type {
   AppSettings,
   ChatAttachment,
+  ChatQuote,
   Conversation,
   Message,
   MessagePart,
@@ -485,7 +486,7 @@ export function ConversationView({
   onFolderChange: (conversation: Conversation) => void;
   onTerminal: () => void;
   onWorker: (id: WorkerId) => void;
-  quote: string | null;
+  quote: ChatQuote | null;
   onQuoteConsumed: () => void;
   reportError: (error: unknown) => void;
 }) {
@@ -551,13 +552,17 @@ export function ConversationView({
   }, [attachmentDraftKey, attachments]);
   useEffect(() => {
     if (!quote) return;
-    setDraft(
-      (current) =>
-        `${current}${current ? "\n\n" : ""}${quote
-          .split("\n")
-          .map((line) => `> ${line}`)
-          .join("\n")}\n\n`,
-    );
+    // A page read is quoted; a note written about a page is the person's own words.
+    const body = quote.verbatim
+      ? quote.text
+      : quote.text.split("\n").map((line) => `> ${line}`).join("\n");
+    setDraft((current) => `${current}${current ? "\n\n" : ""}${body}\n\n`);
+    const added = quote.attachments ?? [];
+    if (added.length) {
+      if (attachments.length + added.length > 8)
+        setError("Attach up to 8 files per message. Remove an attachment before adding more.");
+      setAttachments((current) => [...current, ...added.filter((item) => !current.some((kept) => kept.id === item.id))].slice(0, 8));
+    }
     onQuoteConsumed();
     field.current?.focus();
   }, [quote, onQuoteConsumed]);

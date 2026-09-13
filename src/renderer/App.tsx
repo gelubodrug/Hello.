@@ -22,6 +22,7 @@ import {
 import type {
   Bootstrap,
   BrowserTab,
+  ChatQuote,
   Conversation,
   Message,
   TerminalSession,
@@ -125,7 +126,7 @@ function Application() {
   const [ending, setEnding] = useState<TerminalSession | null>(null);
   const [launching, setLaunching] = useState(false);
   const [width, setWidth] = useState(window.innerWidth);
-  const [quotes, setQuotes] = useState<Record<string, string | null>>({});
+  const [quotes, setQuotes] = useState<Record<string, ChatQuote | null>>({});
   const appRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(new Set<string>());
@@ -718,10 +719,10 @@ function Application() {
                   )
                 }
                 quote={quotes[conversation.id] ?? null}
-                onQuote={(text) => {
+                onQuote={(text, extra) => {
                   setQuotes((current) => ({
                     ...current,
-                    [conversation.id]: text,
+                    [conversation.id]: { ...extra, text },
                   }));
                   updateUI(conversation.id, {
                     chatOpen: true,

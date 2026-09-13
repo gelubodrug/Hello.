@@ -19,6 +19,8 @@ import {
 import type {
   AppSettings,
   BrowserTab,
+  ChatQuote,
+  ChatQuoteExtra,
   Conversation,
   Message,
   NotebookKind,
@@ -94,8 +96,8 @@ export interface WorkspaceProps {
   onLaunch: (kind: "browser" | "terminal", workerId?: WorkerId) => void;
   onCloseTool: (tool: BrowserTab | TerminalSession) => void;
   onBrowserChange: (tab: BrowserTab) => void;
-  quote: string | null;
-  onQuote: (text: string) => void;
+  quote: ChatQuote | null;
+  onQuote: (text: string, extra?: ChatQuoteExtra) => void;
   onQuoteConsumed: () => void;
   reportError: (error: unknown) => void;
 }
