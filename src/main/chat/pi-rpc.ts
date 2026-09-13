@@ -155,6 +155,19 @@ export class PiRpcProcess {
     return this.request({ type: "prompt", message: text, ...options });
   }
 
+  /**
+   * A correction for the turn already running. Pi delivers it at the next
+   * boundary between steps, not after the whole turn, which is what makes it a
+   * steer rather than a follow-up.
+   */
+  steer(text: string, images?: string[]): Promise<PiRpcResponse> {
+    return this.request({ type: 'steer', message: text, ...(images?.length ? { images } : {}) });
+  }
+  /** Takes back every steer and follow-up Pi is still holding, with their text. */
+  clearQueue(): Promise<PiRpcResponse<string[]>> {
+    return this.request<string[]>({ type: 'clear_queue' }, 5_000);
+  }
+
   /** UI responses are not RPC commands: Pi does not acknowledge them. */
   async respondToExtension(response: {
     id: string;

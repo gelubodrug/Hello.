@@ -42,6 +42,8 @@ export interface DiscoveredMcpServer {
 /** A skill folder another agent tool already has on this Mac. */
 export interface DiscoveredSkill { id: string; name: string; description: string; source: string; path: string; }
 export interface DiscoveredResources { mcp: DiscoveredMcpServer[]; skills: DiscoveredSkill[]; }
+/** A model the endpoint offers, with the limits it publishes for it. */
+export interface ModelChoice { id: string; contextWindow?: number; maxOutputTokens?: number; }
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
 export interface ResourceChange { conversationId?: string }
 export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; createdAt: number; updatedAt: number; }
@@ -63,8 +65,12 @@ export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 export type ApprovalMode = 'ask' | 'writes' | 'all';
 /** A provider the user asked this app to keep, so switching is a click and not a retyped URL. Its key lives under its endpoint, never in this record. */
 export interface SavedConnection { name: string; endpointUrl: string; model: string; apiKeySet: boolean; }
-export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; connections: SavedConnection[]; }
+export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; connections: SavedConnection[]; }
 export type SettingsPatch = Partial<Omit<AppSettings, 'apiKeySet' | 'connections'>> & { apiKey?: string };
+/** Where a message the person wrote during a run is meant to land. */
+export type QueuedMode = 'steer' | 'next' | 'later';
+/** Their words, waiting. Not part of the conversation until it is delivered. */
+export interface QueuedMessage { id: string; conversationId: string; text: string; mode: QueuedMode; createdAt: number; }
 export interface WorkerInfo { id: WorkerId; label: string; installed: boolean; usesActiveModel: boolean; }
 export interface TerminalSession { id: string; conversationId: string; title: string; kind: 'terminal' | 'worker'; workerId?: WorkerId; cwd: string; status: 'running' | 'exited'; exitCode?: number; notebookContext?: boolean; }
 export interface TerminalData { id: string; data: string; sequence: number; }
@@ -74,7 +80,11 @@ export interface BrowserTab { id: string; conversationId: string; title: string;
   /** Bumped when the page must be re-created; the renderer keys its guest on it. */
   generation?: number;
   /** The isolated session a generated preview runs in, chosen by the main process. */
-  partition?: string; }
+  partition?: string;
+  /** How to produce this page again: `artifact:<id>` for a generated document,
+   *  or a path inside the chat's folder. A local URL dies with the app; a
+   *  handle does not, so this is what a tab is saved by. */
+  source?: string; }
 export type BrowserLifecycleEvent =
   | { type: 'opened'; tab: BrowserTab; foreground: boolean; userRequested?: boolean }
   | { type: 'closed'; id: string; conversationId: string; openerId?: string };
@@ -104,7 +114,7 @@ export interface HelloAPI {
   settings: {
     get(): Promise<AppSettings>;
     save(patch: SettingsPatch): Promise<AppSettings>;
-    models(): Promise<string[]>;
+    models(): Promise<ModelChoice[]>;
     /** Keeps the endpoint and model as currently saved under a name. */
     rememberConnection(name: string): Promise<AppSettings>;
     /** Makes a remembered connection the active endpoint and model. */
@@ -112,7 +122,7 @@ export interface HelloAPI {
     /** Drops a remembered connection and the key stored for its endpoint. */
     forgetConnection(endpointUrl: string): Promise<AppSettings>;
   };
-  chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; };
+  chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; dropQueued(id: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; };
   notebooks: { list(conversationId: string, kind: NotebookKind): Promise<NotebookEntry[]>; save(input: { id?: string; conversationId: string; kind: NotebookKind; title: string; body: string; expectedUpdatedAt?: number }): Promise<NotebookEntry>; delete(id: string): Promise<void>; paths(conversationId: string): Promise<NotebookPaths>; onChange?(listener: (event: NotebookChange) => void): () => void; };
   extensions: {
     list(): Promise<LibraryResource[]>;

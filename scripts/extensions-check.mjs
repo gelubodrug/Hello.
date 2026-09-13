@@ -415,7 +415,7 @@ try {
   await foundRow.waitFor();
   assert.match(await foundRow.innerText(), /Agent skills/);
   await capture(scanning, 'discovered');
-  await scanning.getByRole('button', { name: 'Close Settings', exact: true }).click();
+  await scanning.getByRole('button', { name: 'Back', exact: true }).click();
   const adopted = await scanning.evaluate(async ({ serverId, skillId }) => {
     const added = await window.hello.extensions.importDiscovered('mcp', serverId);
     const copied = await window.hello.extensions.importDiscovered('skill', skillId);

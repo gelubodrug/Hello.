@@ -130,7 +130,12 @@ svg {
   min-width: 0;
   gap: var(--sp-4);
   padding-right: var(--sp-8);
-  -webkit-app-region: drag;
+  /* Not a drag region. A draggable ancestor has to have every control inside it
+     carved back out one rect at a time, and a control that loses its carve-out
+     stops responding entirely — the press becomes a window drag. Dragging is
+     granted to leaves instead: the app name and the strip by the window
+     controls. Nothing interactive is ever inside a drag region. */
+  -webkit-app-region: no-drag;
   background: var(--surface-sidebar);
 }
 .titlebar-brand {
@@ -142,10 +147,11 @@ svg {
   padding-left: var(--window-control-inset);
   padding-right: var(--sp-8);
 }
+.titlebar-brand > strong { -webkit-app-region: drag; }
 .titlebar-brand strong, .brand-notice {
   flex: 1;
   font-size: var(--fs-15);
-  font-weight: var(--fw-medium);
+  font-weight: 500;
 }
 .brand-notice {
   position: relative;
@@ -221,7 +227,7 @@ svg {
 .window-drag-strip {
   position: absolute;
   top: 0;
-  left: var(--sp-4);
+  left: 0;
   width: var(--window-control-inset);
   height: var(--titlebar-height);
   z-index: 5;
@@ -506,7 +512,70 @@ svg {
 }
 .workspace-folder {
   overflow-wrap: anywhere;
+  color: var(--ink-tertiary);
 }
+.workspace-folder span {
+  display: block;
+  color: var(--ink-secondary);
+}
+/* What a chat can hold — and each row opens it. */
+.workspace-context-tools {
+  margin: calc(var(--sp-32) * 2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-4);
+  font-size: var(--fs-12);
+}
+/* The pressable thing is the name and its icon, on one line. The explanation
+   sits under it, outside the button: not a target, not part of the highlight. */
+.workspace-context-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  max-width: 100%;
+  padding: var(--sp-4) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-context-tools button:hover { background: var(--surface-hover); }
+.workspace-context-tools button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+.workspace-context-tools svg {
+  flex: none;
+  opacity: 0.7;
+}
+.workspace-context-tools span { color: var(--ink-primary); }
+/* Barely there, and aligned under the name it belongs to. */
+.workspace-context-tools small {
+  display: block;
+  margin-left: calc(16px + var(--sp-8) + var(--sp-8));
+  color: var(--ink-disabled);
+  opacity: 0.45;
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-context-tools li:hover small { opacity: 0.85; }
+/* In the tools pane the list stands in the top right and stays until pressed. */
+.tools-empty-list {
+  margin: var(--sp-16);
+  align-content: start;
+  justify-items: end;
+}
+.tools-empty-list li { display: flex; justify-content: flex-end; }
+/* The workers a CLI worker row unfolds into. */
+.workspace-context-tools .tool-choice { margin-left: var(--sp-16); }
+.workspace-context-tools button[disabled] { opacity: 0.5; cursor: default; }
+
 .workspace-body[data-pane-layout="chat-only"] > .chat-stage {
   flex: 0 1 600px;
   padding: var(--sp-16);
@@ -578,8 +647,19 @@ svg {
   flex: 1;
   width: 100%;
 }
+/* With tools open the chat is not a card sitting on the app — it is the app.
+   No rim, no radius, no edge: the frame belongs to the pane that looks onto
+   something else. The standalone floating composition keeps its own card. */
 .chat-stage[data-pinned="true"] .chat-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
+}
+/* One window in the workspace, so let it breathe on the three sides that meet
+   the frame. The splitter already gives it room on the side facing the chat. */
+.workspace-body > .tools-card {
+  margin: var(--sp-4) var(--sp-4) var(--sp-4) 0;
 }
 .chat-stage[data-minimized="true"] .chat-card {
   flex: 0 0 auto;
@@ -649,7 +729,7 @@ svg {
   background: transparent;
   color: inherit;
   font-size: var(--fs-11);
-  font-weight: var(--fw-medium);
+  font-weight: 500;
 }
 .tab-pill > .pill-close {
   width: var(--control-sm);
@@ -666,6 +746,21 @@ svg {
 }
 .chat-page-tab > svg {
   flex: none;
+}
+.chat-page-tab { position: relative; }
+.chat-page-tab__dot {
+  position: absolute;
+  top: 5px;
+  left: calc(var(--sp-8) + 11px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1.5px var(--surface-sidebar);
+  pointer-events: none;
+}
+.tab-pill[data-active="true"] .chat-page-tab__dot {
+  box-shadow: 0 0 0 1.5px var(--surface-raised);
 }
 .chat-page-tab__label {
   display: grid;
@@ -731,6 +826,7 @@ svg {
   background: var(--ink-tertiary);
 }
 .tools-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -760,23 +856,7 @@ svg {
   min-width: 0;
   min-height: 0;
 }
-.tools-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  padding: var(--sp-32);
-  gap: var(--sp-12);
-  color: var(--ink-tertiary);
-  text-align: center;
-}
-.tools-empty h2 {
-  color: var(--ink-secondary);
-}
-.tools-empty p {
-  max-width: 32ch;
-}
+
 .session-ended {
   width: 5px;
   height: 5px;
@@ -825,7 +905,7 @@ svg {
 }
 .conversation-empty h2 {
   font-size: var(--fs-16);
-  font-weight: var(--fw-medium);
+  font-weight: 500;
 }
 .conversation-empty p {
   color: var(--ink-tertiary);
@@ -945,7 +1025,7 @@ svg {
 .source-icon { display: grid; place-items: center; flex: none; width: 20px; height: 20px; color: var(--ink-tertiary); }
 .source-icon img { display: block; width: 20px; height: 20px; object-fit: contain; border-radius: var(--r-6); }
 .menu-popup.sources-menu { width: min(420px, calc(100vw - 24px)); max-width: min(420px, calc(100vw - 24px)); }
-.menu-heading { padding: var(--sp-8) var(--sp-12); color: var(--menu-muted); font-size: var(--fs-13); font-weight: var(--fw-medium); }
+.menu-heading { padding: var(--sp-8) var(--sp-12); color: var(--menu-muted); font-size: var(--fs-13); font-weight: 500; }
 .sources-menu .menu-item { align-items: flex-start; padding-block: var(--sp-12); }
 .sources-menu .menu-item-copy { color: var(--menu-muted); font-size: var(--fs-12); }
 .sources-menu .menu-item-copy small { color: var(--menu-ink); font-size: var(--fs-13); line-height: 1.45; margin-top: 2px; }
@@ -982,24 +1062,19 @@ svg {
 .activity-summary { width: 100%; }
 .activity-summary-copy { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-8); min-width: 0; }
 .activity-counts { color: var(--ink-tertiary); }
-.activity-state { flex: 0 1 auto; max-width: 45%; margin-left: auto; text-align: right; }
+.activity-summary .activity-state { flex: 0 1 auto; max-width: 45%; margin-left: auto; text-align: right; }
 .activity-group[data-approval="true"] > .activity-summary .activity-state { color: var(--color-warning); }
 .activity-group[data-failed="true"] > .activity-summary .activity-state { color: var(--color-error); }
 .activity-detail {
-  max-height: calc(10 * var(--control-md) + 9 * var(--sp-4));
-  overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
-  scrollbar-gutter: stable;
   margin: var(--sp-4) 0 0;
-  padding-left: var(--sp-12);
-  border-left: 1px solid var(--surface-edge);
 }
 .activity-entries { display: flex; flex-direction: column; gap: var(--sp-4); }
 .activity-entries > * { flex-shrink: 0; min-width: 0; }
-.activity-entries > .markdown { margin: var(--sp-8) 0; color: var(--ink-secondary); font-size: var(--fs-13); }
+.activity-entries > .markdown,
+.activity-entries > .activity-note > .activity-note-body > .markdown { margin: var(--sp-8) 0; color: var(--ink-secondary); }
 .tool-query { color: var(--ink-tertiary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-metadata { margin: 0 0 var(--sp-8); color: var(--ink-tertiary); font-size: var(--fs-11); }
+.activity-metadata { margin: 0 0 var(--sp-8); color: var(--ink-tertiary); }
 .web-tool-argument { overflow-wrap: anywhere; white-space: pre-wrap; margin-block: var(--sp-4) var(--sp-12); color: var(--ink-secondary); }
 .web-tool-output { min-width: 0; font-size: var(--fs-13); }
 .web-search-results { margin: 0; padding-left: var(--sp-20); }
@@ -1079,10 +1154,8 @@ svg {
 .thinking-part,
 .tool-part {
   min-width: 0;
-  margin: 0 0 var(--sp-8);
+  margin: 0;
 }
-.activity-entries > .thinking-part,
-.activity-entries > .tool-part { margin: 0; }
 .disclosure-button {
   display: flex;
   align-items: center;
@@ -1094,12 +1167,10 @@ svg {
   border-radius: var(--r-6);
   padding: 0;
   font-size: var(--fs-12);
+  line-height: var(--lh-normal);
   text-align: left;
 }
-.disclosure-button small {
-  color: var(--ink-tertiary);
-  font-size: var(--fs-11);
-}
+
 .activity-summary > svg,
 .activity-step > svg { flex: none; }
 .disclosure-chevron {
@@ -1119,19 +1190,29 @@ svg {
 .thinking-toggle {
   width: fit-content;
   max-width: 100%;
-  font-family: var(--font-ui);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-regular);
-  line-height: var(--lh-relaxed);
 }
+/* Inside the activity list a thought and a tool step are the same kind of row,
+   so they are set the same way. A thinking part standing on its own in the
+   answer keeps its larger, quieter voice. */
 @supports ((background-clip: text) or (-webkit-background-clip: text)) {
-  .thinking-part[data-active="true"] .thinking-label {
-    background-image: var(--thinking-gradient);
+  /* The sweep runs whether or not it is painted. Adding the animation when a
+     step becomes active restarts it, and a restart per arriving token is the
+     flashing: the animation must outlive the state it illustrates. */
+  .thinking-label,
+  .tool-part .tool-action-title,
+  .activity-group .activity-state {
     background-size: 200% 100%;
+    animation: thinking-shimmer var(--thinking-shimmer-cycle) linear infinite;
+  }
+  /* Work in progress reads as work in progress: the row that is running says so
+     where it stands, rather than only in a word at the far right. */
+  .thinking-part[data-active="true"] .thinking-label,
+  .tool-part[data-status="running"] .tool-action-title,
+  .activity-group .activity-state[data-running="true"] {
+    background-image: var(--thinking-gradient);
     background-clip: text;
     -webkit-background-clip: text;
     color: transparent;
-    animation: thinking-shimmer var(--thinking-shimmer-cycle) linear infinite;
   }
 }
 @keyframes thinking-shimmer {
@@ -1140,16 +1221,11 @@ svg {
 }
 .thinking-body {
   padding: var(--sp-8) 0;
-  font-size: var(--fs-15);
   color: var(--ink-tertiary);
 }
 .tool-detail {
-  padding: var(--sp-8) 0 var(--sp-8) var(--sp-12);
-  border-left: 1px solid var(--surface-edge);
-  font-size: var(--fs-13);
+  padding: var(--sp-8) 0;
 }
-.activity-detail .thinking-body,
-.activity-detail .tool-detail { border-left: 0; padding-left: 0; }
 .tool-part[data-status="error"] > .disclosure-button {
   color: var(--color-error);
 }
@@ -1429,8 +1505,8 @@ svg {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
-  padding: var(--sp-8);
-  margin-bottom: var(--sp-4);
+  padding: var(--sp-4) var(--sp-8);
+  margin-bottom: 0;
   background: var(--menu-fill);
   border-bottom: 1px solid var(--menu-separator);
   color: var(--menu-muted);
@@ -1443,9 +1519,9 @@ svg {
   border-radius: var(--r-6);
   background: var(--surface-raised);
   color: var(--menu-ink);
-  padding: var(--sp-8);
+  padding: var(--sp-4) var(--sp-8);
   font: inherit;
-  font-size: var(--fs-13);
+  font-size: var(--fs-12);
 }
 .menu-search input::placeholder { color: var(--menu-muted); }
 .menu-empty { margin: 0; padding: var(--sp-12); color: var(--menu-muted); font-size: var(--fs-13); }
@@ -1546,6 +1622,69 @@ svg {
   font-size: var(--fs-12);
   color: var(--ink-secondary);
 }
+/* Settings is a place, not a dialog: sections down the left, one column of
+   options in the middle, over the whole window. */
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  background: var(--surface-sidebar);
+  color: var(--ink-primary);
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-16) var(--sp-12);
+  border-right: 1px solid var(--surface-edge);
+  -webkit-app-region: drag;
+}
+.settings-nav > * { -webkit-app-region: no-drag; }
+.settings-nav h2 {
+  margin: var(--sp-24) var(--sp-8) var(--sp-8);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--ink-tertiary);
+}
+.settings-nav ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.settings-back,
+.settings-nav li button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: var(--sp-8) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-back { margin-top: var(--sp-32); color: var(--ink-tertiary); }
+.settings-back:hover,
+.settings-nav li button:hover { background: var(--surface-hover); color: var(--ink-primary); }
+.settings-nav li button[aria-current="true"] {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+.settings-back:focus-visible,
+.settings-nav li button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+.settings-content {
+  overflow-y: auto;
+  padding: calc(var(--sp-32) * 2) var(--sp-32) var(--sp-32);
+}
+.settings-content > * {
+  width: min(640px, 100%);
+  margin: 0 auto;
+}
 .settings-form .checkbox-label {
   flex-direction: row;
   align-items: center;
@@ -1626,7 +1765,7 @@ svg {
 }
 .welcome h1 {
   font-size: 24px;
-  font-weight: var(--fw-medium);
+  font-weight: 500;
 }
 .welcome p {
   color: var(--ink-tertiary);
@@ -1890,6 +2029,9 @@ svg {
 }
 .extension-disclosure[aria-expanded="true"] .extension-chevron { transform: rotate(90deg); }
 .extension-name { font-weight: 500; }
+/* An edit belongs under the thing it edits. */
+.extension-row-form { padding: var(--sp-12); }
+.extension-row-form .extension-form { margin: 0; }
 /* Found-elsewhere rows carry no disclosure, so their name is indented to line
    up with the installed ones above them. */
 .extension-found .extension-name { padding-left: calc(14px + var(--sp-8)); }
@@ -1964,6 +2106,16 @@ svg {
   position: relative;
   color: var(--ink-primary);
 }
+/* Something in the library this chat is not using yet. */
+.extension-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--ink-tertiary);
+}
 .extension-count {
   position: absolute;
   top: 2px;
@@ -1979,3 +2131,115 @@ svg {
   font-weight: 600;
   text-align: center;
 }
+
+/* Messages written while the model was still working. They sit over the
+   composer, not in the transcript: until one is delivered it is a draft, and a
+   draft belongs where you type. Same pill vocabulary as the tab strip, but
+   full width, because these carry sentences rather than names. */
+.pending-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin: 0 0 var(--sp-8);
+  padding: 0;
+  list-style: none;
+}
+.pending-message {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-8);
+  border: 1px solid var(--surface-edge);
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+}
+.pending-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex: none;
+  padding: 2px var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-active);
+  color: var(--ink-secondary);
+  font-size: var(--fs-11);
+}
+.pending-mode:hover { color: var(--ink-primary); }
+.pending-message[data-mode="steer"] .pending-mode { color: var(--color-accent); }
+.pending-text,
+.pending-edit {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+}
+.pending-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.pending-edit { resize: none; line-height: var(--lh-normal); }
+.pending-message > .icon-button { width: var(--control-sm); height: var(--control-sm); }
+
+/* The work happening now, in place under a collapsed summary. Same rail as the
+   full list so opening it is a continuation, not a jump; no bounded viewport,
+   because a tail that scrolls is the list again. */
+.activity-tail {
+  margin: var(--sp-4) 0 0;
+}
+
+/* Commentary inside the activity list. Short enough to say, it is said; longer
+   than that, it folds to the same single row as the thinking and the tools
+   beside it, so the list has one tier and not two. */
+.activity-note { min-width: 0; }
+.activity-note-body {
+  overflow: hidden;
+  transition: max-height var(--motion-base) var(--ease-out);
+}
+.activity-note[data-folded="true"] > .activity-note-body {
+  max-height: 0;
+  transition: max-height var(--motion-fast) var(--ease-in);
+}
+.activity-note > .activity-note-body > .markdown {
+  margin: var(--sp-8) 0;
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+}
+/* A file printed out loud must not become the page: it scrolls in its own box. */
+.activity-note-body pre { max-height: 240px; overflow: auto; }
+
+/* A run said once. Its members are rows of the same tier, set off by
+   whitespace: a heading for rows, never a card around them. */
+.merged-steps { padding-left: var(--sp-16); }
+
+/* Quick filters for a searchable menu: what kind of thing, one tap. Typing
+   stays the way to find a particular one — these only narrow the field. */
+.menu-filters {
+  position: sticky;
+  top: calc(-1 * var(--menu-padding) + var(--control-md));
+  z-index: 1;
+  display: flex;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-8) var(--sp-8);
+  background: var(--menu-fill);
+  border-bottom: 1px solid var(--menu-separator);
+  margin-bottom: var(--sp-4);
+}
+.menu-filter {
+  padding: 2px var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--menu-muted);
+  font: inherit;
+  font-size: var(--fs-11);
+}
+.menu-filter:hover { color: var(--menu-ink); background: var(--menu-hover); }
+.menu-filter[aria-pressed="true"] { color: var(--menu-ink); background: var(--menu-active); }

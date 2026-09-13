@@ -354,3 +354,27 @@ describe('tool authority boundaries', () => {
     expect(browser.navigate).not.toHaveBeenCalled();
   });
 });
+
+describe('a folder whose name ends in a space', () => {
+  it('names the folder in the refusal, because the difference is invisible', async () => {
+    const { mkdtemp, mkdir } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const base = await mkdtemp(join(tmpdir(), 'hello-space-'));
+    // Both exist on the user's disk; the chat is attached to the one with the
+    // space, and any sensible path written without it is a different directory.
+    const attached = join(base, 'globe ');
+    await mkdir(attached);
+    await mkdir(join(base, 'globe'));
+    const error = await scopedPath(attached, join(base, 'globe')).then(() => null, (reason: Error) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(`"${attached}"`);
+    expect((error as Error).message).toContain('relative to it');
+    // And the folder itself, named exactly, is still allowed — compared after
+    // the symlinked ancestor is resolved, as everywhere else here.
+    const { realpath } = await import('node:fs/promises');
+    const real = await realpath(attached);
+    await expect(scopedPath(attached, attached)).resolves.toBe(real);
+    await expect(scopedPath(attached, '.')).resolves.toBe(real);
+  });
+});

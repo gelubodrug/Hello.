@@ -4,7 +4,7 @@ import { readWebResult, type WebSource } from '../../shared/web';
 import { api } from '../api';
 import { ErrorNote, MenuButton } from '../ui/primitives';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { activitySummary } from './activity';
+import { activitySummary, stepLabel } from './activity';
 import { ChatDisclosure } from './ChatDisclosure';
 
 const host = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
@@ -19,22 +19,18 @@ function SourceIcon({ url }: { url: string }) {
   </span>;
 }
 
-export function ActivityGroup({ parts, streaming, children }: {
-  parts: readonly MessagePart[]; streaming: boolean; children: ReactNode;
+export function ActivityGroup({ parts, streaming, tail, children }: {
+  parts: readonly MessagePart[]; streaming: boolean; tail?: ReactNode; children: ReactNode;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
-  const viewport = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
   const id = useId();
   const summary = activitySummary(parts);
-  const open = override ?? (streaming || summary.failed > 0 || summary.approvals > 0 || summary.unfinished > 0);
-  useLayoutEffect(() => {
-    const node = viewport.current;
-    // Only follow live additions inside this bounded viewport. Reading earlier
-    // steps or using a disclosure must not move the reader or outer transcript.
-    if (node && open && streaming && following.current && !node.contains(document.activeElement))
-      node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
-  }, [parts, streaming, open]);
+  // Anything that wants the reader opens the whole list. Otherwise, while the
+  // reply is still arriving, only the tail shows: the list unrolling in full is
+  // what made this ugly, and the work happening now is what is worth seeing.
+  const attention = summary.failed > 0 || summary.approvals > 0;
+  const open = override ?? (attention || (!streaming && summary.unfinished > 0));
+  const live = override === null && streaming && !open && tail !== undefined;
   const states = [summary.failed ? `${summary.failed} failed` : '', summary.approvals ? 'Needs approval' : '',
     summary.unfinished ? (streaming ? 'Running' : 'Unfinished') : ''].filter(Boolean).join(' · ');
   return <div className="activity-group" data-failed={summary.failed > 0 || undefined} data-approval={summary.approvals > 0 || undefined}>
@@ -43,22 +39,14 @@ export function ActivityGroup({ parts, streaming, children }: {
       <span className="activity-summary-copy"><span>{summary.title}</span>
         {summary.counts && <span className="activity-counts">{summary.counts}</span>}</span>
       <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
-      {states && <small className="activity-state">{states}</small>}
+      {states && <small className="activity-state" data-running={streaming && summary.unfinished > 0 || undefined}>{states}</small>}
     </button>
+    {live && <div className="activity-tail"><div className="activity-entries">{tail}</div></div>}
     <ChatDisclosure id={id} open={open} className="activity-reveal">
-    <div ref={viewport} className="activity-detail"
-      role="region" aria-label={`${summary.title} steps`} tabIndex={0}
-      onScroll={event => {
-        if (event.target !== event.currentTarget) return;
-        const node = event.currentTarget;
-        following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 16;
-      }}
-      onWheelCapture={event => { if (event.deltaY < 0) following.current = false; }}
-      onKeyDownCapture={event => {
-        if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) following.current = false;
-      }}
-      onClickCapture={() => { following.current = false; setOverride(true); }}
-      onContextMenuCapture={() => { following.current = false; setOverride(true); }}>
+    {/* The transcript is the only scroll; nothing here follows or is followed. */}
+    <div className="activity-detail" role="region" aria-label={`${summary.title} steps`}
+      onClickCapture={() => setOverride(true)}
+      onContextMenuCapture={() => setOverride(true)}>
       <div className="activity-entries">{children}</div>
     </div>
     </ChatDisclosure>
@@ -73,15 +61,10 @@ export function webToolArgument(part: Extract<MessagePart, { type: 'tool' }>): s
   } catch { return null; }
 }
 
+/** One list of names for every tool, in activity.ts, so a tool cannot ship
+ *  without one and the merged form cannot disagree with the single one. */
 export function webToolTitle(part: Extract<MessagePart, { type: 'tool' }>): string {
-  if (part.name === 'browser_show_html') return part.status === 'complete' ? 'Created visual' : 'Create visual';
-  if (part.name === 'browser_open') return part.status === 'complete' ? 'Opened in Browser' : 'Open in Browser';
-  try {
-    const input = JSON.parse(part.input);
-    if (part.name === 'web_search') return part.status === 'complete' ? 'Searched web' : 'Search web';
-    if (part.name === 'fetch_url') return typeof input.url === 'string' ? `Read ${host(input.url)}` : 'Read web page';
-  } catch { /* Arguments are still streaming. */ }
-  return part.name === 'web_search' ? (part.status === 'complete' ? 'Searched web' : 'Search web') : part.name === 'fetch_url' ? 'Read web page' : part.name;
+  return stepLabel([part]);
 }
 
 export function WebToolOutput({ part }: { part: MessagePart }) {

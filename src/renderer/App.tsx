@@ -320,6 +320,13 @@ function Application() {
   useEffect(() => {
     if (searching) searchRef.current?.focus();
   }, [searching, sidebarVisible]);
+  useEffect(() => {
+    // Selecting a chat that sits below the fold — a new one, or one reached
+    // from search — must bring its row into view, or the selection is invisible.
+    appRef.current
+      ?.querySelector<HTMLElement>('.chat-list-row[data-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [shell.activeId, boot?.conversations.length]);
   const changeConversation = useCallback(
     (conversation: Conversation) =>
       setBoot((current) =>
@@ -350,7 +357,10 @@ function Application() {
         },
       };
     }, typeof patch !== "function" &&
-      Object.keys(patch).every(key => ["chatTab", "toolId", "focus"].includes(key))
+      // `split` is a resize the pointer already performed: the splitter writes
+      // --chat-share live, so animating the commit replays a reveal over
+      // geometry that never changed. Selection is not a layout transition either.
+      Object.keys(patch).every(key => ["chatTab", "toolId", "focus", "split"].includes(key))
       ? "instant" : "animate");
   const toggleSidebarPin = () => request(current => {
     const id = current.activeId;
@@ -376,7 +386,14 @@ function Application() {
   const newChat = async () => {
     try {
       const conversation = await api.conversations.create();
-      changeConversation(conversation);
+      // The list is ordered most-recent-first, so a new chat belongs at its
+      // head. Appending it put the chat out of sight at the end of the list,
+      // which read as the button doing nothing at all.
+      setBoot((current) =>
+        current
+          ? { ...current, conversations: [conversation, ...current.conversations] }
+          : current,
+      );
       select(conversation.id);
     } catch (reason) {
       reportError(reason);

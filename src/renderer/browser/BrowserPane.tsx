@@ -33,7 +33,6 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
   const place = useRef<() => void>(() => {});
   const size = useRef({ width: 1024, height: 720 });
   useLayoutEffect(()=>{
-    if(isStartPage||tab.error)return;
     const host=document.createElement('div');
     host.className='browser-guest-host';
     (document.getElementById('root')??document.body).appendChild(host);
@@ -45,7 +44,10 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
         const slot=viewport.current;
         if(!slot)return;
         const rect=slot.getBoundingClientRect();
-        const shown=shownRef.current&&rect.width>2&&rect.height>2;
+        // A start page or a failed load shows app chrome in the pane, so the
+        // page is parked behind it — but it still exists, because navigating
+        // from that start page is what asks it to load something.
+        const shown=shownRef.current&&pageRef.current&&rect.width>2&&rect.height>2;
         // A page that is not on screen is parked off it, at a real size and
         // still rendered: Chromium creates no page for an element that is
         // hidden or has no area, and a chat's tabs must stay readable with
@@ -92,15 +94,17 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
       // Name the page this host created, so a late unmount cannot close a newer one.
       void api.browser.detach(tab.id,mounted.split('hello-attach-')[1]).catch(()=>{});
     };
-    // Normalised: an error that flips between undefined and null must not tear
-    // down the page and take the load in flight with it.
-  },[tab.id,tab.generation??0,isStartPage,Boolean(tab.error)]);
+    // The page outlives a start page and a failed load: only a different tab,
+    // or main asking for a fresh page, replaces it.
+  },[tab.id,tab.generation??0]);
   const shownRef = useRef(visible);
+  const pageRef = useRef(!isStartPage&&!tab.error);
   useEffect(()=>{
     shownRef.current=visible;
+    pageRef.current=!isStartPage&&!tab.error;
     place.current();
-    void api.browser.setActive(visible?tab.id:null).catch(()=>{});
-  },[visible,tab.id]);
+  },[visible,isStartPage,tab.error]);
+  useEffect(()=>{void api.browser.setActive(visible?tab.id:null).catch(()=>{});},[visible,tab.id]);
   const run=async(task:()=>Promise<unknown>)=>{setError('');try{await task();}catch(e){setError((e as Error).message);}};
   const navigate=()=>run(()=>api.browser.navigate(tab.id,address));
   const mode=modes.find(item=>item.value===tab.control)!;

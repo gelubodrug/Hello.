@@ -70,13 +70,13 @@ else {
     window.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
     const emit=(channel:string,event:unknown)=>{if(!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(channel,event);};
     const unsubscribeNotebooks=store.subscribeNotebooks(event=>emit('hello:notebooks-changed',event));
-    const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event)});
+    const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source)});
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>browser.adoptGuest(guest));
     const previews=new LocalPreviewServer();
     const artifactPreviews=new LocalPreviewServer();
     const artifacts=new HtmlArtifacts(dataDir);
-    const openArtifact=async(conversationId:string,id:string,signal?:AbortSignal)=>{
+    const serveArtifact=async(conversationId:string,id:string,signal?:AbortSignal)=>{
       signal?.throwIfAborted();
       store.getConversation(conversationId);
       const artifact=await artifacts.get(conversationId,id);
@@ -84,7 +84,16 @@ else {
       const url=await artifactPreviews.open(conversationId,artifact.folder,artifact.path);
       signal?.throwIfAborted();
       store.getConversation(conversationId);
-      return browser.agentOpen(conversationId,url,signal,{sessionOnly:true,isolated:true});
+      return url;
+    };
+    const openArtifact=async(conversationId:string,id:string,signal?:AbortSignal)=>
+      browser.agentShow(conversationId,await serveArtifact(conversationId,id,signal),signal,`artifact:${id}`);
+    /** A page produced again from the handle its tab was saved by. */
+    const serveSource=async(conversationId:string,source:string,signal?:AbortSignal)=>{
+      if(source.startsWith('artifact:'))return serveArtifact(conversationId,source.slice('artifact:'.length),signal);
+      const folder=store.getConversation(conversationId).folder;
+      if(!folder)throw new Error('This chat no longer has the folder that page came from.');
+      return previews.open(conversationId,folder,source);
     };
     const openInBrowser=async(conversationId:string,destination:string,signal?:AbortSignal)=>{
       signal?.throwIfAborted();
@@ -101,7 +110,7 @@ else {
           throw new Error('The chat folder changed. Open the preview again.');
         }
       }
-      return browser.agentOpen(conversationId,url,signal,{sessionOnly:local,isolated:local});
+      return browser.agentOpen(conversationId,url,signal,{sessionOnly:local,isolated:local,...(local?{source:destination}:{})});
     };
     const showHtmlInBrowser=async(conversationId:string,html:string,signal?:AbortSignal)=>{
       signal?.throwIfAborted();
@@ -118,6 +127,10 @@ else {
     const terminal=new MainTerminalService({lookupConversation(id){try{return store.getConversation(id);}catch{return undefined;}},endpoint:()=>({...store.getSettings(),apiKey:store.getApiKey()}),notebookPaths:id=>store.notebookPaths(id),openNotebookContext:(conversationId,cwd)=>createWorkerNotebookContext({store,conversationId,cwd,userDataDir:dataDir}),userDataDir:dataDir,emitData:event=>emit('hello:terminal-data',event),emitExit:event=>emit('hello:terminal-exit',event)});
     terminalService=terminal;
     const chat=new ChatService({store,emit:event=>emit('hello:chat-event',event),browser:{open:openInBrowser,showHtml:showHtmlInBrowser,getTabs:id=>browser.listForAgent(id),read:(conversationId,id,signal)=>browser.read(id,conversationId,signal),navigate:(conversationId,id,url,signal)=>browser.agentNavigate(conversationId,id,url,signal),click:(conversationId,id,selector,signal)=>browser.agentAction(conversationId,id,'click',selector,'',signal),type:(conversationId,id,selector,text,signal)=>browser.agentAction(conversationId,id,'type',selector,text,signal),scroll:(conversationId,id,deltaY,signal)=>browser.agentAction(conversationId,id,'scroll','',deltaY,signal)}});
+    // Settle the selected model's published limits once at startup, so a
+    // profile stored before this app knew how to ask still launches on the
+    // model's real context window rather than the shipped default.
+    void chat.settleModelLimits();
     const unregister=registerIPC(window,store,chat,terminal,browser,id=>previews.closeConversation(id),async id=>{
       artifactPreviews.closeConversation(id);
       await artifacts.removeConversation(id);

@@ -55,6 +55,21 @@ function object(value: unknown): WireObject | undefined {
 function string(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
+/**
+ * Pi passes a provider's own vocabulary straight through. A person reading the
+ * chat needs to know whether the response failed on their side or the model's,
+ * and the raw phrase says neither. The reason is kept, never discarded.
+ */
+export function readableProviderError(message: string): string {
+  const match = /^Provider finish_reason:\s*(.+)$/.exec(message.trim());
+  if (!match) return message;
+  const reason = match[1].trim();
+  if (reason === 'content_filter')
+    return 'The provider stopped this response: its own content filter rejected it.';
+  if (reason === 'network_error')
+    return 'The connection to the provider dropped before this response finished.';
+  return `The provider ended this response with an error before it finished (finish_reason: ${reason}). Retry, or pick another model.`;
+}
 function count(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -159,7 +174,13 @@ export class PiEventMapper {
         if (part.status === 'running' || part.status === 'approval') {
           part.status = 'error';
           delete part.approvalId;
-          part.output ??= this.aborted ? 'Execution stopped.' : 'Pi settled without a tool completion result.';
+          // A response cut off mid-call leaves a tool that was requested and
+          // never run. Saying "failed" implies it ran; it did not.
+          part.output ??= this.aborted
+            ? 'Execution stopped.'
+            : this.pendingError
+              ? 'The response ended before this tool ran.'
+              : 'Pi settled without a tool completion result.';
           this.finishToolTiming(part, at);
         }
       }
@@ -207,7 +228,10 @@ export class PiEventMapper {
         const reason = string(incoming.stopReason);
         if (reason === 'error' || reason === 'aborted') {
           this.aborted = reason === 'aborted';
-          this.pendingError = string(incoming.errorMessage) ?? string(incoming.error) ?? (this.aborted ? 'Request aborted.' : 'The model could not complete this response.');
+          const reported = string(incoming.errorMessage) ?? string(incoming.error);
+          this.pendingError = reported
+            ? readableProviderError(reported)
+            : this.aborted ? 'Request aborted.' : 'The model could not complete this response.';
         } else if (reason === 'length') {
           this.pendingError = 'The model reached its output token limit before completing the response.';
         } else if (reason !== 'pending' && reason !== 'deferred') {

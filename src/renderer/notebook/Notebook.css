@@ -256,3 +256,41 @@
     gap: 0;
   }
 }
+
+/* A checked item is one line: box, then the words. Matched by shape rather than
+   by the editor's own data-type, because that attribute has moved between
+   versions and the stacking it caused made a three-step plan six lines tall. */
+.notebook-rich-content li:has(> label),
+.notebook-rich-content li:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-8);
+  list-style: none;
+}
+.notebook-rich-content ul:has(> li > label),
+.notebook-rich-content ul:has(> li > input[type="checkbox"]) {
+  padding-left: 0;
+  list-style: none;
+}
+.notebook-rich-content li > label,
+.notebook-rich-content li > input[type="checkbox"] {
+  flex: none;
+  margin: 3px 0 0;
+}
+.notebook-rich-content li > label input,
+.notebook-rich-content li > input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ink-secondary);
+}
+/* The words take the rest of the row, and carry no paragraph margin of their
+   own: inside a list item that margin is what pushed the text onto its own line. */
+.notebook-rich-content li:has(> label) > div,
+.notebook-rich-content li:has(> label) > p,
+.notebook-rich-content li:has(> input[type="checkbox"]) > div,
+.notebook-rich-content li:has(> input[type="checkbox"]) > p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}

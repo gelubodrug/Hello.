@@ -24,6 +24,8 @@ import type {
   NotebookChange,
   NotebookKind,
   NotebookPaths,
+  QueuedMessage,
+  QueuedMode,
   SettingsPatch,
 } from '../../shared/types';
 
@@ -56,6 +58,10 @@ const DEFAULT_SETTINGS: StoredSettings = {
 };
 
 const strip = ({ apiKeySet: _apiKeySet, ...entry }: SavedConnection): StoredConnection => entry;
+
+/** Which endpoint and model a stored context/output pair was resolved for. */
+export const limitsKey = (endpointUrl: string, model: string): string =>
+  `${normalizeEndpoint(endpointUrl)}\u0000${model.trim()}`;
 
 export function normalizeEndpoint(value: string): string {
   let url: URL;
@@ -153,7 +159,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 3)
+    if (version > 4)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -210,6 +216,22 @@ export class DataStore {
         PRIMARY KEY (conversationId, resourceId)
       );
       PRAGMA user_version = 3;`);
+      })();
+    if (version < 4)
+      this.db.transaction(() => {
+        // What the person said while the model was still working. It is not part
+        // of the conversation until it is delivered, so it lives on its own and
+        // survives a restart: their words are not ours to lose.
+        this.db.exec(`CREATE TABLE queued_messages (
+        id TEXT PRIMARY KEY,
+        conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK(mode IN ('steer','next','later')),
+        position INTEGER NOT NULL,
+        createdAt INTEGER NOT NULL
+      );
+      CREATE INDEX queued_conversation ON queued_messages(conversationId, position);
+      PRAGMA user_version = 4;`);
       })();
   }
 
@@ -375,6 +397,60 @@ export class DataStore {
       }
     }
   }
+  // ── Messages written while the model was still working ────────────────────
+
+  listQueued(conversationId: string): QueuedMessage[] {
+    return this.db
+      .prepare('SELECT id, conversationId, text, mode, createdAt FROM queued_messages WHERE conversationId = ? ORDER BY position, createdAt')
+      .all(conversationId) as QueuedMessage[];
+  }
+  /** Queue limit: this is a held sentence, not a task list. */
+  queueMessage(conversationId: string, text: string, mode: QueuedMode): QueuedMessage {
+    this.getConversation(conversationId);
+    const body = text.trim().slice(0, 200_000);
+    if (!body) throw new Error('Message cannot be empty.');
+    if (!['steer', 'next', 'later'].includes(mode)) throw new Error('Unknown delivery.');
+    const held = this.db
+      .prepare('SELECT COUNT(*) AS held, COALESCE(MAX(position), -1) AS last FROM queued_messages WHERE conversationId = ?')
+      .get(conversationId) as { held: number; last: number };
+    if (held.held >= 8) throw new Error('Too many messages are waiting in this chat. Send or remove one first.');
+    const row: QueuedMessage = {
+      id: randomUUID(), conversationId, text: body, mode, createdAt: Date.now(),
+    };
+    this.db
+      .prepare('INSERT INTO queued_messages (id, conversationId, text, mode, position, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(row.id, row.conversationId, row.text, row.mode, held.last + 1, row.createdAt);
+    return row;
+  }
+  /** Changing your mind before it is said: new words, or a different landing. */
+  reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): QueuedMessage {
+    const current = this.db.prepare('SELECT id, conversationId, text, mode, createdAt FROM queued_messages WHERE id = ?')
+      .get(id) as QueuedMessage | undefined;
+    if (!current) throw new Error('That message is no longer waiting.');
+    const text = patch.text === undefined ? current.text : patch.text.trim().slice(0, 200_000);
+    if (!text) throw new Error('Message cannot be empty.');
+    const mode = patch.mode ?? current.mode;
+    if (!['steer', 'next', 'later'].includes(mode)) throw new Error('Unknown delivery.');
+    this.db.prepare('UPDATE queued_messages SET text = ?, mode = ? WHERE id = ?').run(text, mode, id);
+    return { ...current, text, mode };
+  }
+  getQueued(id: string): QueuedMessage {
+    const row = this.db
+      .prepare('SELECT id, conversationId, text, mode, createdAt FROM queued_messages WHERE id = ?')
+      .get(id) as QueuedMessage | undefined;
+    if (!row) throw new Error('That message is no longer waiting.');
+    return row;
+  }
+  dropQueued(id: string): void {
+    this.db.prepare('DELETE FROM queued_messages WHERE id = ?').run(id);
+  }
+  /** Takes the next message meant to be said on its own, and forgets it here. */
+  takeQueued(conversationId: string, modes: QueuedMode[]): QueuedMessage | undefined {
+    const row = this.listQueued(conversationId).find(item => modes.includes(item.mode));
+    if (row) this.dropQueued(row.id);
+    return row;
+  }
+
   listMessages(conversationId: string): Message[] {
     this.getConversation(conversationId);
     const rows = this.db
@@ -481,7 +557,22 @@ export class DataStore {
       maxOutputTokens: patch.maxOutputTokens ?? current.maxOutputTokens ?? 4096,
       modelCompatibility: patch.modelCompatibility ?? current.modelCompatibility ?? 'auto',
       approvals: patch.approvals ?? current.approvals ?? 'all',
+      // What was learned about one model does not carry to the next.
+      contextScale: patch.contextScale ?? current.contextScale,
     };
+    // Provenance for the two numbers Pi launches on. Writing either one claims
+    // them for the endpoint and model in force, so a deliberate value is never
+    // replaced by a published one; pointing at a different model or provider
+    // drops the claim, and main looks the limits up again before the next turn.
+    next.limitsFor =
+      patch.contextWindow !== undefined || patch.maxOutputTokens !== undefined
+        ? limitsKey(next.endpointUrl, next.model)
+        : current.limitsFor;
+    if (limitsKey(next.endpointUrl, next.model) !== limitsKey(current.endpointUrl, current.model))
+      next.contextScale = patch.contextScale;
+    if (next.contextScale !== undefined &&
+        (!Number.isFinite(next.contextScale) || next.contextScale <= 0 || next.contextScale > 1))
+      throw new Error('Context scale must be greater than 0 and at most 1.');
     if (
       !Number.isFinite(next.temperature) ||
       next.temperature < 0 ||

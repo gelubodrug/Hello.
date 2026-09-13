@@ -34,6 +34,12 @@ interface RecordTab {
   detaching?: boolean;
   /** The nonce the current guest was created with, so a stale unmount cannot close a newer page. */
   attachNonce?: string;
+  /** The slot a chat's generated document lives in, reused by the next one. */
+  artifact?: boolean;
+  /** Set while its document is being served again after a restart. */
+  serving?: boolean;
+  /** The exact address this chat's generated document is being served at. */
+  servedUrl?: string;
   pending: Set<PendingOperation>;
   navigation: number;
 }
@@ -60,6 +66,8 @@ interface BrowserOptions {
   remove(id: string): void;
   emit(tab: BrowserTab): void;
   lifecycle?(event: BrowserLifecycleEvent): void;
+  /** Produces a page again from its handle and returns the address it is at now. */
+  serve?(conversationId: string, source: string): Promise<string>;
 }
 
 /** One native viewport; inactive pages stay alive without covering application chrome. */
@@ -96,6 +104,11 @@ export class BrowserManager {
           },
           pending: new Set(),
           navigation: 0,
+          // A restored document keeps its slot and its own session: the page is
+          // the same generated page, and it is still not the signed-in web.
+          ...(saved.source
+            ? { artifact: true, partition: `hello-preview-${randomUUID()}` }
+            : {}),
         });
     }
     this.securePartition(this.partition);
@@ -275,7 +288,13 @@ export class BrowserManager {
     if (this.disposed || !this.records.has(record.tab.id)) return;
     // Site-opened tabs can contain short-lived authentication state in their URL.
     // Keep them live in this session, not in the restore database.
-    if (!record.tab.pageOwned && !record.tab.sessionOnly) this.options.save({ ...record.tab, control: "off" });
+    // A generated document outlives the session it was made in: its tab is
+    // saved by the handle that can produce it again, never by a local URL
+    // whose port dies with the app.
+    if (record.tab.source)
+      this.options.save({ ...record.tab, control: "off", url: "about:blank", loading: false });
+    else if (!record.tab.pageOwned && !record.tab.sessionOnly)
+      this.options.save({ ...record.tab, control: "off" });
     this.options.emit({ ...record.tab });
   }
   private cancelPending(
@@ -426,12 +445,17 @@ export class BrowserManager {
     contents.on("will-attach-webview", (event) => event.preventDefault());
     const refresh = () => {
       if (contents.isDestroyed() || record.contents !== contents) return;
-      const url = contents.getURL();
+      // The URL main minted to claim this guest is a door, not a destination:
+      // adopting it would put main's own handshake in the address bar.
+      const reported = contents.getURL();
+      const url = this.nonceOf(reported) ? "about:blank" : reported;
+      // A generated page can send itself somewhere; the grant does not follow.
+      if (url && url !== "about:blank") this.endOwnWork(record, url);
       record.tab = {
         ...record.tab,
         ...(url && !record.tab.error ? { url } : {}),
         title:
-          contents.getTitle() ||
+          (this.nonceOf(contents.getTitle()) ? "" : contents.getTitle()) ||
           (url === "about:blank" ? "New tab" : record.tab.title),
         loading: contents.isLoading(),
         canGoBack: contents.navigationHistory.canGoBack(),
@@ -480,7 +504,7 @@ export class BrowserManager {
     conversationId: string,
     url: string,
     signal?: AbortSignal,
-    options: { sessionOnly?: boolean; isolated?: boolean } = {},
+    options: { sessionOnly?: boolean; isolated?: boolean; source?: string } = {},
   ): Promise<BrowserTab> {
     signal?.throwIfAborted();
     const destination = browserURL(url);
@@ -488,10 +512,63 @@ export class BrowserManager {
     const record = this.newRecord(conversationId, destination, undefined,
       options.isolated ? `hello-preview-${randomUUID()}` : undefined);
     if (options.sessionOnly) record.tab.sessionOnly = true;
+    if (options.source) { record.tab.source = options.source; record.servedUrl = url; }
     this.publish(record);
     this.options.lifecycle?.({ type: 'opened', tab: { ...record.tab }, foreground: true, userRequested: true });
     await this.navigate(record.tab.id, destination, signal, conversationId);
     return { ...this.record(record.tab.id).tab };
+  }
+  /**
+   * Show a document this app generated for a chat. A second version is the same
+   * page becoming better, not a second page: it replaces what the chat is
+   * already showing, so revising a design does not bury the browser under a tab
+   * per revision and does not move the reader somewhere else. Each version is
+   * served from its own local origin, so nothing carries over between them.
+   */
+  async agentShow(conversationId: string, url: string, signal?: AbortSignal, source?: string): Promise<BrowserTab> {
+    signal?.throwIfAborted();
+    const shown = [...this.records.values()].find(
+      record => record.artifact && record.tab.conversationId === conversationId);
+    if (!shown) {
+      const tab = await this.agentOpen(conversationId, url, signal, { sessionOnly: true, isolated: true });
+      const record = this.record(tab.id);
+      record.artifact = true;
+      if (source) record.tab.source = source;
+      this.grantOwnWork(record, url);
+      this.publish(record);
+      return { ...record.tab };
+    }
+    if (source) shown.tab.source = source;
+    shown.servedUrl = url;
+    await this.navigate(shown.tab.id, url, signal, conversationId);
+    this.grantOwnWork(shown, url);
+    const tab = { ...this.record(shown.tab.id).tab };
+    // The pane may be closed or showing another tool; bring the revision forward
+    // exactly as a first showing would.
+    this.options.lifecycle?.({ type: 'opened', tab, foreground: true, userRequested: true });
+    return tab;
+  }
+  /**
+   * A page the model wrote, read by the model. It is served from an isolated
+   * local session with no cookies and nothing signed in, and every word in it
+   * came from the model in the first place, so reading it back reveals nothing
+   * it did not already know — while not being able to look at its own work is
+   * how it ships a page it never checked. The grant belongs to the document,
+   * not to the tab: navigate this tab anywhere else and it is Off again.
+   */
+  private grantOwnWork(record: RecordTab, url: string): void {
+    record.servedUrl = url;
+    // Only a document the model wrote. A preview of the person's own HTML is
+    // their file, and reading it is a grant only they can give.
+    if (record.tab.source?.startsWith("artifact:")) record.tab.control = "full";
+  }
+  /** Leaving its own document ends the grant that came with it. */
+  private endOwnWork(record: RecordTab, url: string): void {
+    if (!record.tab.source || url === record.servedUrl) return;
+    record.tab.control = "off";
+    record.tab.source = undefined;
+    record.servedUrl = undefined;
+    record.artifact = false;
   }
   private newRecord(conversationId: string, url: string, openerId?: string, partition?: string): RecordTab {
     if (this.disposed) throw new Error("The browser is closed.");
@@ -532,6 +609,7 @@ export class BrowserManager {
     // An explicit navigation is the gesture that lifts a discard.
     record.blocked = false;
     const contents = await this.whenAttached(record, signal);
+    this.endOwnWork(record, url);
     record.tab.url = url;
     record.tab.error = null;
     record.tab.loading = url !== "about:blank";
@@ -593,6 +671,31 @@ export class BrowserManager {
   setActive(id: string | null): void {
     if (this.disposed) return;
     this.activeId = id && this.records.has(id) ? id : null;
+    if (this.activeId) void this.serveAgain(this.records.get(this.activeId)!);
+  }
+  /**
+   * A generated document restored from a previous run has no live address: the
+   * port that served it died with the app. Ask for it again the moment someone
+   * looks at the tab, so the page is where they left it.
+   */
+  private async serveAgain(record: RecordTab): Promise<void> {
+    const { source, conversationId } = record.tab;
+    if (!source || record.tab.url !== "about:blank" || record.serving) return;
+    record.serving = true;
+    try {
+      const url = await this.options.serve?.(conversationId, source);
+      if (url && this.records.get(record.tab.id) === record && record.tab.url === "about:blank") {
+        record.servedUrl = url;
+        await this.navigate(record.tab.id, url);
+        this.grantOwnWork(record, url);
+        this.publish(record);
+      }
+    } catch (error) {
+      record.tab.error = error instanceof Error ? error.message : "This document could not be opened again.";
+      this.publish(record);
+    } finally {
+      record.serving = false;
+    }
   }
   control(id: string, mode: AgentControl): BrowserTab {
     if (!isAgentControl(mode)) throw new Error("Unknown Agent control mode.");

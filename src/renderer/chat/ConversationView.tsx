@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -20,6 +20,8 @@ import type {
   Conversation,
   Message,
   MessagePart,
+  ModelChoice,
+  QueuedMessage,
   WorkerId,
   WorkerInfo,
 } from "../../shared/types";
@@ -37,7 +39,8 @@ import {
 import { CodeBlock, Markdown } from "./Markdown";
 import { fetchedSources, readWebResult, sourcesForMessage, withSourceLinks, type WebSource } from '../../shared/web';
 import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolIcon, webToolTitle } from './WebResearch';
-import { activityLayout, suppliedDuration, thinkingTitle } from './activity';
+import { activityLayout, activityRows, liveTail, stepLabel, suppliedDuration, thinkingTitle, type ActivityRow } from './activity';
+import { PendingMessages } from './PendingMessages';
 import { chatCopySnapshot } from './selection';
 import { ChatModeSwitch } from './ChatModeSwitch';
 import { ChatDisclosure } from './ChatDisclosure';
@@ -87,6 +90,15 @@ export function ThinkingPart({
   const open = (expanded === undefined ? override : expanded) ?? false;
   const id = useId();
   const duration = suppliedDuration(part.durationMs);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active) { setElapsed(0); return; }
+    // Counted from when this part became active, not from any stamp in the
+    // message: a reload must not resume someone else's clock.
+    const started = Date.now();
+    const tick = setInterval(() => setElapsed(Date.now() - started), 1000);
+    return () => clearInterval(tick);
+  }, [active]);
   if (!part.text.trim()) return null;
   return (
     <div className="thinking-part" data-active={active || undefined}>
@@ -98,8 +110,8 @@ export function ThinkingPart({
         title={!active && duration !== null ? `Thinking duration: ${duration / 1000}s (${duration} ms)` : undefined}
         onClick={() => onExpandedChange ? onExpandedChange(!open) : setOverride(!open)}
       >
-        <span className="tool-action-title thinking-label">{thinkingTitle(active, part.durationMs)}</span>
-        <ChevronDown size={16} strokeWidth={1.75} className="disclosure-chevron" aria-hidden />
+        <span className="tool-action-title thinking-label">{thinkingTitle(active, part.durationMs, elapsed)}</span>
+        <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
       </button>
       <ChatDisclosure id={id} open={open}>
         <div className="thinking-body">
@@ -147,9 +159,9 @@ export function ToolPart({
         onClick={() => setOpen((value) => !value)}
       >
         <span className="tool-action-title" title={webToolTitle(part)}>{webToolTitle(part)}</span>
-        {part.name === 'web_search' && argument && <span className="tool-query" title={argument}>{argument}</span>}
+        {argument && <span className="tool-query" title={argument}>{argument}</span>}
+        {part.status !== 'complete' && <span className="tool-query">{status}</span>}
         <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
-        {part.status !== 'complete' && <small className="activity-state">{status}</small>}
       </button>
       <ChatDisclosure id={id} open={open}>
         <div className="tool-detail">
@@ -190,6 +202,86 @@ export function ToolPart({
   );
 }
 
+/** A run of the same work, said once. Opening it shows each step in turn, as
+ *  rows of the same tier — a heading for rows, never a card around them. */
+function MergedStep({ row, render }: {
+  row: ActivityRow;
+  render: (index: number, step: boolean) => ReactNode;
+}) {
+  const wants = row.status === 'approval' || row.status === 'error';
+  const [open, setOpen] = useState(wants);
+  const id = useId();
+  useEffect(() => { if (wants) setOpen(true); }, [wants]);
+  const state = row.status === 'approval' ? 'Needs approval'
+    : row.status === 'error' ? 'Failed' : row.status === 'running' ? 'Running' : '';
+  return (
+    <div className="tool-part" data-status={row.status}>
+      <button
+        type="button"
+        className="disclosure-button activity-step"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen(value => !value)}
+      >
+        <span className="tool-action-title">{stepLabel(row.parts)}</span>
+        {state && <span className="tool-query">{state}</span>}
+        <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
+      </button>
+      <ChatDisclosure id={id} open={open}>
+        <div className="activity-entries merged-steps">
+          {row.parts.map((_part, index) => render(row.start + index, true))}
+        </div>
+      </ChatDisclosure>
+    </div>
+  );
+}
+
+/** How much commentary reads as a step rather than as a wall. */
+const NOTE_CAP = 96;
+
+/**
+ * What the model said between its actions. In the activity list every entry is
+ * a step and every step is one row: a sentence or two can simply be said, but
+ * anything longer — a whole file printed out loud, say — folds to the same
+ * single line as the thinking and the tools around it. One list, one tier.
+ */
+export function ActivityNote({ text, sources }: { text: string; sources: readonly WebSource[] }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(false);
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  useLayoutEffect(() => {
+    const node = body.current;
+    if (!node) return;
+    // Measured while clipped: scrollHeight is the whole content either way.
+    const measure = () => setLong(node.scrollHeight > NOTE_CAP);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+  const summary = text.trim().split('\n').find(line => line.trim()) ?? text;
+  return (
+    <div className="activity-note" data-folded={long && !open || undefined}>
+      {long && (
+        <button
+          type="button"
+          className="disclosure-button activity-step"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen(value => !value)}
+        >
+          <span className="tool-action-title">{summary}</span>
+          <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
+        </button>
+      )}
+      <div ref={body} id={id} className="activity-note-body">
+        <Markdown text={text} sources={sources} />
+      </div>
+    </div>
+  );
+}
+
 export function MessageContent({ message, sources }: { message: Message; sources: readonly WebSource[] }) {
   // Keep explicit thinking disclosure choices even when the first arriving tool
   // folds preceding reasoning/commentary into the activity group.
@@ -197,11 +289,13 @@ export function MessageContent({ message, sources }: { message: Message; sources
   if (!message.parts?.length) return <Markdown text={message.content} sources={sources} />;
   const parts = message.parts;
   const layout = activityLayout(parts, message.status === 'streaming');
-  const renderPart = (index: number) => {
+  const renderPart = (index: number, step = false) => {
     const part = parts[index];
     return (
         part.type === "text" ? (
-          <Markdown key={index} text={part.text} sources={sources} />
+          step
+            ? <ActivityNote key={index} text={part.text} sources={sources} />
+            : <Markdown key={index} text={part.text} sources={sources} />
         ) : part.type === "thinking" ? (
           <ThinkingPart
             key={index}
@@ -215,10 +309,20 @@ export function MessageContent({ message, sources }: { message: Message; sources
         )
     );
   };
+  const rows = activityRows(layout.activity);
+  const renderRow = (row: ActivityRow) =>
+    row.count === 1
+      ? renderPart(row.start, true)
+      : <MergedStep key={row.key} row={row} render={renderPart} />;
+  const tailFrom = liveTail(rows);
   return <>
     {layout.grouped
-      ? <ActivityGroup parts={layout.activity} streaming={message.status === 'streaming'}>
-          {layout.activity.map((_part, index) => renderPart(index))}
+      ? <ActivityGroup
+          parts={layout.activity}
+          streaming={message.status === 'streaming'}
+          tail={rows.slice(tailFrom).map(renderRow)}
+        >
+          {rows.map(renderRow)}
         </ActivityGroup>
       : layout.activity.map((_part, index) => renderPart(index))}
     {layout.answer.map((_part, index) => renderPart(layout.answerStart + index))}
@@ -394,6 +498,7 @@ export function ConversationView({
     }
   });
   const [sending, setSending] = useState(false);
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const attachmentDraftKey = `${draftKey}.attachments`;
   const [attachments, setAttachments] = useState<ChatAttachment[]>(() => {
     try {
@@ -407,7 +512,7 @@ export function ConversationView({
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [error, setError] = useState<string | null>(null);
-  const [models, setModels] = useState<string[]>([]);
+  const [models, setModels] = useState<ModelChoice[]>([]);
   const [modelLoading, setModelLoading] = useState(false);
   const [showBottom, setShowBottom] = useState(false);
   const transcript = useRef<HTMLDivElement>(null);
@@ -416,6 +521,15 @@ export function ConversationView({
   const sticky = useRef(true);
   const generation = messages.some((message) => message.status === "streaming");
   const busy = sending || generation;
+  // The waiting list is main's, not this component's: it survives a reload, and
+  // main decides when a held message is finally said.
+  useEffect(() => {
+    let alive = true;
+    void api.chat.queued?.(conversation.id)
+      .then(items => { if (alive) setQueued(items); })
+      .catch(() => { if (alive) setQueued([]); });
+    return () => { alive = false; };
+  }, [conversation.id, busy]);
   const messageContext = useMemo(() => {
     const known = new Map<number, WebSource>();
     return messages.map(message => {
@@ -472,7 +586,18 @@ export function ConversationView({
   }, [draft]);
   const send = async () => {
     const text = draft.trim();
-    if ((!text && !attachments.length) || busy || importLock.current) return;
+    if (importLock.current) return;
+    // Typing while the model works is a correction, not a second question: it
+    // goes to the turn already running. Nothing is lost if it arrives late —
+    // the pill above the composer shows it, and its landing can still change.
+    if (busy) {
+      if (!text) return;
+      setDraft("");
+      try { setQueued(await api.chat.queue(conversation.id, text, 'steer')); }
+      catch (reason) { setError(errorText(reason)); setDraft(current => current || text); }
+      return;
+    }
+    if (!text && !attachments.length) return;
     const sentAttachments = attachments;
     setDraft("");
     setAttachments([]);
@@ -537,12 +662,15 @@ export function ConversationView({
   };
   const modelItems: MenuItem[] = models.length
     ? models.map((model) => ({
-        id: model,
-        label: model,
-        checked: model === settings.model,
+        id: model.id,
+        label: model.id,
+        detail: model.contextWindow ? `${model.contextWindow.toLocaleString('en')} tokens` : undefined,
+        checked: model.id === settings.model,
         action: () => {
+          // Only the choice: main reads this model's published limits itself,
+          // so a model reached any other way launches on the same numbers.
           void api.settings
-            .save({ model })
+            .save({ model: model.id })
             .then(onSettingsChange)
             .catch(reportError);
         },
@@ -669,6 +797,7 @@ export function ConversationView({
           {(dropActive || importing) && <p className="composer-drop-hint" role="status">
             {importing ? 'Adding attachments…' : 'Drop files to attach · Drop a folder to work in it'}
           </p>}
+          <PendingMessages items={queued} onChange={setQueued} onError={reason => setError(errorText(reason))} />
           {!!attachments.length && <div className="composer-attachments" aria-label="Message attachments">
             {attachments.map(item => <span className="composer-attachment" key={item.id} title={item.name}>
               {item.kind === 'image' ? <ImageIcon size={14} aria-hidden /> : <FileText size={14} aria-hidden />}
@@ -709,7 +838,9 @@ export function ConversationView({
           <textarea
             ref={field}
             aria-label="Message"
-            placeholder="Ask anything"
+            // While it works, saying what Enter will do is the whole affordance:
+            // steering is otherwise invisible until something is already queued.
+            placeholder={busy ? "Say it now — it reaches this reply" : "Ask anything"}
             value={draft}
             rows={2}
             onChange={(event) => setDraft(event.target.value)}

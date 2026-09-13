@@ -98,10 +98,14 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.maxOutputTokens!==undefined)clean.maxOutputTokens=Number(patch.maxOutputTokens);
     if(patch.modelCompatibility!==undefined)clean.modelCompatibility=patch.modelCompatibility as SettingsPatch['modelCompatibility'];
     if(patch.approvals!==undefined)clean.approvals=patch.approvals as SettingsPatch['approvals'];
-    return store.saveSettings(clean);
+    const saved=store.saveSettings(clean);
+    // A new selection asks the provider what this model holds, in the background:
+    // saving must not wait on a network round trip, and the next turn awaits it.
+    if(clean.model!==undefined||clean.endpointUrl!==undefined)void chat.settleModelLimits();
+    return saved;
   });
   handle('settings.rememberConnection',(name)=>store.rememberConnection(str(name)));
-  handle('settings.useConnection',(url)=>store.useConnection(str(url)));
+  handle('settings.useConnection',(url)=>{const saved=store.useConnection(str(url));void chat.settleModelLimits();return saved;});
   handle('settings.forgetConnection',(url)=>store.forgetConnection(str(url)));
   handle('settings.models',()=>chat.models());
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
@@ -110,6 +114,19 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(attachmentIds!==undefined&&(!Array.isArray(attachmentIds)||attachmentIds.length>8||attachmentIds.some(value=>typeof value!=='string'||value.length>100)))throw new Error('Invalid attachments.');
     return chat.send(str(id),text,attachmentIds);
   });
+  handle('chat.queue',(id,text,mode)=>{
+    if(typeof text!=='string'||text.length>200000)throw new Error('Invalid message.');
+    if(mode!=='steer'&&mode!=='next'&&mode!=='later')throw new Error('Unknown delivery.');
+    return chat.queue(str(id),text,mode);
+  });
+  handle('chat.queued',(id)=>chat.listQueued(str(id)));
+  handle('chat.reviseQueued',(id,patch)=>{
+    const value=record(patch);const clean:{text?:string;mode?:'steer'|'next'|'later'}={};
+    if(value.text!==undefined){if(typeof value.text!=='string'||value.text.length>200000)throw new Error('Invalid message.');clean.text=value.text;}
+    if(value.mode!==undefined){if(value.mode!=='steer'&&value.mode!=='next'&&value.mode!=='later')throw new Error('Unknown delivery.');clean.mode=value.mode;}
+    return chat.reviseQueued(str(id,'id',200),clean);
+  });
+  handle('chat.dropQueued',(id)=>chat.dropQueued(str(id,'id',200)));
   handle('chat.stop',(id)=>chat.stop(str(id)));
   handle('chat.retry',(id)=>chat.retry(str(id)));
   handle('chat.approve',(id,allow)=>{if(typeof allow!=='boolean')throw new Error('Invalid approval.');return chat.approve(str(id),allow);});

@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import type {
+  ModelChoice,
   AppSettings,
   ChatDropResult,
   ChatEvent,
   Message,
   MessagePart,
+  QueuedMessage,
+  QueuedMode,
 } from '../../shared/types';
-import { normalizeEndpoint, type DataStore } from '../data/store';
+import { limitsKey, normalizeEndpoint, type DataStore } from '../data/store';
 import { PiRpcProcess } from './pi-rpc';
 import { PiEventMapper } from './pi-events';
 import { createPiToolBridge, type PiToolBridge } from './pi-tool-bridge';
@@ -95,10 +98,54 @@ export function modelsURL(endpoint: string): string {
 function string(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
+/** A published limit, or nothing: zero and nonsense are not numbers we keep. */
+function positive(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** A reply this long is already far past any answer a chat turn needs, and a
+ * provider is likelier to reject an enormous ceiling than to honour it. */
+const OUTPUT_CEILING = 32_768;
+/** Below this, saveSettings has no room left for Pi's own reserve. */
+const CONTEXT_FLOOR = 20_480;
+
+/**
+ * What to store for a model, given what its provider publishes. Returns nothing
+ * when there is nothing to learn, so an unchanged setting is never rewritten.
+ * The output budget covers reasoning: hidden thinking is billed as output, so a
+ * cap adopted here is what the model has to think *and* answer inside.
+ */
+export function adoptedLimits(
+  published: ModelChoice | undefined,
+  settings: AppSettings,
+): { contextWindow: number; maxOutputTokens: number } | undefined {
+  if (!published?.contextWindow && !published?.maxOutputTokens) return undefined;
+  const stored = settings.contextWindow ?? 32_768;
+  const contextWindow = published.contextWindow && published.contextWindow >= CONTEXT_FLOOR
+    ? Math.min(published.contextWindow, 2_000_000)
+    : stored;
+  // The two bounds saveSettings enforces: at most half the window, and enough
+  // left over for Pi's 16,384-token reserve.
+  const allowed = Math.min(
+    Math.floor(contextWindow / 2),
+    Math.max(12_288, contextWindow - 8_192),
+  );
+  const maxOutputTokens = Math.max(512, Math.min(
+    // No published cap means no claim about the model: keep what is stored
+    // rather than inventing a fraction of the window.
+    published.maxOutputTokens ?? settings.maxOutputTokens ?? 4_096,
+    allowed,
+    published.maxOutputTokens ? OUTPUT_CEILING : Infinity,
+  ));
+  if (contextWindow === settings.contextWindow && maxOutputTokens === settings.maxOutputTokens)
+    return undefined;
+  return { contextWindow, maxOutputTokens };
 }
 function safeError(error: unknown, key: string): string {
   const message =
@@ -206,6 +253,11 @@ export class ChatService {
   private readonly requestTimeoutMs: number;
   private readonly runs = new Map<string, Run>();
   private readonly sessions = new Map<string, PiSession>();
+  /** Short-lived model listings per endpoint, so resolving limits before a
+   * turn costs no round trip when the list was just read. Failures are not
+   * cached: a server that was starting up must be asked again. */
+  private readonly listings = new Map<string, { at: number; listed: ModelChoice[] }>();
+  private settling?: Promise<void>;
   private readonly approvals = new Map<string, PendingApproval>();
   private readonly attachments: ChatAttachments;
   readonly library: ResourceLibrary;
@@ -229,8 +281,63 @@ export class ChatService {
     return this.runs.has(conversationId);
   }
 
-  async models(): Promise<string[]> {
+  async models(): Promise<ModelChoice[]> {
     const settings = this.store.getSettings();
+    const listed = await this.listModels(settings);
+    this.listings.set(normalizeEndpoint(settings.endpointUrl), { at: Date.now(), listed });
+    return listed;
+  }
+
+  /**
+   * The published limits for the selected model, applied by main rather than by
+   * a menu click, because a model reached through a saved connection or typed
+   * by hand must launch on the same numbers as one picked from the list. A
+   * context window smaller than the model's own is the expensive mistake: Pi
+   * clamps every request to what it believes is left, so a stale 32k window
+   * against a 512k model asks the provider for a single token and the reply
+   * comes back cut off. Nothing is invented — an absent figure keeps the
+   * stored one, and a figure the user chose for this model is never replaced.
+   */
+  /**
+   * Settles the stored pair against the provider, off the chat path: at startup
+   * and whenever the selection changes. A turn awaits a settle already running,
+   * but never starts one — sending a message stays a local act.
+   */
+  settleModelLimits(): Promise<void> {
+    const settling = this.resolvedSettings(this.store.getSettings()).then(
+      () => {},
+      () => {},
+    ).finally(() => { if (this.settling === settling) this.settling = undefined; });
+    this.settling = settling;
+    return settling;
+  }
+
+  private async resolvedSettings(settings: AppSettings): Promise<AppSettings> {
+    const claim = limitsKey(settings.endpointUrl, settings.model);
+    if (settings.limitsFor === claim || !settings.model.trim()) return settings;
+    let published: ModelChoice | undefined;
+    try {
+      const cached = this.listings.get(normalizeEndpoint(settings.endpointUrl));
+      const listed = cached && Date.now() - cached.at < 60_000
+        ? cached.listed
+        : await this.listModels(settings);
+      if (!cached || Date.now() - cached.at >= 60_000)
+        this.listings.set(normalizeEndpoint(settings.endpointUrl), { at: Date.now(), listed });
+      published = listed.find(model => model.id === settings.model);
+    } catch {
+      // Offline, unauthorised or a server without a model list: the stored
+      // numbers stand, and the claim stays open so the next turn tries again.
+      return settings;
+    }
+    // The listing answered, so the claim is settled either way: adopt what it
+    // published, or keep the stored pair and stop asking on every turn.
+    return this.store.saveSettings(adoptedLimits(published, settings) ?? {
+      contextWindow: settings.contextWindow ?? 32_768,
+      maxOutputTokens: settings.maxOutputTokens ?? 4_096,
+    });
+  }
+
+  private async listModels(settings: AppSettings): Promise<ModelChoice[]> {
     const key = this.store.getApiKey(settings.endpointUrl);
     try {
       const response = await this.fetcher(modelsURL(settings.endpointUrl), {
@@ -251,14 +358,27 @@ export class ChatService {
           ? body.models
           : null;
       if (!rows) throw new Error('The endpoint did not return a model list.');
-      return [
-        ...new Set(
-          rows
-            .slice(0, 10_000)
-            .map((row) => string(record(row)?.id) || string(record(row)?.name))
-            .filter(Boolean),
-        ),
-      ].sort();
+      // Providers that publish a model's limits let the app stop guessing them.
+      // OpenRouter uses context_length and top_provider.max_completion_tokens;
+      // others use context_window or max_context_length. Anything absent stays
+      // absent: a wrong number is worse than none.
+      const listed = new Map<string, ModelChoice>();
+      for (const row of rows.slice(0, 10_000)) {
+        const model = record(row);
+        const id = string(model?.id) || string(model?.name);
+        if (!id || listed.has(id)) continue;
+        const provider = record(model?.top_provider);
+        const context = positive(record(model?.meta)?.n_ctx)
+          ?? positive(model?.context_length)
+          ?? positive(model?.context_window)
+          ?? positive(model?.max_context_length)
+          ?? positive(provider?.context_length);
+        const output = positive(provider?.max_completion_tokens)
+          ?? positive(model?.max_output_tokens)
+          ?? positive(model?.max_completion_tokens);
+        listed.set(id, { id, ...(context ? { contextWindow: context } : {}), ...(output ? { maxOutputTokens: output } : {}) });
+      }
+      return [...listed.values()].sort((left, right) => left.id.localeCompare(right.id, 'en'));
     } catch (error) {
       throw new Error(safeError(error, key));
     }
@@ -481,9 +601,107 @@ export class ChatService {
           this.publish(run, true);
         } finally {
           this.runs.delete(conversationId);
+          this.calibrateContext(run.message.usage?.input);
+          // A message held for after this turn is said now — but never into a
+          // turn that failed: the person should see what went wrong and decide.
+          if (run.message.status !== 'error') this.deliverQueued(conversationId);
         }
       });
     return run.promise;
+  }
+
+  /**
+   * The provider counts the tokens; the runtime only estimates them. When a
+   * finished turn reports more input than the model can hold, the runtime's
+   * estimate ran low and it did not compact in time — so the number it is given
+   * shrinks, and the next session compacts sooner. It is the one measurement in
+   * this loop that is not a guess, so it is the one worth acting on.
+   */
+  private calibrateContext(reported?: number): void {
+    if (!reported || !Number.isFinite(reported)) return;
+    const settings = this.store.getSettings();
+    const published = settings.contextWindow ?? 32768;
+    const scale = settings.contextScale ?? 1;
+    if (reported < Math.floor(published * scale)) return;
+    // Enough to clear the widest drift measured against this app's traffic —
+    // the runtime read 28.3k where the provider counted 41,349 — and bounded so
+    // repeated overflow cannot shrink the window to nothing.
+    const next = Math.max(0.2, Math.round(scale * 0.7 * 100) / 100);
+    if (next >= scale) return;
+    try { this.store.saveSettings({ contextScale: next }); } catch { /* the model changed under us */ }
+  }
+
+  // ── What the person said while the model was still working ────────────────
+
+  /**
+   * Their words, held. A steer is for the turn already running and goes to Pi
+   * at once; anything else waits here, editable and removable, because until it
+   * is delivered it is a draft and not part of the conversation.
+   */
+  async queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]> {
+    this.store.getConversation(conversationId);
+    const queued = this.store.queueMessage(conversationId, text, mode);
+    if (mode === 'steer') await this.pushSteer(conversationId, queued.text);
+    else if (mode === 'next' && !this.runs.has(conversationId)) this.deliverQueued(conversationId);
+    return this.store.listQueued(conversationId);
+  }
+  async reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]> {
+    const before = this.store.getQueued(id);
+    const after = this.store.reviseQueued(id, patch);
+    // Rewriting or re-aiming a steer means Pi must be holding the new words,
+    // not the old ones.
+    if (before.mode === 'steer' || after.mode === 'steer')
+      await this.rebuildSteers(after.conversationId, before.mode === 'steer' ? before.text : undefined,
+        after.mode === 'steer' ? after.text : undefined);
+    return this.store.listQueued(after.conversationId);
+  }
+  async dropQueued(id: string): Promise<QueuedMessage[]> {
+    const row = this.store.getQueued(id);
+    this.store.dropQueued(id);
+    if (row.mode === 'steer') await this.rebuildSteers(row.conversationId, row.text, undefined);
+    return this.store.listQueued(row.conversationId);
+  }
+  listQueued(conversationId: string): QueuedMessage[] {
+    return this.store.listQueued(conversationId);
+  }
+  private async pushSteer(conversationId: string, text: string): Promise<void> {
+    const session = this.sessions.get(conversationId);
+    if (!session?.rpc.isRunning || !this.runs.has(conversationId)) return;
+    await session.rpc.steer(text).catch(() => {});
+  }
+  /**
+   * Pi holds steers we handed it, and only it knows which ones it has already
+   * consumed. Taking the queue back tells us exactly what is still pending, so
+   * the words we re-hand it are the ones that were never said.
+   */
+  private async rebuildSteers(conversationId: string, removed?: string, added?: string): Promise<void> {
+    const session = this.sessions.get(conversationId);
+    if (!session?.rpc.isRunning || !this.runs.has(conversationId)) return;
+    let pending: string[] = [];
+    try {
+      pending = (await session.rpc.clearQueue()).data ?? [];
+    } catch { return; }
+    const holding = new Map<string, number>();
+    for (const text of pending) holding.set(text, (holding.get(text) ?? 0) + 1);
+    if (removed !== undefined && holding.get(removed)) holding.set(removed, holding.get(removed)! - 1);
+    for (const item of this.store.listQueued(conversationId)) {
+      if (item.mode !== 'steer') continue;
+      const left = holding.get(item.text) ?? 0;
+      if (item.text === added || left > 0) {
+        if (item.text !== added) holding.set(item.text, left - 1);
+        await session.rpc.steer(item.text).catch(() => {});
+      }
+    }
+  }
+  /** Says the next held message, if one is waiting for its own turn. */
+  private deliverQueued(conversationId: string): void {
+    if (this.runs.has(conversationId)) return;
+    const next = this.store.takeQueued(conversationId, ['next']);
+    if (!next) return;
+    void this.send(conversationId, next.text).catch(() => {
+      // A refused delivery is not a lost sentence: give it back to the person.
+      try { this.store.queueMessage(conversationId, next.text, 'later'); } catch { /* chat gone */ }
+    });
   }
 
   private publish(run: Run, immediate = false): void {
@@ -544,7 +762,19 @@ export class ChatService {
     };
   }
 
-  private async sessionFor(run: Run, settings: AppSettings): Promise<PiSession> {
+  private async sessionFor(run: Run, launchSettings: AppSettings): Promise<PiSession> {
+    // Take the settled limits before the fingerprint, so a corrected context
+    // window legitimately restarts the child rather than reusing one launched
+    // on the wrong number. Only those two figures are re-read: an unrelated
+    // edit made while this turn was starting is not this turn's contract.
+    if (this.settling) await this.settling;
+    const settled = this.store.getSettings();
+    const settings: AppSettings = {
+      ...launchSettings,
+      contextWindow: settled.contextWindow,
+      maxOutputTokens: settled.maxOutputTokens,
+    };
+    run.controller.signal.throwIfAborted();
     const conversation = this.store.getConversation(run.conversationId);
     const resources = await this.resourcesFor(run.conversationId, run.controller.signal);
     run.controller.signal.throwIfAborted();

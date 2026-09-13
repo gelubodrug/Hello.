@@ -9,7 +9,7 @@ import type {
   NotebookKind,
 } from '../../shared/types';
 import type { DataStore } from '../data/store';
-import { taskLines, taskStatuses, updateTaskStatus, type TaskStatus } from './tasks';
+import { planBody, taskLines, taskStatuses, updateTaskStatus, type TaskStatus } from './tasks';
 import { WebResearch } from './web-tools';
 import { htmlFromDataURL, htmlSource } from './html-input';
 import { MAX_HTML_ARTIFACT_BYTES } from '../browser/html-artifacts';
@@ -116,6 +116,43 @@ export function toolDefinitions(
       ['kind', 'title', 'body'],
     ),
     tool(
+      'plan_write',
+      [
+        'Write or rewrite this chat’s plan as a list of steps. Send the whole list every time; it replaces the previous one. The plan is visible to the human in Tasks and they can edit it.',
+        '',
+        'Use it when:',
+        '- the request needs 3 or more distinct steps (not three tool calls for one step)',
+        '- the human gave several tasks at once, or asked for a plan',
+        '- new instructions arrive mid-work — add them as steps',
+        '- you start a step: mark it in_progress, one at a time, before doing it',
+        '- you finish a step: mark it done, and add any follow-up the work revealed',
+        '',
+        'Do NOT use it when:',
+        '- the work is one straightforward action, or fewer than three trivial ones',
+        '- the request is a question or a conversation',
+        '- a list would organise nothing',
+        '',
+        'Rules: exactly one step in_progress while work remains. Update as you go, never in a batch at the end. Mark done only when the work is actually done, including any verification you said you would do — never on intent. If a step is blocked, leave it in_progress and add a step describing the blocker. Steps are specific and actionable.',
+      ].join('\n'),
+      {
+        steps: {
+          type: 'array',
+          maxItems: 40,
+          description: 'The complete plan, in order.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              step: property('What will be done, as a person would say it.'),
+              status: { type: 'string', enum: [...taskStatuses], description: 'Defaults to pending.' },
+            },
+            required: ['step'],
+          },
+        },
+      },
+      ['steps'],
+    ),
+    tool(
       'notebook_task_status',
       'Update one checklist task or subtask in Tasks: pending, in_progress, done, canceled or blocked. Use the entry ID, line and exact source returned by notebook_list. Other lines stay unchanged. Mark done only after completion; canceled is different from done.',
       { id: property('Tasks entry ID.'), line: { type: 'integer', minimum: 1 },
@@ -134,12 +171,12 @@ export function toolDefinitions(
       tool(
         'file_list',
         'List one directory inside the folder explicitly attached to this chat. Paths are relative to that folder. No recursive traversal.',
-        { path: property('Relative directory path, defaults to .') },
+        { path: property('Directory path relative to this chat’s folder; defaults to ".". An absolute path has to match the folder exactly, including any trailing space in its name, so a relative one is safer.') },
       ),
       tool(
         'file_read',
         'Read a bounded UTF-8 text file inside this chat’s attached folder. Cannot read outside it, binary files or common secret files.',
-        { path: property('Relative file path.') },
+        { path: property('File path relative to this chat’s folder, such as "src/app.ts".') },
         ['path'],
       ),
       tool(
@@ -162,13 +199,16 @@ export function toolDefinitions(
     result.push(
       tool(
         'browser_show_html',
-        'Create an HTML visual and open it INSIDE Hello’s Browser in one step. Works without an attached folder, shell, existing file or Full permission. Pass the complete self-contained HTML with inline CSS and optional JavaScript/SVG/canvas, at most 512 KiB UTF-8. Use for requested charts, visual explanations or interactive documents. Uses app-owned storage and returns a durable artifact handle. The new tab starts Off. Opening does not verify the content or chart accuracy. Prefer this to external chart services or data URLs.',
-        { html: property('Complete HTML document, including a descriptive <title>. Use supplied/verified data, correct chart scales and inline assets; do not invent missing values.') },
+        'Create an HTML visual and open it INSIDE Hello’s Browser. Build anything longer than a screenful in parts with `more`, rather than emitting the whole file as one argument. Works without an attached folder, shell, existing file or Full permission. Pass the complete self-contained HTML with inline CSS and optional JavaScript/SVG/canvas, at most 512 KiB UTF-8. Use for requested charts, visual explanations or interactive documents. Uses app-owned storage and returns a durable artifact handle: the document survives a restart and its tab is reopened from that handle, unlike a dev-server address, whose port dies with the app. A further call replaces the document this chat is already showing rather than opening another tab. Its tab is the one place you get Full control without asking, so read it back and check your own work before describing it. Opening does not verify the content or chart accuracy. Prefer this to external chart services, data URLs, or writing a file and serving it yourself.',
+        {
+          html: property('The document, or its next part when `more` is true. The closing call must complete a valid HTML document with a descriptive <title>. Use supplied/verified data, correct chart scales and inline assets; do not invent missing values.'),
+          more: { type: 'boolean', description: 'True while further parts follow. Build anything longer than a screenful this way: one part per call, nothing is written until the call that omits `more`, and a part lost to a provider error costs that part rather than the whole document.' },
+        },
         ['html'],
       ),
       tool(
         'browser_open',
-        'Open an existing page or HTML preview for the user INSIDE Hello’s Browser, in a new Off tab. No existing tab or Full access needed. To CREATE a visual use browser_show_html, which needs no folder. Reopen its returned artifact handle here. For an existing local HTML file use a path inside this chat’s attached folder. Does not read or verify the content or grant interaction. Prefer this to shell open/xdg-open commands, which launch the system browser.',
+        'Open an existing page or HTML preview for the user INSIDE Hello’s Browser, in a new Off tab. No existing tab or Full access needed. To CREATE a visual use browser_show_html, which needs no folder — never write an HTML file and serve it yourself. Reopen its returned artifact handle here. For an existing local HTML file use a path inside this chat’s attached folder; that tab is reopened from the path after a restart. A running dev server is not durable: its address stops working when the app or the server stops. Does not read or verify the content or grant interaction. Prefer this to shell open/xdg-open commands, which launch the system browser.',
         { url: property('Absolute HTTP(S) URL (including a running localhost dev server), artifact:<id> returned by browser_show_html, or relative/absolute/file: path to an existing .html/.htm file inside the attached folder.') },
         ['url'],
       ),
@@ -306,7 +346,13 @@ export async function scopedPath(
   // ancestor is resolved (/var → /private/var on macOS). The realpath checks
   // below stay the authority; this only avoids refusing a path we handed out.
   if (!contained(root, candidate) && !contained(configured, candidate))
-    throw new Error('The path is outside this chat’s folder.');
+    // Quoted, because the difference is often invisible: a folder name can end
+    // in a space, and the path written without it is a different directory that
+    // may also exist. Naming it is what makes the next attempt recoverable.
+    throw new Error(
+      `The path is outside this chat’s folder. The folder is "${configured}" — give a path ` +
+      'relative to it, such as "." or "src/app.ts", rather than an absolute one.',
+    );
   if (secretPath(candidate))
     throw new Error(
       'Common credential/secret files are excluded from automatic file tools.',
@@ -392,6 +438,14 @@ export function browserOperation<T>(
   });
 }
 
+/** What a single tool result may add to the conversation. Measured against
+ *  this app's own traffic, tool results were the small half; the cap is here so
+ *  one runaway listing cannot become the whole context. */
+const TOOL_OUTPUT_LIMIT = 50 * 1024;
+
+/** Parts of a document still being written, per chat. Never written to disk. */
+const drafts = new Map<string, string[]>();
+
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
@@ -402,10 +456,30 @@ export async function executeTool(
   const conversation = store.getConversation(conversationId);
   const openedResult = (tab: BrowserTab) => ({
     id: tab.id, url: tab.url, control: tab.control, openedIn: 'Hello Browser', contentVerified: false,
-    note: 'Navigation completed only; page contents, script execution and visual correctness were NOT verified. Do not claim a working chart from this result. Reading requires Read or Full; interaction requires Full. An Off tab is expected: do not repeatedly try browser_read or fetch_url to bypass it.',
+    note: tab.control === 'full'
+      ? 'Navigation completed only; page contents, script execution and visual correctness were NOT verified — and this tab is yours at Full. Read it, click it, and fix what you find before describing it. What a DOM read cannot show you (canvas pixels, how a drag feels, frame rate) is a limitation to state, not a reason to skip the reading you can do.'
+      : 'Navigation completed only; page contents, script execution and visual correctness were NOT verified. Do not claim a working chart from this result. Reading requires Read or Full; interaction requires Full. This tab is Off: do not repeatedly try browser_read or fetch_url to bypass it.',
   });
-  const showHtml = async (html: string) => {
+  const showHtml = async (html: string, more = false) => {
     if (!context.browser?.showHtml) throw new Error('Creating HTML previews is unavailable in this running app. Do not retry browser_open with HTML or invent a file path.');
+    // A document of any size, without one uninterrupted emission of it. Writing
+    // tens of kilobytes of exact syntax as a single tool argument is where a
+    // long run dies: one provider hiccup and the whole file is lost. Parts are
+    // held in memory, never on disk, until the call that completes the document.
+    const held = drafts.get(conversationId) ?? [];
+    if (more) {
+      if (held.length >= 24) throw new Error('Too many parts. Finish this document with a call that omits `more`.');
+      held.push(html);
+      drafts.set(conversationId, held);
+      const size = held.reduce((total, part) => total + Buffer.byteLength(part, 'utf8'), 0);
+      if (size > MAX_HTML_ARTIFACT_BYTES) {
+        drafts.delete(conversationId);
+        throw new Error('The document grew past the size this app will hold before it was finished. Start again, shorter.');
+      }
+      return { held: held.length, bytes: size,
+        note: 'Part held. Nothing is written yet: send the next part with more: true, and omit more on the last one to finish the document and open it.' };
+    }
+    if (held.length) { drafts.delete(conversationId); html = [...held, html].join(''); }
     const shown = await browserOperation(signal, () => context.browser!.showHtml!(conversationId, html, signal));
     return { ...openedResult(shown.tab), artifact: shown.artifact };
   };
@@ -432,6 +506,33 @@ export async function executeTool(
           body: text(input, 'body', 2_000_000),
           ...(input.id === undefined ? {} : { id: text(input, 'id', 100) }),
         });
+      }
+      case 'plan_write': {
+        const steps = Array.isArray(input.steps) ? input.steps : [];
+        if (!steps.length) throw new Error('A plan needs at least one step.');
+        const written = steps.slice(0, 40).map(raw => {
+          const item = (raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+          const step = typeof item.step === 'string' ? item.step : '';
+          if (!step.trim()) throw new Error('Every step needs words.');
+          const status = item.status === undefined ? 'pending' : String(item.status);
+          if (!(taskStatuses as readonly string[]).includes(status))
+            throw new Error(`Unknown step status: ${status}.`);
+          return { step, status: status as TaskStatus };
+        });
+        const working = written.filter(item => item.status === 'in_progress');
+        if (working.length > 1)
+          throw new Error('Only one step may be in_progress. Mark the others pending or done.');
+        // One plan per chat, replaced whole, in the notebook the human can edit.
+        const existing = store.listNotebooks(conversationId, 'tasks').find(row => row.title === 'Plan');
+        const entry = store.saveNotebook({
+          conversationId, kind: 'tasks', title: 'Plan', body: planBody(written),
+          ...(existing ? { id: existing.id } : {}),
+        });
+        return {
+          id: entry.id, steps: written.length,
+          working: working[0]?.step ?? null,
+          note: 'The plan is saved and the human can see and edit it in Tasks. Work the steps in order, marking one in_progress at a time.',
+        };
       }
       case 'notebook_task_status': {
         const id = text(input, 'id', 100);
@@ -537,8 +638,11 @@ export async function executeTool(
           );
         return await runApprovedCommand(command, conversation.folder, signal);
       }
-      case 'browser_show_html':
-        return showHtml(htmlSource(input.html));
+      case 'browser_show_html': {
+        const more = input.more === true;
+        // A part is not a document yet, so it is not held to a document's shape.
+        return showHtml(more ? text(input, 'html', 512 * 1024) : htmlSource(input.html), more);
+      }
       case 'browser_open': {
         const browser = context.browser;
         const destination = text(input, 'url', MAX_HTML_ARTIFACT_BYTES * 3 + 128).trim();
@@ -666,9 +770,16 @@ export async function executeTool(
   // Preserve a known completed mutation/result even if Stop was pressed just
   // after it finished. The service checks cancellation before every next action.
   const output = typeof result === 'string' ? result : JSON.stringify(result);
-  return output.length <= 100_000
-    ? output
-    : output.slice(0, 100_000) + '\n[Output truncated at 100,000 characters.]';
+  // A tool result is carried in the conversation and re-sent on every round
+  // trip that follows, so an enormous one is not paid once. Cut it where a
+  // person still gets the useful part, and say what to do instead of leaving
+  // the model to guess that the rest exists.
+  if (output.length <= TOOL_OUTPUT_LIMIT) return output;
+  const cut = output.length - TOOL_OUTPUT_LIMIT;
+  return output.slice(0, TOOL_OUTPUT_LIMIT) +
+    `\n[Cut here. ${cut.toLocaleString('en')} more characters were produced and are not in this result, ` +
+    'and every round trip after this one carries what is above. Ask again for the part you need — a narrower ' +
+    'path, a filter, a smaller range — rather than repeating this call.]';
 }
 
 /** The explicit approval grants a shell, not a pretend cwd-only sandbox. */

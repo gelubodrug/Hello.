@@ -92,21 +92,21 @@
 
   /* Approved Linear hierarchy: navigation < workspace < panel < raised UI.
      Components consume role aliases, never duplicate these palette values. */
-  --surface-sidebar: #f0f1f3;
+  --surface-sidebar: #f1f1f1;
   --surface-workspace: #f7f7f8;
   --surface-panel: #fafafa;
   --surface-raised: #ffffff;
   --surface-hover: #f0f0f1;
   --surface-active: #e8e8ea;
-  --surface-edge: #e4e4e7;
-  --surface-edge-strong: #d4d4d8;
-  --surface-glow: #dcdfe3;
+  --surface-edge: #e5e5e5;
+  --surface-edge-strong: #d6d6d6;
+  --surface-glow: #dfdfdf;
   /* 23:02 reference refinement: light is a local, elliptical falloff, never
      a diagonal wash. Each fill ends opaque so the rim cannot tint its body.
      Keep the base color tokens above as colors for controls/contrast roles. */
   --surface-light-ink: #ffffff;
-  --surface-rim-ink: #191c23;
-  --surface-cloud-peak: #f0f1f3;
+  --surface-rim-ink: #1c1c1c;
+  --surface-cloud-peak: #f1f1f1;
   --surface-cloud-soft: #f6f7f8;
   --surface-cloud-shade: #fafafb;
   --surface-cloud-spread: 1.4;
@@ -157,11 +157,11 @@
     var(--surface-panel) 76%
   );
   --surface-surround-shadow: 0 4px 16px -6px rgb(0 0 0 / 8%);
-  --sidebar-current-fill: #e4e5e8;
-  --ink-primary: #24262b;
-  --ink-secondary: #565961;
-  --ink-tertiary: #727680;
-  --ink-disabled: #b4b4ba;
+  --sidebar-current-fill: #e5e5e5;
+  --ink-primary: #262626;
+  --ink-secondary: #595959;
+  --ink-tertiary: #767676;
+  --ink-disabled: #b5b5b5;
   --color-bg: var(--surface-workspace);
   --color-surface: var(--surface-raised);
   --color-surface-hover: var(--surface-hover);
@@ -177,11 +177,11 @@
   /* Menus are a distinct floating layer, including when portalled to body. */
   --menu-fill: #ffffff;
   --menu-hover: #ececee;
-  --menu-active: #e2e3e6;
-  --menu-edge: #dcdde0;
+  --menu-active: #e3e3e3;
+  --menu-edge: #dddddd;
   --menu-separator: #e8e8eb;
-  --menu-ink: #24262b;
-  --menu-muted: #727680;
+  --menu-ink: #262626;
+  --menu-muted: #767676;
   --menu-shadow: 0 12px 32px rgb(25 28 35 / 12%), 0 2px 6px rgb(25 28 35 / 8%);
   --menu-radius: var(--r-12);
   --menu-row-radius: var(--r-8);
@@ -261,7 +261,7 @@
   --term-ansi-magenta: #bf5af2;
   --term-ansi-cyan: #64d2ff;
   --term-ansi-white: #b4b4b8;
-  --term-ansi-bright-black: #6a6a70;
+  --term-ansi-bright-black: #6b6b6b;
   --term-ansi-bright-red: #ff6961;
   --term-ansi-bright-green: #5be584;
   --term-ansi-bright-yellow: #ffe066;
@@ -277,25 +277,25 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --surface-sidebar: #101112;
-    --surface-workspace: #131415;
-    --surface-panel: #171819;
-    --surface-raised: #212225;
-    --surface-hover: #282a2e;
-    --surface-active: #33363c;
-    --surface-edge: #2c2e32;
-    --surface-edge-strong: #414349;
-    --surface-glow: #232529;
+    --surface-sidebar: #111111;
+    --surface-workspace: #141414;
+    --surface-panel: #181818;
+    --surface-raised: #222222;
+    --surface-hover: #2a2a2a;
+    --surface-active: #363636;
+    --surface-edge: #2e2e2e;
+    --surface-edge-strong: #434343;
+    --surface-glow: #252525;
     --surface-rim-ink: #ffffff;
-    --surface-cloud-peak: #1d1e1f;
-    --surface-cloud-soft: #161718;
-    --surface-cloud-shade: #111213;
+    --surface-cloud-peak: #1e1e1e;
+    --surface-cloud-soft: #171717;
+    --surface-cloud-shade: #121212;
     --surface-surround-shadow: 0 4px 16px -6px rgb(0 0 0 / 12%);
-    --sidebar-current-fill: #191a1c;
-    --ink-primary: #e5e5e7;
-    --ink-secondary: #b1b3bb;
-    --ink-tertiary: #92959e;
-    --ink-disabled: #6a6a70;
+    --sidebar-current-fill: #1a1a1a;
+    --ink-primary: #e6e6e6;
+    --ink-secondary: #b3b3b3;
+    --ink-tertiary: #969696;
+    --ink-disabled: #6b6b6b;
     --color-text-inverse: #ffffff;
     --menu-fill: #212121;
     --menu-hover: #323232;
@@ -335,25 +335,25 @@
 }
 
 :root[data-theme='dark'] {
-  --surface-sidebar: #101112;
-  --surface-workspace: #131415;
-  --surface-panel: #171819;
-  --surface-raised: #212225;
-  --surface-hover: #282a2e;
-  --surface-active: #33363c;
-  --surface-edge: #2c2e32;
-  --surface-edge-strong: #414349;
-  --surface-glow: #232529;
+  --surface-sidebar: #111111;
+  --surface-workspace: #141414;
+  --surface-panel: #181818;
+  --surface-raised: #222222;
+  --surface-hover: #2a2a2a;
+  --surface-active: #363636;
+  --surface-edge: #2e2e2e;
+  --surface-edge-strong: #434343;
+  --surface-glow: #252525;
   --surface-rim-ink: #ffffff;
-  --surface-cloud-peak: #1d1e1f;
-  --surface-cloud-soft: #161718;
-  --surface-cloud-shade: #111213;
+  --surface-cloud-peak: #1e1e1e;
+  --surface-cloud-soft: #171717;
+  --surface-cloud-shade: #121212;
   --surface-surround-shadow: 0 4px 16px -6px rgb(0 0 0 / 12%);
-  --sidebar-current-fill: #191a1c;
-  --ink-primary: #e5e5e7;
-  --ink-secondary: #b1b3bb;
-  --ink-tertiary: #92959e;
-  --ink-disabled: #6a6a70;
+  --sidebar-current-fill: #1a1a1a;
+  --ink-primary: #e6e6e6;
+  --ink-secondary: #b3b3b3;
+  --ink-tertiary: #969696;
+  --ink-disabled: #6b6b6b;
   --color-text-inverse: #ffffff;
   --menu-fill: #212121;
   --menu-hover: #323232;

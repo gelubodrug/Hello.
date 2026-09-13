@@ -163,3 +163,17 @@ Shiki, Lucide and Inter are pinned in `package.json` / `pnpm-lock.yaml`. Their
 respective licenses remain with the installed packages. Fonts are bundled;
 there is no font CDN. The app icon is an original code-native vector in
 `assets/icon.svg`; `pnpm icon` renders its full-resolution packaging asset.
+
+## Model token budgets — diagnosis read from the sibling app
+
+No code was taken. `src/runtime/localModels/reasoningProfile.ts` in the sibling app
+(`sibling-app`, read-only) records why its
+DeepSeek V4 profile raises the output budget to 16,000: "the previous
+1,024-token direct chat budget was routinely exhausted entirely by reasoning,
+leaving a valid response with content:''". That is the failure Hello. hit with
+an OpenRouter reasoning model. The sibling app resolves it with a regex over the model id
+and a hardcoded budget, and re-probes the running server for the loaded context
+(`fetchContextSize`); Hello. instead adopts what the provider publishes for the
+selected model, in main (`adoptedLimits` in `src/main/chat/service.ts`), and
+prefers a server's loaded `meta.n_ctx` over a model's trained context_length —
+the same priority the sibling app’s probe uses.

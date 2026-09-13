@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Blocks, Check, ChevronDown, Plug, RefreshCw, SlidersHorizontal, Star, AppWindow } from "lucide-react";
-import type { AppSettings, SettingsPatch } from "../../shared/types";
+import { Blocks, Check, ChevronDown, ChevronLeft, Plug, RefreshCw, SlidersHorizontal, Star, AppWindow } from "lucide-react";
+import type { AppSettings, ModelChoice, SettingsPatch } from "../../shared/types";
 import { api } from "../api";
-import { Dialog, ErrorNote, MenuButton, errorText } from "../ui/primitives";
+import { ErrorNote, MenuButton, MenuLayerAbove, errorText } from "../ui/primitives";
 import { ExtensionsSection } from "./ExtensionsSection";
 import { AppAuditSection } from "./AppAuditSection";
 import { ENDPOINT_PRESETS, presetFor, suggestedName } from "./presets";
@@ -46,8 +46,11 @@ export function SettingsDialog({
   const [draft, setDraft] = useState(settings);
   const [key, setKey] = useState("");
   const [keyEdited, setKeyEdited] = useState(false);
+  // The two token fields are an override. Saving them unchanged would claim
+  // them for the selected model and stop main from reading the published ones.
+  const [limitsEdited, setLimitsEdited] = useState(false);
   const [keyMasked, setKeyMasked] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
+  const [models, setModels] = useState<ModelChoice[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -117,8 +120,10 @@ export function SettingsDialog({
     temperature: draft.temperature,
     systemPrompt: draft.systemPrompt,
     reasoningEffort: draft.reasoningEffort,
-    contextWindow: draft.contextWindow ?? 32768,
-    maxOutputTokens: draft.maxOutputTokens ?? 4096,
+    ...(limitsEdited ? {
+      contextWindow: draft.contextWindow ?? 32768,
+      maxOutputTokens: draft.maxOutputTokens ?? 4096,
+    } : {}),
     modelCompatibility: draft.modelCompatibility ?? 'auto',
     approvals: draft.approvals ?? 'all',
     ...(keyEdited ? { apiKey: key } : {}),
@@ -142,41 +147,41 @@ export function SettingsDialog({
       setBusy(false);
     }
   };
+  if (!open) return null;
   return (
-    <Dialog open={open} title="Settings" onClose={onClose} wide>
-<div className="settings-tabs" role="tablist" aria-label="Settings sections">
+    <MenuLayerAbove layer={300}>
+    <div className="settings-page" role="region" aria-label="Settings"
+      onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
+      <nav className="settings-nav" aria-label="Settings sections">
+        <button type="button" className="settings-back" onClick={onClose}>
+          <ChevronLeft size={16} aria-hidden />
+          Back
+        </button>
+        <h2>Settings</h2>
+        <ul>
           {([
             { id: 'connection', label: 'Connection', Icon: SlidersHorizontal },
             { id: 'extensions', label: 'Extensions', Icon: Blocks },
             { id: 'app', label: 'App', Icon: AppWindow },
           ] as const).map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={section === tab.id}
-              className="pill"
-              onClick={() => setSection(tab.id)}
-            >
-              <tab.Icon size={14} aria-hidden />
-              {tab.label}
-            </button>
+            <li key={tab.id}>
+              <button
+                type="button"
+                aria-current={section === tab.id ? 'true' : undefined}
+                onClick={() => setSection(tab.id)}
+              >
+                <tab.Icon size={16} aria-hidden />
+                {tab.label}
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
+      </nav>
+      <div className="settings-content">
       {section === 'extensions' ? (
-        <>
-          <ExtensionsSection />
-          <div className="dialog-actions">
-            <button className="pill" onClick={onClose}>Close</button>
-          </div>
-        </>
+        <ExtensionsSection />
       ) : section === 'app' ? (
-        <>
-          <AppAuditSection dataPath={dataPath} version={version} endpointUrl={settings.endpointUrl} extensionsLoaded={extensionsCount} />
-          <div className="dialog-actions">
-            <button className="pill" onClick={onClose}>Close</button>
-          </div>
-        </>
+        <AppAuditSection dataPath={dataPath} version={version} endpointUrl={settings.endpointUrl} extensionsLoaded={extensionsCount} />
       ) : (
       <div className="settings-form">
         <p className="muted">
@@ -212,32 +217,43 @@ export function SettingsDialog({
           <MenuButton
             label="Saved connections"
             className="pill"
-            items={
-              settings.connections.length
-                ? [
-                    ...settings.connections.map(entry => ({
-                      id: entry.endpointUrl,
-                      label: entry.name,
-                      detail: entry.model || entry.endpointUrl,
-                      checked: endpointIdentity(entry.endpointUrl) === endpointIdentity(settings.endpointUrl),
-                      action: () => void run(() => api.settings.useConnection(entry.endpointUrl)),
-                    })),
-                    { id: 'forget-separator', label: '', separator: true },
-                    {
-                      id: 'forget',
-                      label: 'Forget…',
-                      children: settings.connections
-                        .filter(entry => endpointIdentity(entry.endpointUrl) !== endpointIdentity(settings.endpointUrl))
-                        .map(entry => ({
-                          id: `forget:${entry.endpointUrl}`,
-                          label: entry.name,
-                          detail: 'Also deletes its saved key',
-                          action: () => void run(() => api.settings.forgetConnection(entry.endpointUrl)),
-                        })),
-                    },
-                  ]
-                : [{ id: 'empty', label: 'Nothing saved yet', disabled: true }]
-            }
+            // The menu holds the whole idea: what is kept, and how to keep this.
+            items={[
+              ...settings.connections.map(entry => ({
+                id: entry.endpointUrl,
+                label: entry.name,
+                detail: entry.model || entry.endpointUrl,
+                checked: endpointIdentity(entry.endpointUrl) === endpointIdentity(settings.endpointUrl),
+                action: () => void run(() => api.settings.useConnection(entry.endpointUrl)),
+              })),
+              ...(settings.connections.length ? [{ id: 'keep-separator', label: '', separator: true }] : []),
+              {
+                id: 'keep',
+                label: remembered ? `Update “${remembered.name}”` : 'Keep this connection',
+                detail: remembered
+                  ? 'Saves the endpoint, key and model as they are now'
+                  : `Saves this endpoint, key and model as “${name.trim() || suggestedName(draft.endpointUrl) || 'this connection'}”`,
+                action: () => void run(async () => {
+                  await api.settings.save(patch());
+                  return api.settings.rememberConnection(
+                    name.trim() || remembered?.name || suggestedName(draft.endpointUrl));
+                }),
+              },
+              ...(settings.connections.some(entry => endpointIdentity(entry.endpointUrl) !== endpointIdentity(settings.endpointUrl))
+                ? [{
+                    id: 'forget',
+                    label: 'Forget…',
+                    children: settings.connections
+                      .filter(entry => endpointIdentity(entry.endpointUrl) !== endpointIdentity(settings.endpointUrl))
+                      .map(entry => ({
+                        id: `forget:${entry.endpointUrl}`,
+                        label: entry.name,
+                        detail: 'Also deletes its saved key',
+                        action: () => void run(() => api.settings.forgetConnection(entry.endpointUrl)),
+                      })),
+                  }]
+                : []),
+            ]}
           >
             <Star size={14} aria-hidden />
             {remembered ? remembered.name : 'Saved'}
@@ -286,10 +302,14 @@ export function SettingsDialog({
             items={
               models.length
                 ? models.map((model) => ({
-                    id: model,
-                    label: model,
-                    checked: draft.model === model,
-                    action: () => setDraft((value) => ({ ...value, model })),
+                    id: model.id,
+                    label: model.id,
+                    detail: model.contextWindow
+                      ? `${model.contextWindow.toLocaleString('en')} tokens`
+                      : undefined,
+                    checked: draft.model === model.id,
+                    // Only the choice. Main reads this model's published limits.
+                    action: () => setDraft(value => ({ ...value, model: model.id })),
                   }))
                 : [{ id: "empty", label: "Load models first", disabled: true }]
             }
@@ -307,7 +327,7 @@ export function SettingsDialog({
         </button>
         <div className="settings-model-row">
           <label>
-            Keep this connection as
+            Name this connection
             <input
               value={name}
               placeholder={remembered ? remembered.name : suggestedName(draft.endpointUrl) || "A name you will recognise"}
@@ -318,7 +338,7 @@ export function SettingsDialog({
           <button
             className="pill"
             disabled={busy}
-            title="Saves this endpoint, key and model, then keeps them under this name"
+            title="Saves this endpoint, key and model, then keeps them under this name — the same as Keep in the Saved menu"
             onClick={() =>
               void run(async () => {
                 // Keep what is on screen, not a stale save from before the edit.
@@ -408,7 +428,7 @@ export function SettingsDialog({
               min="20480"
               step="1"
               value={draft.contextWindow ?? 32768}
-              onChange={event => setDraft(value => ({ ...value, contextWindow: Number(event.target.value) }))}
+              onChange={event => { setLimitsEdited(true); setDraft(value => ({ ...value, contextWindow: Number(event.target.value) })); }}
             />
           </label>
           <label>
@@ -418,13 +438,15 @@ export function SettingsDialog({
               min="512"
               step="1"
               value={draft.maxOutputTokens ?? 4096}
-              onChange={event => setDraft(value => ({ ...value, maxOutputTokens: Number(event.target.value) }))}
+              onChange={event => { setLimitsEdited(true); setDraft(value => ({ ...value, maxOutputTokens: Number(event.target.value) })); }}
             />
           </label>
         </div>
         <p className="muted">
-          Set the context window loaded by your server, which may be smaller than
-          the model’s advertised maximum. The defaults are not detected values.
+          These follow the model on their own: when the provider publishes its
+          limits, Hello. adopts them before the next reply. Change them to hold a
+          value of your own — for a server loaded with a smaller window than the
+          model advertises, say — and that value stays with this model.
           Pi compacts automatically, reserving at least 16,384 tokens for output
           and request overhead. Maximum output includes reasoning tokens.
           This initial profile needs at least 20,480 context tokens.
@@ -488,9 +510,6 @@ export function SettingsDialog({
               </>
             )}
           </span>
-          <button className="pill" onClick={onClose}>
-            Close
-          </button>
           <button
             className="pill primary-button"
             disabled={busy}
@@ -501,6 +520,8 @@ export function SettingsDialog({
         </div>
       </div>
       )}
-    </Dialog>
+      </div>
+    </div>
+    </MenuLayerAbove>
   );
 }

@@ -1,5 +1,11 @@
 # Chat activity refinement
 
+> **Superseded where it conflicts.** The rules the timeline is held to now live
+> in `CHAT-ACTIVITY-RULES.md`, read off the reference the user approved on
+> 2026-09-11. This document is the history of how the timeline got here and is
+> still worth reading for the reasoning; where the two disagree, the rules win.
+> In particular: the "one 1px rail" below is gone — R2 forbids it.
+
 Approved direction: keep Hello.'s materials and type; make the answer the primary
 content and the activity a compact, inspectable timeline. No new library or shell
 changes. This is the implementation plan for the user's approved proposal.

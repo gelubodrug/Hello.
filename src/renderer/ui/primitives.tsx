@@ -22,6 +22,10 @@ import { onNativeBrowserFocus } from "../api";
 import { animateSurface } from "./surface-motion";
 
 const MenuLayer = createContext(100);
+/** Surfaces that cover the app raise the menus opened inside them. */
+export function MenuLayerAbove({ layer, children }: { layer: number; children: ReactNode }) {
+  return <MenuLayer.Provider value={layer}>{children}</MenuLayer.Provider>;
+}
 
 export function Truncated({
   children,
@@ -127,6 +131,10 @@ export interface MenuItem {
   shortcut?: string;
   disabled?: boolean;
   checked?: boolean;
+  /** Which kind of thing this is. Distinct groups become quick filters. */
+  group?: string;
+  /** A toggle, not a destination: acting on it leaves the menu open. */
+  stayOpen?: boolean;
   separator?: boolean;
   action?: () => void;
   children?: MenuItem[];
@@ -292,6 +300,7 @@ export function MenuButton({
   const [page, setPage] = useState<MenuItem | null>(null);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
+  const [group, setGroup] = useState<string | null>(null);
   const layer = useContext(MenuLayer);
   const trigger = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
@@ -312,8 +321,19 @@ export function MenuButton({
       ]
     : items;
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  const visible = searchPlaceholder && terms.length
-    ? unfiltered.filter(item => terms.every(term => item.label.toLocaleLowerCase().includes(term)))
+  // The kinds present, in the order they first appear, so the pills follow the
+  // list rather than an alphabet nobody asked for.
+  const groups = [...new Set(unfiltered.flatMap(item => item.group ?? []))];
+  const matched = unfiltered.filter(item =>
+    (!terms.length || terms.every(term => item.label.toLocaleLowerCase().includes(term))) &&
+    (!group || !item.group || item.group === group));
+  // A heading with nothing under it is not a heading.
+  const visible = searchPlaceholder
+    ? matched.filter((item, index) => {
+        if (item.action || item.children || !item.separator) return true;
+        const next = matched[index + 1];
+        return Boolean(next && (next.action || next.children));
+      })
     : unfiltered;
   const close = () => {
     setOpen(false);
@@ -387,6 +407,7 @@ export function MenuButton({
             setPage(null);
             setActive(0);
             setQuery("");
+            setGroup(null);
             onOpen?.();
           }
           setOpen((value) => !value);
@@ -450,12 +471,27 @@ export function MenuButton({
           >
             {heading && <div className="menu-heading">{heading}</div>}
             {searchPlaceholder && <div className="menu-search">
-              <Search size={15} aria-hidden="true" />
-              <input aria-label="Search models" placeholder={searchPlaceholder} value={query}
+              <Search size={14} aria-hidden="true" />
+              <input aria-label={searchPlaceholder} placeholder={searchPlaceholder} value={query}
                 autoComplete="off" spellCheck={false}
                 onChange={event => { setQuery(event.target.value); setActive(0); }} />
             </div>}
-            {searchPlaceholder && visible.length === 0 && <p className="menu-empty" role="status">No models match your search.</p>}
+            {searchPlaceholder && groups.length > 1 && (
+              <div className="menu-filters" role="group" aria-label="Kinds">
+                {[null, ...groups].map(kind => (
+                  <button
+                    key={kind ?? "all"}
+                    type="button"
+                    className="menu-filter"
+                    aria-pressed={group === kind}
+                    onClick={() => { setGroup(kind); setActive(0); }}
+                  >
+                    {kind ?? "All"}
+                  </button>
+                ))}
+              </div>
+            )}
+            {searchPlaceholder && visible.length === 0 && <p className="menu-empty" role="status">Nothing matches your search.</p>}
             {visible.map((item, index) => (
               <div key={item.id}>
                 {item.separator && index > 0 && (
@@ -475,6 +511,7 @@ export function MenuButton({
                       setPage(item);
                       setActive(0);
                     } else if (page && item.id === "back") item.action?.();
+                    else if (item.stayOpen) item.action?.();
                     else {
                       close();
                       item.action?.();

@@ -28,7 +28,18 @@ This is a separate, greenfield Electron app. Never mutate the old repository at
   require a grant. Prefer browser_open; it creates an Off tab. Off still blocks
   page reading and DOM interaction; Read allows reading; Full allows interaction.
 - Generated HTML uses browser_show_html: bounded app-owned artifacts work without
-  an attached folder and open in an Off tab. They are not workspace write grants.
+  an attached folder. Such a tab opens at Full, and only such a tab: the model
+  wrote every word in it, it is served from an isolated local session with
+  nothing signed in, and a page it cannot look at is a page it never checked.
+  The grant belongs to the document, not to the tab — navigating that tab
+  anywhere else, or the page sending itself away, drops it back to Off. They are
+  still not workspace write grants.
+- A tab is saved by the handle that can produce its page again, never by a local
+  address whose port dies with the app: `artifact:<id>` for a generated document,
+  a folder-relative path for a previewed file. Both come back after a restart,
+  served again the moment the tab is looked at. A dev server is the one thing
+  that legitimately does not: tell the model so rather than restoring a dead URL.
+  A previewed file is the person's, so it comes back Off.
   Opening a page is navigation success only, never proof its content is correct.
 - In the active dev workflow, the user performs testing. Do not run builds,
   packaging, tests or restart the dev app unless requested. Non-emitting static

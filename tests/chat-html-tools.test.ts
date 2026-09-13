@@ -36,11 +36,47 @@ describe('generated HTML browser tools', () => {
     const definition = toolDefinitions(false, true).find(item => item.function.name === 'browser_show_html');
     expect(definition?.function.parameters).toMatchObject({
       required: ['html'], additionalProperties: false,
-      properties: { html: { type: 'string' } },
+      properties: { html: { type: 'string' }, more: { type: 'boolean' } },
     });
     expect(definition?.function.parameters.properties).not.toHaveProperty('title');
     expect(definition?.function.parameters.properties).not.toHaveProperty('tabId');
     expect(toolDefinitions(false, false).some(item => item.function.name === 'browser_show_html')).toBe(false);
+  });
+
+  it('tells the model what it is holding, instead of letting it assume Off', async () => {
+    const { tab, browser, context } = fixture();
+    // The app grants Full on a document the model wrote. If the result keeps
+    // saying "an Off tab is expected", the model believes that over the field
+    // beside it and reports things it could have checked as unverifiable.
+    browser.showHtml.mockResolvedValue({ tab: { ...tab, control: 'full' }, artifact });
+    const granted = JSON.parse(await executeTool('browser_show_html', { html }, context));
+    expect(granted.control).toBe('full');
+    expect(granted.note).toContain('yours at Full');
+    expect(granted.note).not.toContain('Off');
+    // And an Off tab still says so plainly.
+    browser.showHtml.mockResolvedValue({ tab, artifact });
+    const off = JSON.parse(await executeTool('browser_show_html', { html }, context));
+    expect(off.note).toContain('This tab is Off');
+  });
+
+  it('builds a long document in parts, writing nothing until the closing call', async () => {
+    const { browser, context } = fixture();
+    // Emitting 36 KiB of exact syntax in one tool argument is where a long run
+    // dies; a part lost to a provider error should cost that part, not the file.
+    const first = JSON.parse(await executeTool('browser_show_html',
+      { html: '<!doctype html><html><body>', more: true }, context));
+    expect(first).toMatchObject({ held: 1 });
+    expect(browser.showHtml).not.toHaveBeenCalled();
+    await executeTool('browser_show_html', { html: '<p>Hello.</p>', more: true }, context);
+    expect(browser.showHtml).not.toHaveBeenCalled();
+    const done = JSON.parse(await executeTool('browser_show_html', { html: '</body></html>' }, context));
+    expect(browser.showHtml).toHaveBeenCalledWith('chat',
+      '<!doctype html><html><body><p>Hello.</p></body></html>', context.signal);
+    expect(done).toMatchObject({ artifact, openedIn: 'Hello Browser' });
+    // The parts are gone: a later document does not inherit the last one.
+    browser.showHtml.mockClear();
+    await executeTool('browser_show_html', { html }, context);
+    expect(browser.showHtml).toHaveBeenCalledWith('chat', html, context.signal);
   });
 
   it('opens generated HTML without folder, tabs, approval or content verification', async () => {

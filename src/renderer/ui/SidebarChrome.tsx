@@ -61,19 +61,23 @@ export function SidebarChrome({ visible, children }: { visible: boolean; childre
         event.preventDefault(); dismiss(); edge.current?.focus({ preventScroll: true });
       }
     };
+    // Focus leaving the window closes the drawer, unless the drawer is what
+    // holds it: opening search focuses its field, and a native menu or a guest
+    // page taking focus must not pull the navigation out from under the pointer.
+    const leftWindow = () => { if (!inside(document.activeElement)) dismiss(); };
     const stopNativeFocus = onNativeBrowserFocus(dismiss);
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerdown', down);
     document.addEventListener('keydown', key);
     document.documentElement.addEventListener('pointerleave', leaveDocument);
-    window.addEventListener('blur', dismiss);
+    window.addEventListener('blur', leftWindow);
     return () => {
       clearLeave(); stopNativeFocus();
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerdown', down);
       document.removeEventListener('keydown', key);
       document.documentElement.removeEventListener('pointerleave', leaveDocument);
-      window.removeEventListener('blur', dismiss);
+      window.removeEventListener('blur', leftWindow);
     };
   }, [visible, present]);
 
@@ -83,11 +87,12 @@ export function SidebarChrome({ visible, children }: { visible: boolean; childre
     requestAnimationFrame(() => drawer.current?.querySelector<HTMLButtonElement>('button')?.focus());
   };
   return <>
-    {!visible && <>
-      <div className="window-drag-strip" aria-hidden="true" />
+    {/* The window is dragged by the strip beside its controls, pinned or not:
+        the title bar itself holds buttons and must stay clickable. */}
+    <div className="window-drag-strip" aria-hidden="true" />
+    {!visible &&
       <button ref={edge} type="button" className="sidebar-edge" aria-label="Show sidebar temporarily"
-        aria-expanded={peek} aria-controls="hello-navigation" onPointerEnter={reveal} onClick={focusDrawer} />
-    </>}
+        aria-expanded={peek} aria-controls="hello-navigation" onPointerEnter={reveal} onClick={focusDrawer} />}
     <div ref={drawer} id="hello-navigation" className="navigation-area" data-pinned={visible}
       hidden={!visible && !present} aria-hidden={!visible && !peek || undefined}
       onPointerEnter={reveal}>

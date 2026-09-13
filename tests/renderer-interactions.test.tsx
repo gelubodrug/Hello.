@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppSettings,
+  HelloAPI,
+  LibraryResource,
   Conversation,
   Message,
   NotebookChange,
@@ -18,12 +20,15 @@ import {
 import { Notebook } from "../src/renderer/notebook/Notebook";
 import { MenuButton } from "../src/renderer/ui/primitives";
 import { SettingsDialog } from "../src/renderer/settings/SettingsDialog";
+import { ExtensionsPicker } from "../src/renderer/chat/ExtensionsPicker";
 
 const mocks = vi.hoisted(() => ({
-  extensionsList: vi.fn(async () => []),
-  extensionsActive: vi.fn(async () => []),
-  extensionsSetActive: vi.fn(async () => []),
-  extensionsStatus: vi.fn(async () => []),
+  extensionsList: vi.fn<HelloAPI['extensions']['list']>(async () => []),
+  extensionsActive: vi.fn<HelloAPI['extensions']['active']>(async () => []),
+  extensionsSetActive: vi.fn<HelloAPI['extensions']['setActive']>(async () => []),
+  extensionsStatus: vi.fn<HelloAPI['extensions']['status']>(async () => []),
+  extensionsDiscover: vi.fn<HelloAPI['extensions']['discover']>(),
+  extensionsImportDiscovered: vi.fn<HelloAPI['extensions']['importDiscovered']>(),
   send: vi.fn(),
   attach: vi.fn(),
   pathsForFiles: vi.fn(),
@@ -72,6 +77,8 @@ vi.mock("../src/renderer/api", () => ({
       active: mocks.extensionsActive,
       setActive: mocks.extensionsSetActive,
       status: mocks.extensionsStatus,
+      discover: mocks.extensionsDiscover,
+      importDiscovered: mocks.extensionsImportDiscovered,
       onChange: vi.fn(() => () => {}),
     },
   },
@@ -196,7 +203,8 @@ beforeEach(() => {
   mocks.conversationUpdate.mockImplementation(async (id, patch) => ({ ...conversation, id, ...patch }));
   mocks.stop.mockResolvedValue(undefined);
   mocks.approve.mockResolvedValue(undefined);
-  mocks.models.mockResolvedValue(["test-model", "second-model"]);
+  mocks.models.mockResolvedValue([{ id: "test-model" }, { id: "second-model" }]);
+  mocks.extensionsDiscover.mockResolvedValue({ mcp: [], skills: [] });
   mocks.settingsSave.mockImplementation(async (patch) => ({
     ...settings,
     ...patch,
@@ -473,24 +481,32 @@ describe("compact activity timeline", () => {
       { type: "text", text: "Answer" }] };
   const show = (value: Message) => render(createElement(MessageContent, { message: value, sources: [] }));
   const summary = () => host.querySelector<HTMLButtonElement>(".activity-summary")!;
-  const detail = () => host.querySelector<HTMLDivElement>(".activity-entries")!;
+  const detail = () => host.querySelector<HTMLDivElement>(".activity-detail .activity-entries")!;
+  const tail = () => host.querySelector<HTMLDivElement>(".activity-tail .activity-entries");
   const reveal = () => host.querySelector<HTMLDivElement>(".activity-reveal")!;
 
   it("groups interleaved commentary once, leaves the answer outside and collapses successful work on completion", async () => {
     await show(message);
     expect(host.querySelectorAll(".activity-group")).toHaveLength(1);
     expect(summary().textContent).toContain("1 search · 1 tool");
-    expect(reveal().dataset.open).toBe('true');
-    expect(Array.from(detail().children).map(node => node.className)).toEqual(["thinking-part", "tool-part", "markdown", "tool-part"]);
-    expect(detail().textContent).toContain("Checking the source.");
-    expect(detail().textContent).not.toContain("Answer");
+    // While the reply is still arriving the whole list stays folded: only the
+    // work happening now shows, in place, under the summary.
+    expect(reveal().dataset.open).toBe('false');
+    expect(Array.from(tail()!.children).map(node => node.className)).toEqual(["activity-note", "tool-part"]);
+    expect(tail()!.textContent).toContain("Checking the source.");
+    expect(tail()!.textContent).not.toContain("Answer");
     expect(host.lastElementChild?.textContent).toBe("Answer");
     expect(host.querySelector('.thinking-part[data-active="true"]')).toBeNull();
     await show({ ...message, status: "complete" });
     expect(reveal().dataset.open).toBe('false');
     expect(reveal().getAttribute('aria-hidden')).toBe('true');
     expect(reveal().inert).toBe(true);
-    expect(detail().children).toHaveLength(4); // Retained throughout roll-up; no abrupt unmount.
+    // Opened once, the steps stay mounted through a roll-up: no abrupt unmount.
+    await click(summary());
+    expect(detail().children).toHaveLength(4);
+    await click(summary());
+    expect(reveal().dataset.open).toBe('false');
+    expect(detail().children).toHaveLength(4);
   });
   it("respects explicitly opened activity and tool details after completion", async () => {
     await show(message);
@@ -527,13 +543,57 @@ describe("compact activity timeline", () => {
     expect(host.querySelector(".thinking-body")?.textContent).toContain("Original reasoning");
     expect(summary().textContent).toContain("Running");
   });
-  it("keeps all subtools available behind the bounded viewport rather than truncating their data", async () => {
+  it("folds commentary long enough to be a wall down to the one row its neighbours are", async () => {
+    const wall = { type: "text" as const, text: Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n\n") };
+    // jsdom reports no layout, so measurement has to be stood in for.
+    const heights = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(400);
+    try {
+      await show({ ...message, parts: [{ type: "thinking", text: "Reasoning", durationMs: 5 }, wall, tool] });
+      const note = host.querySelector<HTMLElement>('.activity-note')!;
+      expect(note.dataset.folded).toBe('true');
+      // The same row as the thinking and the tool: a title and a chevron.
+      const row = note.querySelector<HTMLButtonElement>('.disclosure-button')!;
+      expect(row.textContent).toContain('line 0');
+      expect(row.getAttribute('aria-expanded')).toBe('false');
+      await click(row);
+      expect(note.dataset.folded).toBeUndefined();
+      expect(note.textContent).toContain('line 39');
+    } finally { heights.mockRestore(); }
+  });
+
+  it("says a short remark outright rather than making it a row to open", async () => {
+    const heights = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(20);
+    try {
+      await show({ ...message, parts: [{ type: "text", text: "Checking the source." }, tool] });
+      const note = host.querySelector<HTMLElement>('.activity-note')!;
+      expect(note.querySelector('.disclosure-button')).toBeNull();
+      expect(note.textContent).toContain('Checking the source.');
+    } finally { heights.mockRestore(); }
+  });
+
+  it("opens the whole run as a continuation of the tail, and never shows both", async () => {
+    await show(message);
+    expect(tail()).not.toBeNull();
+    await click(summary());
+    // One list at a time: the tail is the folded state of the same steps.
+    expect(reveal().dataset.open).toBe('true');
+    expect(tail()).toBeNull();
+    expect(Array.from(detail().children).map(node => node.className)).toEqual(["thinking-part", "tool-part", "activity-note", "tool-part"]);
+  });
+  it("says a long run of the same work once, and keeps every step behind it", async () => {
     const parts = Array.from({ length: 25 }, (_, index) => ({ ...tool, id: `tool-${index}` }));
     await show({ ...message, parts });
-    expect(detail().querySelectorAll('.tool-part')).toHaveLength(25);
-    expect(host.querySelector('.activity-detail')?.getAttribute('tabindex')).toBe('0');
+    // Twenty-five searches are one sentence, not twenty-five rows.
+    const row = tail()!.querySelector<HTMLButtonElement>('.disclosure-button')!;
+    expect(row.textContent).toContain('Ran 25 searches');
+    expect(tail()!.querySelectorAll('.tool-part')).toHaveLength(1);
+    await click(summary());
+    // Opening the run shows each step, and nothing is truncated.
+    await click(detail().querySelector<HTMLButtonElement>('.disclosure-button')!);
+    expect(detail().querySelectorAll('.tool-part')).toHaveLength(26);
+    // The timeline never grows a scrollbar of its own.
     expect(host.querySelector('.activity-detail')?.getAttribute('role')).toBe('region');
-    expect(host.querySelector('.tool-detail')).toBeNull();
+    expect(getComputedStyle(host.querySelector('.activity-detail')!).maxHeight).toBe('');
   });
 });
 
@@ -595,7 +655,7 @@ describe('chat selection context menu', () => {
 
 describe("settings shared controls", () => {
   it("keeps a searchable model menu above Settings and Escape closes only the menu", async () => {
-    mocks.models.mockResolvedValue(["aion-labs/aion-2.0", "vendor/fast:free", "vendor/large:free"]);
+    mocks.models.mockResolvedValue([{ id: "aion-labs/aion-2.0" }, { id: "vendor/fast:free" }, { id: "vendor/large:free" }]);
     const closeSettings = vi.fn();
     await render(createElement(SettingsDialog, { open: true, settings, onSaved: vi.fn(), onClose: closeSettings, dataPath: "/test/data", version: "0.1.0", extensionsCount: 0 }));
     await click(button("Save connection & load models"));
@@ -603,24 +663,27 @@ describe("settings shared controls", () => {
     await click(button("Available models"));
     const menu = document.querySelector<HTMLElement>('[role="menu"]')!;
     expect(menu.style.zIndex).toBe("300");
-    const search = menu.querySelector<HTMLInputElement>('input[aria-label="Search models"]')!;
+    // The field names itself after what it searches, so every menu that grows a
+    // search box does not announce itself as a model list.
+    const search = menu.querySelector<HTMLInputElement>('input[aria-label=\'search models try "free"\']')!;
     expect(search.placeholder).toBe('search models try "free"');
     await fill(search, "FREE");
     expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(2);
     expect(menu.textContent).not.toContain("aion-labs");
     expect(mocks.settingsSave).not.toHaveBeenCalled();
     await fill(search, "no matching model");
-    expect(menu.querySelector('[role="status"]')?.textContent).toBe("No models match your search.");
+    expect(menu.querySelector('[role="status"]')?.textContent).toBe("Nothing matches your search.");
     await fill(search, "large free");
     await act(async () => { search.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter", bubbles:true})); });
     expect(field("Model").value).toBe("vendor/large:free");
     await click(button("Available models"));
-    const reopened = document.querySelector<HTMLInputElement>('[aria-label="Search models"]')!;
+    const reopened = document.querySelector<HTMLInputElement>('.menu-search input')!;
     expect(reopened.value).toBe("");
     await act(async () => { reopened.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape", bubbles:true})); });
     expect(closeSettings).not.toHaveBeenCalled();
     expect(document.querySelector('[role="menu"]')).toBeNull();
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    // Settings is a page now, not a dialog: Escape closes the menu, not it.
+    expect(document.querySelector('.settings-page')).not.toBeNull();
   });
   it.each(["preserve", "remove", "replace"])("handles the masked saved key intuitively: %s", async action => {
     await render(createElement(SettingsDialog, {open:true, settings:{...settings,apiKeySet:true}, onSaved:vi.fn(), onClose:vi.fn(), dataPath:"/test/data", version: "0.1.0", extensionsCount: 0}));
@@ -685,7 +748,7 @@ describe("settings shared controls", () => {
     expect(field("Endpoint URL").value).toBe("https://openrouter.ai/api/v1");
     expect(field("Model").value).toBe("free-model");
     expect(document.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("•".repeat(24));
-    await fill(field("Keep this connection as"), "Work account");
+    await fill(field("Name this connection"), "Work account");
     await click(button("Update"));
     expect(mocks.settingsSave).toHaveBeenCalledWith(
       expect.objectContaining({ endpointUrl: "https://openrouter.ai/api/v1", model: "free-model" }),
@@ -721,6 +784,70 @@ describe("settings shared controls", () => {
     expect(saved).toHaveBeenCalledWith(
       expect.objectContaining({ reasoningEffort: "high" }),
     );
+  });
+});
+
+describe("the extensions a chat can use", () => {
+  const picker = () => createElement(ExtensionsPicker, {
+    conversationId: "chat-1", busy: false, onError: vi.fn(),
+  });
+  const held = (id: string, name: string): LibraryResource => ({
+    id, kind: 'skill', name, description: '', source: '', version: '',
+    fingerprint: '', state: 'ready', detail: '', entries: [], createdAt: 1, updatedAt: 1,
+  });
+
+  it("offers what the other agent tools already have, and turning one on is one click", async () => {
+    mocks.extensionsList.mockResolvedValue([]);
+    mocks.extensionsDiscover.mockResolvedValue({
+      mcp: [{ id: 'mcp:1', name: 'od-orchestrator', source: 'Codex', configPath: '/c', command: 'node', args: [], envNames: [], transport: 'stdio' }],
+      skills: [{ id: 'skill:1', name: 'frontend-design', description: 'Visual design guidance', source: 'Claude Code', path: '/s' }],
+    });
+    mocks.extensionsImportDiscovered.mockResolvedValue(held('imported-1', 'frontend-design'));
+    mocks.extensionsSetActive.mockResolvedValue(['imported-1']);
+    await render(picker());
+    await click(button("Extensions (2 available, none on)"));
+    // Nothing had to be imported in Settings for either of these to be here.
+    expect(menuItem("frontend-design").textContent).toContain("from Claude Code");
+    expect(menuItem("od-orchestrator").textContent).toContain("from Codex");
+    await click(menuItem("frontend-design"));
+    expect(mocks.extensionsImportDiscovered).toHaveBeenCalledWith('skill', 'skill:1');
+    expect(mocks.extensionsSetActive).toHaveBeenCalledWith('chat-1', 'imported-1', true);
+    // The menu is a set being assembled, not a destination: it stays open.
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  });
+
+  it("narrows by kind with one tap, and drops a heading left with nothing under it", async () => {
+    mocks.extensionsList.mockResolvedValue([held('a', 'alpha')]);
+    mocks.extensionsDiscover.mockResolvedValue({
+      mcp: [{ id: 'mcp:1', name: 'od-orchestrator', source: 'Codex', configPath: '/c', command: 'node', args: [], envNames: [], transport: 'stdio' }],
+      skills: [{ id: 'skill:1', name: 'frontend-design', description: '', source: 'Claude Code', path: '/s' }],
+    });
+    await render(picker());
+    await click(button("Extensions (3 available, none on)"));
+    expect(menuItem("od-orchestrator")).toBeDefined();
+    await click([...document.querySelectorAll<HTMLButtonElement>('.menu-filter')].find(node => node.textContent === 'Skills')!);
+    // Only skills remain, and the provenance heading follows what is left.
+    expect(document.body.textContent).toContain('frontend-design');
+    expect(document.body.textContent).not.toContain('od-orchestrator');
+    expect(document.body.textContent).toContain('Found on this Mac');
+    await click([...document.querySelectorAll<HTMLButtonElement>('.menu-filter')].find(node => node.textContent === 'MCP')!);
+    // Nothing of this kind was found on the Mac beyond the one server, and the
+    // library has no MCP entry, so the heading keeps its item and no more.
+    expect(document.body.textContent).toContain('od-orchestrator');
+    expect(document.body.textContent).not.toContain('alpha');
+  });
+
+  it("keeps the menu open while several are switched on and off", async () => {
+    mocks.extensionsList.mockResolvedValue([held('a', 'alpha'), held('b', 'beta')]);
+    mocks.extensionsActive.mockResolvedValue([]);
+    mocks.extensionsSetActive.mockImplementation(async (_id, resourceId) => [resourceId]);
+    await render(picker());
+    await click(button("Extensions (2 available, none on)"));
+    await click(menuItem("alpha"));
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    await click(menuItem("beta"));
+    expect(mocks.extensionsSetActive).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
   });
 });
 

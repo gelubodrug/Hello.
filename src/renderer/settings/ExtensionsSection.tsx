@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Blocks, ChevronRight, Cpu, Download, Pencil, Plug, RefreshCw, Search, Trash2, Wrench } from 'lucide-react';
 import type { DiscoveredResources, LibraryResource, McpServerStatus, ResourceKind } from '../../shared/types';
 import { api } from '../api';
@@ -231,6 +231,8 @@ export function ExtensionsSection() {
   };
   useEffect(() => {
     load();
+    // What other tools already have is worth knowing without being asked for.
+    scanRef.current();
     return api.extensions.onChange(load);
   }, []);
   const importResource = (kind: 'skill' | 'plugin') => {
@@ -249,6 +251,7 @@ export function ExtensionsSection() {
       .catch(reason => setError(errorText(reason)))
       .finally(() => setBusy(false));
   };
+  const scanRef = useRef<() => void>(() => {});
   const scan = () => {
     setScanning(true);
     setError(null);
@@ -263,6 +266,7 @@ export function ExtensionsSection() {
       .catch(reason => setError(errorText(reason)))
       .finally(() => setScanning(false));
   };
+  scanRef.current = scan;
   const adopt = (kind: 'skill' | 'mcp', id: string) => {
     setBusy(true);
     setError(null);
@@ -306,16 +310,24 @@ export function ExtensionsSection() {
             {!!rows.length && (
               <ul className="extension-list">
                 {rows.map(resource => (
-                  <ResourceRow
-                    key={resource.id}
-                    resource={resource}
-                    status={status.find(item => item.id === resource.id)}
-                    onChanged={load}
-                    onError={setError}
-                    busy={busy}
-                    setBusy={setBusy}
-                    onEdit={setEditing}
-                  />
+                  <Fragment key={resource.id}>
+                    <ResourceRow
+                      resource={resource}
+                      status={status.find(item => item.id === resource.id)}
+                      onChanged={load}
+                      onError={setError}
+                      busy={busy}
+                      setBusy={setBusy}
+                      onEdit={setEditing}
+                    />
+                    {/* Edit where the thing is, not at the end of the list. */}
+                    {editing?.id === resource.id && (
+                      <li className="extension-row extension-row-form">
+                        <McpForm onSaved={load} onError={setError} busy={busy} setBusy={setBusy}
+                          editing={editing} onCancelEdit={() => setEditing(null)} />
+                      </li>
+                    )}
+                  </Fragment>
                 ))}
               </ul>
             )}
@@ -355,7 +367,7 @@ export function ExtensionsSection() {
               );
             })()}
             {group.kind === 'mcp' ? (
-              <McpForm onSaved={load} onError={setError} busy={busy} setBusy={setBusy} editing={editing} onCancelEdit={() => setEditing(null)} />
+              !editing && <McpForm onSaved={load} onError={setError} busy={busy} setBusy={setBusy} editing={null} onCancelEdit={() => setEditing(null)} />
             ) : (
               <div className="extension-actions">
                 <button type="button" className="text-button" disabled={busy} onClick={() => importResource(group.kind as 'skill' | 'plugin')}>

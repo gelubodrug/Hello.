@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   BookOpen,
   Bot,
@@ -21,6 +21,7 @@ import type {
   BrowserTab,
   Conversation,
   Message,
+  NotebookKind,
   TerminalSession,
   WorkerId,
   WorkerInfo,
@@ -106,6 +107,25 @@ export function Workspace(props: WorkspaceProps) {
   const pageLabels = { chat: modeLabel, runbook: 'Runbook', tasks: 'Tasks' };
   const body = useRef<HTMLDivElement>(null);
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
+  const [choosingWorker, setChoosingWorker] = useState(false);
+  // A page tab carries a dot while its notebook holds something, so a plan the
+  // agent wrote is visible without opening the page.
+  const [filledPages, setFilledPages] = useState<Record<NotebookKind, boolean>>({ runbook: false, tasks: false });
+  useEffect(() => {
+    let alive = true;
+    const refresh = (kind: NotebookKind) => void api.notebooks.list(conversation.id, kind).then(rows => {
+      if (!alive) return;
+      const filled = rows.some(row => row.title.trim() !== '' || row.body.trim() !== '');
+      setFilledPages(current => current[kind] === filled ? current : { ...current, [kind]: filled });
+    }, () => undefined);
+    setFilledPages({ runbook: false, tasks: false });
+    refresh('runbook');
+    refresh('tasks');
+    const unsubscribe = api.notebooks.onChange?.(event => {
+      if (event.conversationId === conversation.id) refresh(event.kind);
+    });
+    return () => { alive = false; unsubscribe?.(); };
+  }, [conversation.id]);
   const fileNonce = useRef(0);
   const choosingFolder = useRef(false);
   const dragSplit = useRef<number | null>(null);
@@ -167,6 +187,54 @@ export function Workspace(props: WorkspaceProps) {
     disabled: !worker.installed,
     action: () => props.onLaunch("terminal", worker.id),
   }));
+  const toolSummary = [
+    { id: 'browser', label: 'Browser', Icon: Globe, detail: 'A real page, yours to read or hand over',
+      open: () => props.onLaunch('browser') },
+    { id: 'terminal', label: 'Terminal', Icon: Terminal, detail: 'A shell that starts in this chat’s folder',
+      open: () => props.onLaunch('terminal') },
+    { id: 'files', label: 'Files', Icon: FolderOpen, detail: 'What the folder holds, without leaving',
+      open: () => openFiles() },
+    { id: 'workers', label: 'CLI worker', Icon: Bot, detail: 'Claude, Codex and the rest, in a pane',
+      // Choosing which one is the whole point; a bare terminal is the row above.
+      open: () => setChoosingWorker(current => !current) },
+  ];
+  /** The same list wherever it appears: press a row and that tool opens. */
+  const toolList = (className: string, withDetail = true) => (
+    <ul className={className}>
+      {toolSummary.map(tool => (
+        <Fragment key={tool.id}>
+          <li>
+            <button type="button" onClick={tool.open} title={withDetail ? undefined : tool.detail}
+              aria-expanded={tool.id === 'workers' ? choosingWorker : undefined}>
+              <tool.Icon size={16} aria-hidden />
+              <span>{tool.label}</span>
+            </button>
+            {withDetail && <small>{tool.detail}</small>}
+          </li>
+          {tool.id === 'workers' && choosingWorker && props.workers.map(worker => (
+            <li key={worker.id} className="tool-choice">
+              <button type="button" disabled={!worker.installed}
+                title={worker.installed ? undefined : 'Not installed'}
+                onClick={() => { setChoosingWorker(false); props.onLaunch('terminal', worker.id); }}>
+                <Bot size={16} aria-hidden />
+                <span>{worker.label}</span>
+              </button>
+              {withDetail && worker.installed && worker.usesActiveModel && <small>Active model</small>}
+              {withDetail && !worker.installed && <small>Not installed</small>}
+            </li>
+          ))}
+        </Fragment>
+      ))}
+      <li>
+        <button type="button" onClick={() => void chooseFilesFolder()}
+          title={conversation.folder ?? 'Choose the folder this chat works in'}>
+          <FolderOpen size={16} aria-hidden />
+          <span>Work path</span>
+        </button>
+        {withDetail && <small>{conversation.folder ?? 'Not set — choose a folder'}</small>}
+      </li>
+    </ul>
+  );
   const toolsMenu: MenuItem[] = [
     { id: 'files', label: 'Files', icon: FolderOpen, action: () => openFiles() },
     {
@@ -259,9 +327,7 @@ export function Workspace(props: WorkspaceProps) {
             Open this chat’s tools from the + beside its pills.<br />
             Keep them together as you expand, restore or minimize.
           </p>
-          {conversation.folder && (
-            <p className="workspace-folder" title={conversation.folder}>{conversation.folder}</p>
-          )}
+          {toolList('workspace-context-tools')}
         </aside>
         <div
           className="chat-stage"
@@ -288,7 +354,7 @@ export function Workspace(props: WorkspaceProps) {
                         type="button"
                         className="chat-page-tab"
                         role="tab"
-                        aria-label={pageLabels[kind]}
+                        aria-label={kind !== "chat" && filledPages[kind] ? `${pageLabels[kind]} (has entries)` : pageLabels[kind]}
                         tabIndex={ui.chatTab === kind ? 0 : -1}
                         aria-selected={ui.chatTab === kind}
                         aria-controls={`${conversation.id}-${kind}`}
@@ -326,6 +392,9 @@ export function Workspace(props: WorkspaceProps) {
                           <BookOpen size={14} aria-hidden />
                         ) : (
                           <ListTodo size={14} aria-hidden />
+                        )}
+                        {kind !== "chat" && filledPages[kind] && (
+                          <span className="chat-page-tab__dot" aria-hidden="true" />
                         )}
                         <span className="chat-page-tab__label" aria-hidden="true">
                           <span>{pageLabels[kind]}</span>
@@ -500,13 +569,7 @@ export function Workspace(props: WorkspaceProps) {
             </div>
           </header>
           <div className="tool-hosts" hidden={toolsMinimized}>
-            {!allTools.length && (
-              <div className="tools-empty">
-                <PanelsTopLeft size={24} />
-                <h2>Your tools, close by.</h2>
-                <p>Open Files, a browser, a terminal or a CLI worker from +.</p>
-              </div>
-            )}
+            {!allTools.length && toolList('workspace-context-tools tools-empty-list', false)}
             <div className="tool-host" id={`tool-host-${filesTool.id}`} data-tool-host={filesTool.id} hidden={!ui.filesOpen || currentTool?.id !== filesTool.id}>
               <FilesPane key={conversation.folder ?? 'no-folder'} conversation={conversation}
                 visible={toolsVisible && !toolsMinimized && !!ui.filesOpen && currentTool?.id === filesTool.id}

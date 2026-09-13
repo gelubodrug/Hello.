@@ -22,6 +22,19 @@ const harness = vi.hoisted(() => {
     prompt = vi.fn(async (_text: string) => ({
       type: 'response', id: 'fixture', command: 'prompt', success: true,
     }));
+    /** Every command this fake was handed, and what Pi still holds unsaid. */
+    readonly sent: Array<{ type: string; message?: string }> = [];
+    queued: string[] = [];
+    steer = vi.fn(async (message: string) => {
+      this.sent.push({ type: 'steer', message });
+      return { type: 'response', id: 'fixture', command: 'steer', success: true } as const;
+    });
+    clearQueue = vi.fn(async () => {
+      this.sent.push({ type: 'clear_queue' });
+      const data = this.queued;
+      this.queued = [];
+      return { type: 'response', id: 'fixture', command: 'clear_queue', success: true, data } as const;
+    });
     abort = vi.fn(async () => {});
     respondToExtension = vi.fn(async () => {});
     subscribe(listener: (event: PiRpcEvent) => void) {
@@ -424,8 +437,104 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(store.getConversation(conversationId).id).toBe(conversationId);
     expect(store.listMessages(conversationId)).toHaveLength(2);
   });
-});
 
+  it('sends a message written mid-turn to the run already going, and lets it be taken back', async () => {
+    const chat = create();
+    const send = chat.send(conversationId, 'build a page');
+    const current = await runtime();
+    await chat.queue(conversationId, 'make the bars thinner', 'steer');
+    // A steer is for the turn in flight: Pi gets it now, not after.
+    expect(current.rpc.sent.some(line => line.type === 'steer' && line.message === 'make the bars thinner')).toBe(true);
+    const [held] = chat.listQueued(conversationId);
+    expect(held).toMatchObject({ text: 'make the bars thinner', mode: 'steer' });
+    // Changing your mind: Pi hands back what it has not said yet, and we hand
+    // back only what survives — never the sentence that was withdrawn.
+    current.rpc.queued = ['make the bars thinner'];
+    await chat.dropQueued(held.id);
+    expect(current.rpc.sent.filter(line => line.type === 'clear_queue')).toHaveLength(1);
+    expect(current.rpc.sent.filter(line => line.type === 'steer')).toHaveLength(1);
+    expect(chat.listQueued(conversationId)).toEqual([]);
+    settle(current.rpc, 'done');
+    await send;
+  });
+
+  it('says a held message on its own turn, but never into a turn that failed', async () => {
+    const chat = create();
+    const first = chat.send(conversationId, 'one');
+    const current = await runtime();
+    await chat.queue(conversationId, 'and now the table', 'next');
+    expect(chat.listQueued(conversationId)).toHaveLength(1);
+    settle(current.rpc, 'done');
+    await first;
+    // It became a turn of its own, on the same runtime, and left the waiting list.
+    const second = await runtime(0, 2);
+    expect(second.rpc.prompt).toHaveBeenLastCalledWith('and now the table');
+    expect(chat.listQueued(conversationId)).toEqual([]);
+    settle(second.rpc, 'and here it is');
+    await vi.waitFor(() => expect(chat.isRunning(conversationId)).toBe(false));
+
+    const failing = chat.send(conversationId, 'again');
+    const third = await runtime(0, 3);
+    await chat.queue(conversationId, 'do not send me into a wall', 'next');
+    answer(third.rpc, '', { error: 'Provider finish_reason: error' });
+    third.rpc.emit({ type: 'agent_settled' });
+    await failing;
+    // The turn failed, so the held sentence stays held and the person decides.
+    expect(chat.listQueued(conversationId)).toHaveLength(1);
+  });
+
+  it('shrinks the window it hands the runtime when the provider reports an overflow', async () => {
+    store.saveSettings({ contextWindow: 512_000, maxOutputTokens: 32_768 });
+    const chat = create();
+    const send = chat.send(conversationId, 'a long one');
+    const current = await runtime();
+    // The provider counted more input than the model holds: the runtime never
+    // compacted, so it is told less next time.
+    current.rpc.emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
+    current.rpc.emit({ type: 'message_end', message: {
+      role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop',
+      usage: { input: 715_635, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 715_735 },
+    } });
+    current.rpc.emit({ type: 'agent_settled' });
+    await send;
+    expect(store.getSettings().contextScale).toBe(0.7);
+    // The published window itself is untouched — that is a fact about the model.
+    expect(store.getSettings().contextWindow).toBe(512_000);
+  });
+
+  it('leaves the window alone when the reported usage fits', async () => {
+    store.saveSettings({ contextWindow: 512_000, maxOutputTokens: 32_768 });
+    const chat = create();
+    const send = chat.send(conversationId, 'a short one');
+    const current = await runtime();
+    settle(current.rpc, 'done');
+    await send;
+    expect(store.getSettings().contextScale).toBeUndefined();
+  });
+
+  it('says what a provider error was, and that a tool it cut off never ran', async () => {
+    const chat = create();
+    const send = chat.send(conversationId, 'draw me something');
+    const current = await runtime();
+    // A provider that dies mid-stream flushes the tool call it was writing, with
+    // no arguments: the model asked for the tool, the tool never happened.
+    current.rpc.emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
+    current.rpc.emit({ type: 'message_update', assistantMessageEvent: {
+      type: 'toolcall_start', contentIndex: 0, id: 'call-1', name: 'browser_show_html' } });
+    current.rpc.emit({ type: 'message_end', message: {
+      role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'browser_show_html', arguments: '{}' }],
+      stopReason: 'error', errorMessage: 'Provider finish_reason: error',
+    } });
+    current.rpc.emit({ type: 'agent_settled' });
+    await send;
+    const message = assistant();
+    expect(message.error).toBe(
+      'The provider ended this response with an error before it finished (finish_reason: error). Retry, or pick another model.');
+    const part = (message.parts ?? []).find(item => item.type === 'tool');
+    expect(part && 'output' in part && part.output).toBe('The response ended before this tool ran.');
+  });
+
+});
 describe('endpoint discovery and legacy-history import helpers', () => {
   it('lists models using only the selected endpoint key and rejects credential redirects', async () => {
     store.saveSettings({ apiKey: 'old-endpoint-key' });
@@ -433,7 +542,7 @@ describe('endpoint discovery and legacy-history import helpers', () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       data: [{ id: 'b' }, { id: 'a' }, { id: 'a' }],
     }), { headers: { 'content-type': 'application/json' } }));
-    expect(await create({ fetch: fetcher }).models()).toEqual(['a', 'b']);
+    expect(await create({ fetch: fetcher }).models()).toEqual([{ id: 'a' }, { id: 'b' }]);
     expect(fetcher).toHaveBeenCalledWith('https://second-fixture.example/v1/models',
       expect.objectContaining({ redirect: 'error',
         headers: { Authorization: 'Bearer selected-endpoint-key', Accept: 'application/json' } }));
@@ -441,12 +550,78 @@ describe('endpoint discovery and legacy-history import helpers', () => {
     expect(harness.instances).toHaveLength(0);
   });
 
+  it('takes the limits a provider publishes for a model, and invents none', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      data: [
+        { id: 'big', context_length: 262144, top_provider: { max_completion_tokens: 32768 } },
+        { id: 'silent' },
+        { id: 'odd', context_length: 'nonsense' },
+      ],
+    }), { headers: { 'content-type': 'application/json' } }));
+    expect(await create({ fetch: fetcher }).models()).toEqual([
+      { id: 'big', contextWindow: 262144, maxOutputTokens: 32768 },
+      { id: 'odd' },
+      { id: 'silent' },
+    ]);
+  });
+
+  it('prefers the window a server actually loaded over the one a model was trained with', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      data: [{ id: 'loaded', context_length: 131072, meta: { n_ctx: 8192 } }],
+    }), { headers: { 'content-type': 'application/json' } }));
+    // A llama.cpp server started with -c 8192 holds 8,192 tokens whatever the
+    // weights were trained for; believing the larger figure truncates every reply.
+    expect(await create({ fetch: fetcher }).models()).toEqual([{ id: 'loaded', contextWindow: 8192 }]);
+  });
+
+  it('settles the stored limits against the provider, once per selection', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      data: [{ id: 'roomy', context_length: 512000, top_provider: { max_completion_tokens: 460800 } }],
+    }), { headers: { 'content-type': 'application/json' } }));
+    store.saveSettings({ model: 'roomy' });
+    expect(store.getSettings().contextWindow).toBe(32768);
+    const chat = create({ fetch: fetcher });
+    await chat.settleModelLimits();
+    // The window is the model's own; the output budget is capped well below the
+    // published ceiling, because it has to be a budget and not a boast.
+    expect(store.getSettings().contextWindow).toBe(512000);
+    expect(store.getSettings().maxOutputTokens).toBe(32768);
+    await chat.settleModelLimits();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('never replaces a number the person chose for the model in front of them', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      data: [{ id: 'roomy', context_length: 512000, top_provider: { max_completion_tokens: 460800 } }],
+    }), { headers: { 'content-type': 'application/json' } }));
+    store.saveSettings({ model: 'roomy', contextWindow: 40960, maxOutputTokens: 8192 });
+    await create({ fetch: fetcher }).settleModelLimits();
+    expect(store.getSettings().contextWindow).toBe(40960);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('keeps the stored numbers when the provider publishes nothing, and when it cannot be reached', async () => {
+    const silent = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [{ id: 'plain' }] }),
+      { headers: { 'content-type': 'application/json' } }));
+    store.saveSettings({ model: 'plain' });
+    await create({ fetch: silent }).settleModelLimits();
+    expect(store.getSettings().contextWindow).toBe(32768);
+    expect(store.getSettings().maxOutputTokens).toBe(4096);
+    store.saveSettings({ model: 'offline-model' });
+    const failing = vi.fn<typeof fetch>(async () => { throw new Error('ECONNREFUSED'); });
+    await expect(create({ fetch: failing }).settleModelLimits()).resolves.toBeUndefined();
+    expect(store.getSettings().contextWindow).toBe(32768);
+    // The claim never reaches this model, so a server that was merely starting
+    // up is asked again on the next attempt rather than written off.
+    expect(store.getSettings().limitsFor).not.toContain('offline-model');
+  });
+
   it('redacts discovery errors and leaves local endpoints without an Authorization header', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ name: 'local' }] })))
       .mockResolvedValueOnce(new Response('bad unit-test-key-123 Bearer also-secret', { status: 401 }));
     const chat = create({ fetch: fetcher });
-    expect(await chat.models()).toEqual(['local']);
+    expect(await chat.models()).toEqual([{ id: 'local' }]);
     expect(fetcher.mock.calls[0][1]?.headers).toEqual({ Accept: 'application/json' });
     store.saveSettings({ apiKey: 'unit-test-key-123' });
     const error = await chat.models().then(() => null, (failure: unknown) => failure);

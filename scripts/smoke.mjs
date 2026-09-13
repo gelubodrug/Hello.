@@ -116,6 +116,13 @@ try{
   const attached=await page.evaluate(id=>window.hello.terminal.attach(id),terminal.id);
   assert.match(attached.scrollback,/HELLO_PTY_OK/);assert.equal(attached.session.cwd,dataDir);
   assertions.push('Native PTY starts in chat folder, input/output and bounded replay work');
+  // An empty tab must be able to navigate: its page exists behind the start
+  // screen, which is what the address bar loads into.
+  const empty=await page.evaluate(id=>window.hello.browser.create(id),id);
+  await page.evaluate(async({id,port})=>window.hello.browser.navigate(id,`http://127.0.0.1:${port}/page`),{id:empty.id,port});
+  await page.waitForFunction(async id=>(await window.hello.bootstrap()).browsers.find(tab=>tab.id===id)?.url?.includes('/page'),empty.id);
+  await page.evaluate(id=>window.hello.browser.close(id),empty.id);
+  assertions.push('A new empty tab navigates from its start screen');
   const browser=await page.evaluate(({id,port})=>window.hello.browser.create(id,`http://127.0.0.1:${port}/page`),{id,port});
   await page.evaluate(async({id,port})=>window.hello.browser.navigate(id,`http://127.0.0.1:${port}/page`),{id:browser.id,port});
   await assert.rejects(()=>page.evaluate(id=>window.hello.browser.read(id),browser.id),/Off/);
@@ -285,7 +292,7 @@ try{
   assert.equal(search.reopenedQuery,'','Reopening the menu must start from an empty query');
   await page.waitForTimeout(150);
   await page.screenshot({path:join(artifacts,'models-search.png')});
-  await page.getByRole('button',{name:'Close Settings',exact:true}).click();
+  await page.getByRole('button',{name:'Back',exact:true}).click();
   assertions.push('Searchable model list filters free above Settings; Escape closes only its menu');
   await page.evaluate(id=>window.hello.terminal.close(id),terminal.id);
   assert.equal(errors.length,0,errors.join('\n'));

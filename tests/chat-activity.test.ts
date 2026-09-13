@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePart } from '../src/shared/types';
-import { activityLayout, activitySummary, thinkingTitle } from '../src/renderer/chat/activity';
+import { activityLayout, activityRows, activitySummary, liveTail, stepDetail, stepLabel, thinkingTitle } from '../src/renderer/chat/activity';
 
 const text = (text: string): MessagePart => ({ type: 'text', text });
 const thought = (text: string): MessagePart => ({ type: 'thinking', text });
@@ -11,6 +11,54 @@ const page = (id: string, url: string): MessagePart => ({ type: 'tool', id, name
     status: 200, contentType: 'text/html', text: 'Read excerpt', truncated: false, bytes: 12, note: '' }) });
 
 describe('chat activity layout and truthful labels', () => {
+  it('merges a run of the same work into one row, named the way a person would say it', () => {
+    const skill = (id: string, name: string): MessagePart =>
+      ({ type: 'tool', id, name: 'skill_load', input: JSON.stringify({ name }), status: 'complete', output: 'ok' });
+    const rows = activityRows([thought('Plan'), skill('a', 'frontend-design'), skill('b', 'hooks'), skill('c', 'ios')]);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({ count: 3, status: 'complete' });
+    expect(stepLabel(rows[1].parts)).toBe('Read 3 skills');
+    // One of them is a single step again, and says the skill by name.
+    expect(stepLabel([skill('a', 'frontend-design')])).toBe('Read frontend-design skill');
+    // The worst state in a run is the run's state.
+    const failed = activityRows([skill('a', 'x'), { ...skill('b', 'y'), status: 'error' } as MessagePart]);
+    expect(failed[0]).toMatchObject({ count: 2, status: 'error' });
+  });
+
+  it('names every tool Hello can call, so none can ship showing its identifier', async () => {
+    const source = await import('node:fs/promises').then(fs =>
+      fs.readFile(new URL('../src/main/chat/tools.ts', import.meta.url), 'utf8'));
+    // The names main declares to the model, read from the one place they live.
+    const declared = [...source.matchAll(/^\s*'([a-z][a-z0-9_]*)',$/gm)].map(match => match[1]);
+    expect(declared.length).toBeGreaterThan(10);
+    for (const name of declared) {
+      const part: MessagePart = { type: 'tool', id: name, name, input: '{}', status: 'complete', output: '' };
+      const label = stepLabel([part]);
+      expect(label, `${name} shows its identifier`).not.toMatch(/^[a-z0-9]+_[a-z0-9_]+$/);
+      expect(label, `${name} has no name of its own`).not.toBe('Ran a step');
+    }
+  });
+
+  it('never shows a tool identifier, whatever the tool is', () => {
+    const unknown: MessagePart = { type: 'tool', id: 'u', name: 'mcp_linear_create_issue', input: '{}', status: 'complete', output: '' };
+    expect(stepLabel([unknown])).toBe('Used a connected tool');
+    // The identifier is still available — as detail, which is what it is.
+    expect(stepDetail([unknown])).toBe('mcp_linear_create_issue');
+    expect(stepDetail([search])).toBeUndefined();
+  });
+
+  it('keeps the work in hand visible, counted in rows and never split', () => {
+    const rows = activityRows([thought('Plan'), search, page('a', 'https://example.com/a'), page('b', 'https://example.com/b')]);
+    // Two reads in a row are one row; the search before them is another.
+    expect(rows).toHaveLength(3);
+    expect(liveTail(rows)).toBe(1);
+    // A run of one tool is one row however long it is, so the tail cannot split it.
+    const many = activityRows(Array.from({ length: 12 }, (_, index) => page(`p${index}`, `https://example.com/${index}`)));
+    expect(many).toHaveLength(1);
+    expect(liveTail(many)).toBe(0);
+    expect(liveTail([])).toBe(0);
+  });
+
   it('keeps commentary, tools and thinking ordered inside one prefix, with the final answer outside', () => {
     const parts = [text('I will check.'), thought('Reasoning'), search, text('I found a source.'),
       page('first', 'https://example.com/one'), thought('Compare sources'), page('second', 'https://example.com/two'), text('Final answer.')];

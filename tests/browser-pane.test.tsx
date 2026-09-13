@@ -95,14 +95,18 @@ describe('the browser pane hosting a page', () => {
     expect(mocks.setActive).toHaveBeenLastCalledWith(null);
   });
 
-  it('mounts no page for a start page, and asks for none', async () => {
+  it('keeps a page behind a start page, because navigating from it is what loads one', async () => {
     await act(async () => {
       root.render(createElement(BrowserPane, {
         tab: { ...tab, url: 'about:blank' }, visible: true, onTabChange: vi.fn(), onQuote: vi.fn(),
       }));
     });
     await act(async () => { await Promise.resolve(); });
-    expect(mocks.attach).not.toHaveBeenCalled();
-    expect(guest()).toBeNull();
+    // The page exists — an empty tab must still be able to navigate — but it is
+    // parked behind the pane's own start screen rather than covering it.
+    expect(mocks.attach).toHaveBeenCalledWith('tab-1');
+    const host = document.querySelector<HTMLElement>('.browser-guest-host');
+    expect(host?.querySelector('webview')).not.toBeNull();
+    expect(host?.style.zIndex).toBe('-1');
   });
 });

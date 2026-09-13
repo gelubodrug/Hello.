@@ -150,7 +150,8 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-function fixture(initial: BrowserTab[] = []) {
+function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conversationId: string, source: string) => Promise<string> } = []) {
+  const { initial = [], serve } = Array.isArray(options) ? { initial: options } : options;
   const window = {
     webContents: new Emitter(),
     isDestroyed: () => false,
@@ -169,6 +170,7 @@ function fixture(initial: BrowserTab[] = []) {
     remove,
     emit,
     lifecycle,
+    ...(serve ? { serve } : {}),
   });
   services.push(manager);
   /**
@@ -539,6 +541,122 @@ describe("native browser lifecycle and grants", () => {
     expect(f.manager.list("chat").find(tab => tab.id === existing.id)).toMatchObject({
       url: existing.url, control: "read",
     });
+  });
+
+  it("replaces the document a chat is showing instead of opening a tab per revision", async () => {
+    const f = fixture();
+    const base = f.open();
+    const first = f.manager.agentShow('chat', 'http://127.0.0.1:4321/v1/index.html');
+    const shown = f.manager.list('chat').find(tab => tab.id !== base.id)!.id;
+    f.attach(shown);
+    const one = await first;
+    const before = f.manager.list('chat').length;
+    const second = f.manager.agentShow('chat', 'http://127.0.0.1:4321/v2/index.html');
+    const two = await second;
+    // The same tab, now on the newer document; no second tab was made.
+    expect(two.id).toBe(one.id);
+    expect(two.url).toBe('http://127.0.0.1:4321/v2/index.html');
+    expect(f.manager.list('chat')).toHaveLength(before);
+    // Another chat's document is its own; it never lands in this one's slot.
+    const other = f.manager.agentShow('other', 'http://127.0.0.1:4321/v3/index.html');
+    f.attach(f.manager.list('other')[0].id);
+    expect((await other).id).not.toBe(one.id);
+  });
+
+  it("never lets the address it minted for a guest become the page's address", async () => {
+    const f = fixture();
+    const tab = f.open();
+    const { guest } = f.attach(tab.id);
+    // The guest reports the door main opened for it; that is main's handshake,
+    // not somewhere the reader went.
+    const minted = f.manager.mintAttach(tab.id);
+    (guest as unknown as { url: string; title: string }).url = minted;
+    (guest as unknown as { url: string; title: string }).title = minted;
+    (guest as unknown as { emit(name: string): void }).emit('did-navigate');
+    const shown = f.manager.list('chat')[0];
+    expect(shown.url).toBe('about:blank');
+    expect(shown.url).not.toContain('hello-attach');
+    expect(shown.title).not.toContain('hello-attach');
+  });
+
+  it("brings a local preview back from its path, without the grant its own work gets", async () => {
+    const f = fixture();
+    const base = f.open();
+    const opening = f.manager.agentOpen('chat', 'http://127.0.0.1:4321/report.html', undefined,
+      { sessionOnly: true, isolated: true, source: 'docs/report.html' });
+    const id = f.manager.list('chat').find(tab => tab.id !== base.id)!.id;
+    f.attach(id);
+    const shown = await opening;
+    // The person's own file: saved by its path, and still Off. Reading it is a
+    // grant only they can give, whatever produced the address it sits at.
+    expect(shown).toMatchObject({ source: 'docs/report.html', control: 'off' });
+    const saved = f.save.mock.calls.map(([tab]) => tab).filter(tab => tab.id === id).at(-1)!;
+    expect(saved).toMatchObject({ source: 'docs/report.html', url: 'about:blank' });
+
+    const served = vi.fn(async () => 'http://127.0.0.1:6001/report.html');
+    const next = fixture({ initial: [saved], serve: served });
+    next.attach(id);
+    next.manager.setActive(id);
+    await vi.waitFor(() => expect(served).toHaveBeenCalledWith('chat', 'docs/report.html'));
+    await vi.waitFor(() => expect(next.manager.list('chat')[0]).toMatchObject({
+      url: 'http://127.0.0.1:6001/report.html', control: 'off',
+    }));
+  });
+
+  it("lets the model look at its own document, and takes that back the moment the tab moves", async () => {
+    const f = fixture();
+    const base = f.open();
+    const opening = f.manager.agentShow('chat', 'http://127.0.0.1:4321/v1/index.html', undefined, 'artifact:art-1');
+    const id = f.manager.list('chat').find(tab => tab.id !== base.id)!.id;
+    f.attach(id);
+    // Its own work, in an isolated session, written by itself: it may read it.
+    expect((await opening).control).toBe('full');
+    // A second version of its own work keeps the grant.
+    const again = f.manager.agentShow('chat', 'http://127.0.0.1:4321/v2/index.html', undefined, 'artifact:art-2');
+    expect((await again).control).toBe('full');
+    // Anywhere else is somebody else's page, and the grant does not travel.
+    await f.manager.navigate(id, 'https://example.com/real');
+    const moved = f.manager.list('chat').find(tab => tab.id === id)!;
+    expect(moved.control).toBe('off');
+    expect(moved.source).toBeUndefined();
+  });
+
+  it("ends the grant when the generated page sends itself somewhere else", async () => {
+    const f = fixture();
+    const base = f.open();
+    const opening = f.manager.agentShow('chat', 'http://127.0.0.1:4321/v1/index.html', undefined, 'artifact:art-1');
+    const id = f.manager.list('chat').find(tab => tab.id !== base.id)!.id;
+    const { guest } = f.attach(id);
+    await opening;
+    const page = guest as unknown as { url: string; emit(name: string): void };
+    page.url = 'https://elsewhere.example/';
+    page.emit('did-navigate');
+    expect(f.manager.list('chat').find(tab => tab.id === id)!.control).toBe('off');
+  });
+
+  it("keeps a generated document across a restart, and serves it again when opened", async () => {
+    const f = fixture();
+    const base = f.open();
+    const first = f.manager.agentShow('chat', 'http://127.0.0.1:4321/v1/index.html', undefined, 'artifact:art-1');
+    f.attach(f.manager.list('chat').find(tab => tab.id !== base.id)!.id);
+    const shown = await first;
+    expect(shown.source).toBe('artifact:art-1');
+    // Saved by the handle that can produce it again, never by a dead local port.
+    const saved = f.save.mock.calls.map(([tab]) => tab).filter(tab => tab.id === shown.id).at(-1)!;
+    expect(saved).toMatchObject({ source: 'artifact:art-1', url: 'about:blank' });
+
+    // A new run, restoring what was saved.
+    const served = vi.fn(async () => 'http://127.0.0.1:5555/v1/index.html');
+    const next = fixture({ initial: [saved], serve: served });
+    const restored = next.manager.list('chat').find(tab => tab.id === shown.id)!;
+    expect(restored.url).toBe('about:blank');
+    next.attach(restored.id);
+    next.manager.setActive(restored.id);
+    await vi.waitFor(() => expect(served).toHaveBeenCalledWith('chat', 'artifact:art-1'));
+    await vi.waitFor(() => expect(next.manager.list('chat')[0].url).toBe('http://127.0.0.1:5555/v1/index.html'));
+    // And it is still the same slot: showing another document reuses this tab.
+    const again = next.manager.agentShow('chat', 'http://127.0.0.1:5555/v2/index.html', undefined, 'artifact:art-2');
+    expect((await again).id).toBe(shown.id);
   });
 
   it("isolates every local preview from signed-in web storage and other previews", async () => {

@@ -35,3 +35,13 @@ export function updateTaskStatus(body: string, line: number, expectedLine: strin
   rows[line - 1] = `${prefix}[${status === 'done' ? 'x' : ' '}] ${labels[status] ? `**${labels[status]}** — ` : ''}${task.text}`;
   return rows.join(body.includes('\r\n') ? '\r\n' : '\n');
 }
+
+/** The plan as the Tasks notebook writes it, so the human can edit it there and
+ *  notebook_task_status keeps working on the same lines. */
+export function planBody(steps: Array<{ step: string; status?: TaskStatus }>): string {
+  return steps.map(({ step, status = 'pending' }) => {
+    const text = step.trim().replace(/\s+/g, ' ').slice(0, 500);
+    const label = labels[status];
+    return `- [${status === 'done' ? 'x' : ' '}] ${label ? `**${label}** — ` : ''}${text}`;
+  }).join('\n');
+}
