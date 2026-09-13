@@ -17,6 +17,7 @@ interface Props {
 }
 
 const GAP = 12;
+const NOT_ATTACHED = 'The page picture could not be attached.';
 
 /**
  * Annotate's own controls, in Hello's document over the bottom of the page.
@@ -63,10 +64,13 @@ export function AnnotateBar({ tab, marks, slot, onQuote, onExit }: Props): JSX.E
     setBusy(true); setError(''); setStatus('');
     try {
       const { path, shot } = await shoot();
+      // Without its picture the list points at nothing: say so and keep the
+      // markers for another try, rather than quote a local path instead.
       let attachments: ChatAttachment[] = [];
-      try { attachments = (await api.chat.attach(tab.conversationId, [path])).attachments; }
-      catch { /* The list still names every marker without its picture. */ }
-      onQuote(composeAnnotations(shot, attachments.length ? null : path), { verbatim: true, ...(attachments.length ? { attachments } : {}) });
+      try { attachments = (await api.chat.attach(tab.conversationId, [path])).attachments ?? []; }
+      catch (reason) { throw new Error(reason instanceof Error && reason.message ? reason.message : NOT_ATTACHED); }
+      if (attachments.length === 0) throw new Error(NOT_ATTACHED);
+      onQuote(composeAnnotations(shot, null), { verbatim: true, attachments });
       onExit();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'The annotations could not be added.');

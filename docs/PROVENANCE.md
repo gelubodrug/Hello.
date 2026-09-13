@@ -241,6 +241,7 @@ At the owner's request, two sibling-app sources were read-only ported from
   page supplies is stripped of C1 controls, zero-width marks, Unicode line
   separators and bidi controls, and the Design pick URL is bounded like
   Annotate's.
+- Annotate Send, deviation from the first cut: if the picture cannot be attached (attach throws or returns none), the bar shows the error, quotes nothing and keeps the markers for a retry. A quoted Send never carries a local `shot:` path; only Copy does, to the clipboard.
 - The toolbar pill grammar (icon at rest; label and X unfurl from zero width
   when armed) follows the sibling app `src/features/browser/browser.css`
   `.browser-design-btn`, drawn with Hello's tokens and motion variables.

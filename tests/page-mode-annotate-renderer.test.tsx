@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Annotate in the window: AnnotateBar (A3 — Send only on an explicit click) and
-// the `marks` counter in usePageMode. [RISC] titles pin current behaviour.
+// the `marks` counter in usePageMode.
 import { createElement, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
@@ -90,6 +90,7 @@ describe('AnnotateBar', () => {
       '#1 yellow — Too dim',
       '#3 pink — Below · outside the picture',
     ].join('\n'), { verbatim: true, attachments: [attachment] });
+    expect(view.onQuote.mock.calls[0][0]).not.toMatch(/^shot:/m);
     expect(view.onExit).toHaveBeenCalledTimes(1);
     expect(mocks.copy).not.toHaveBeenCalled();
   });
@@ -107,27 +108,33 @@ describe('AnnotateBar', () => {
     expect(mocks.capture).toHaveBeenCalledTimes(1);
   });
 
-  it('[RISC] attach fails → the text goes with a local `shot:` path instead of the picture, the mode exits, and no error is shown', async () => {
+  it('attach fails → its reason is shown, nothing quoted, the mode stays, Send can be tried again', async () => {
     mocks.capture.mockResolvedValue({ path: PATH, annotations: SHOT });
     mocks.attach.mockRejectedValue(new Error('Attach up to 8 files per message.'));
     const view = render(2);
     await act(async () => { view.send().click(); });
     await flush();
-    const [text, extra] = view.onQuote.mock.calls[0];
-    expect(text.split('\n')[1]).toBe(`shot: ${PATH}`);
-    expect(extra).toEqual({ verbatim: true });
-    expect(view.onExit).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('.annotate-bar-error')).toBeNull();
+    const error = document.querySelector('.annotate-bar-error')!;
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toBe('Attach up to 8 files per message.');
+    expect(view.onQuote).not.toHaveBeenCalled();
+    expect(view.onExit).not.toHaveBeenCalled();
+    expect(view.send().disabled).toBe(false);
   });
 
-  it('[RISC] attach resolves with no attachments → same silent fallback to the path', async () => {
+  it('attach resolves with no attachments, or throws without a reason → the generic error, nothing quoted, the mode stays', async () => {
     mocks.capture.mockResolvedValue({ path: PATH, annotations: SHOT });
-    mocks.attach.mockResolvedValue({ attachments: [] });
     const view = render(1);
-    await act(async () => { view.send().click(); });
-    await flush();
-    expect(view.onQuote.mock.calls[0][0]).toContain(`shot: ${PATH}`);
-    expect(view.onQuote.mock.calls[0][1]).toEqual({ verbatim: true });
+    for (const answer of [() => mocks.attach.mockResolvedValueOnce({ attachments: [] }), () => mocks.attach.mockRejectedValueOnce(new Error(''))]) {
+      answer();
+      await act(async () => { view.send().click(); });
+      await flush();
+      expect(document.querySelector('.annotate-bar-error')!.textContent).toBe('The page picture could not be attached.');
+      expect(view.send().disabled).toBe(false);
+    }
+    expect(mocks.attach).toHaveBeenCalledTimes(2);
+    expect(view.onQuote).not.toHaveBeenCalled();
+    expect(view.onExit).not.toHaveBeenCalled();
   });
 
   it('capture fails → error shown, nothing quoted, the mode stays so the markers are not lost', async () => {
