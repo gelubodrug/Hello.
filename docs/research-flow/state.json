@@ -1,0 +1,10 @@
+{
+  "timezone": "Europe/Bucharest (de confirmat de proprietar)",
+  "sources": {
+    "F1-github-issues": { "lastSuccessAt": null, "lastItemIds": [], "lastError": null },
+    "F2-changelogs":    { "lastSuccessAt": null, "lastItemIds": [], "lastError": null },
+    "F3-reddit":        { "lastSuccessAt": null, "lastItemIds": [], "lastError": "403 pentru scripturi; canal autorizat: Chrome-ul utilizatorului, read-only" },
+    "F4-youtube":       { "lastSuccessAt": null, "lastItemIds": [], "lastError": null },
+    "F5-discord":       { "lastSuccessAt": null, "lastItemIds": [], "lastError": "fără acces autorizat" }
+  }
+}
