@@ -124,7 +124,14 @@ import {
   safeFileName,
 } from "../src/main/browser/manager";
 import { DOWNLOAD_FINISH_MS, DOWNLOAD_START_MS } from "../src/main/browser/agent-input";
+import { createDataStore, type SecretCodec } from "../src/main/data/store";
 import { EventEmitter as Emitter } from "node:events";
+
+/** Test-only codec; production injects Electron safeStorage. */
+const codec: SecretCodec = {
+  encrypt: (value) => Buffer.from([...Buffer.from(value)].map((byte) => byte ^ 0xa5)),
+  decrypt: (value) => Buffer.from([...value].map((byte) => byte ^ 0xa5)).toString(),
+};
 
 type FakeGuest = EventEmitter & {
   session: unknown;
@@ -189,16 +196,18 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conversationId: string, source: string) => Promise<string>; folder?: string; downloadsFolder?: string; initialDownloads?: BrowserDownload[] } = []) {
-  const { initial = [], serve, folder, downloadsFolder, initialDownloads } = Array.isArray(options) ? { initial: options } : options;
+function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conversationId: string, source: string) => Promise<string>; folder?: string; downloadsFolder?: string; initialDownloads?: BrowserDownload[]; persist?: { save(tab: BrowserTab): void; remove(id: string): void; exists(id: string): boolean } } = []) {
+  const { initial = [], serve, folder, downloadsFolder, initialDownloads, persist } = Array.isArray(options) ? { initial: options } : options;
   const window = {
     webContents: new Emitter(),
     isDestroyed: () => false,
     getContentBounds: () => ({ width: 1000, height: 800 }),
   };
   native.host = window.webContents;
-  const save = vi.fn();
-  const remove = vi.fn();
+  // With `persist`, the hooks reach the real store: what comes back is then what
+  // a database kept, not what the manager handed the hook.
+  const save = vi.fn<(tab: BrowserTab) => void>(tab => persist?.save(tab));
+  const remove = vi.fn<(id: string) => void>(id => persist?.remove(id));
   const emit = vi.fn();
   const lifecycle = vi.fn();
   const saveDownload = vi.fn();
@@ -207,7 +216,7 @@ function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conv
   const manager = new BrowserManager({
     window: window as unknown as BrowserWindow,
     initial,
-    conversationExists: (id) => ["chat", "other"].includes(id),
+    conversationExists: persist ? (id) => persist.exists(id) : (id) => ["chat", "other"].includes(id),
     ...(folder ? { folderFor: () => folder } : {}),
     ...(downloadsFolder ? { downloadsFolder: () => downloadsFolder } : {}),
     ...(initialDownloads ? { initialDownloads } : {}),
@@ -743,6 +752,104 @@ describe("native browser lifecycle and grants", () => {
     // And it is still the same slot: showing another document reuses this tab.
     const again = next.manager.agentShow('chat', 'http://127.0.0.1:5555/v2/index.html', undefined, 'artifact:art-2');
     expect((await again).id).toBe(shown.id);
+  });
+
+  /**
+   * The same restart, through the real database. The test above hands the saved
+   * object straight to the next manager, so a handle the database never kept
+   * still reads back — which is how `source` came to be saved by the browser and
+   * dropped by the store, and every generated document came back about:blank
+   * (found 28.09). Here the row is written, read and restored by SQLite.
+   */
+  it("keeps a page's handle in the database across a restart, and drops it when the tab leaves", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "hello-browser-tabs-"));
+    const store = createDataStore(directory, codec);
+    try {
+      const chat = store.createConversation("Chat").id;
+      const persist = {
+        save: (tab: BrowserTab) => store.saveBrowserTab(tab),
+        remove: (id: string) => store.deleteBrowserTab(id),
+        exists: (id: string) => id === chat,
+      };
+      const first = fixture({ persist });
+      // An ordinary web page, a generated document and a preview of the
+      // person's own file: only the last two are served by this app.
+      const web = first.manager.create(chat, "https://example.com");
+      first.attach(web.id);
+      const showing = first.manager.agentShow(chat, "http://127.0.0.1:4321/v1/index.html", undefined, "artifact:art-1");
+      const documentId = first.manager.list(chat).find(tab => tab.id !== web.id)!.id;
+      first.attach(documentId);
+      expect((await showing).source).toBe("artifact:art-1");
+      const opening = first.manager.agentOpen(chat, "http://127.0.0.1:4321/report.html", undefined,
+        { sessionOnly: true, isolated: true, source: "docs/report.html" });
+      const previewId = first.manager.list(chat).find(tab => tab.id !== web.id && tab.id !== documentId)!.id;
+      first.attach(previewId);
+      await opening;
+
+      const rows = store.listBrowserTabs();
+      // Saved by the handle that can produce the page again, never by the local
+      // address whose port dies with the app.
+      expect(rows.find(row => row.id === documentId)).toMatchObject({
+        source: "artifact:art-1", url: "about:blank", control: "off",
+      });
+      expect(rows.find(row => row.id === previewId)).toMatchObject({ source: "docs/report.html", url: "about:blank" });
+      // A page with no handle must read back with none at all: the browser asks
+      // `!tab.source` to tell an ordinary page from one it serves, and an empty
+      // string would answer that question wrongly.
+      expect(rows.find(row => row.id === web.id)?.source).toBeUndefined();
+
+      // A served page that leaves its handle in the same session leaves the
+      // restore database with it: what is left is a local page in a session of
+      // its own, and those are not restored at all.
+      const leaving = first.manager.agentOpen(chat, "http://127.0.0.1:4321/scratch.html", undefined,
+        { sessionOnly: true, isolated: true, source: "docs/scratch.html" });
+      const leavingId = first.manager.list(chat).find(tab =>
+        tab.id !== web.id && tab.id !== documentId && tab.id !== previewId)!.id;
+      first.attach(leavingId);
+      await leaving;
+      expect(store.listBrowserTabs().find(row => row.id === leavingId)?.source).toBe("docs/scratch.html");
+      await first.manager.navigate(leavingId, "https://example.com/elsewhere");
+      expect(store.listBrowserTabs().find(row => row.id === leavingId)).toBeUndefined();
+
+      // A new run, restoring only what the database holds.
+      const served = vi.fn(async (_conversationId: string, source: string) =>
+        source === "artifact:art-1" ? "http://127.0.0.1:5555/v1/index.html" : "http://127.0.0.1:5555/report.html");
+      const next = fixture({ initial: store.listBrowserTabs(), serve: served, persist });
+      expect(next.manager.list(chat).map(tab => tab.id).sort()).toEqual([web.id, documentId, previewId].sort());
+      // Its own document is served again and read again — Full is granted by the
+      // serving, never restored blind.
+      next.attach(documentId);
+      next.manager.setActive(documentId);
+      await vi.waitFor(() => expect(served).toHaveBeenCalledWith(chat, "artifact:art-1"));
+      await vi.waitFor(() => expect(next.manager.list(chat).find(tab => tab.id === documentId)).toMatchObject({
+        url: "http://127.0.0.1:5555/v1/index.html", control: "full",
+      }));
+      // The person's own file comes back too, and comes back Off.
+      next.attach(previewId);
+      next.manager.setActive(previewId);
+      await vi.waitFor(() => expect(served).toHaveBeenCalledWith(chat, "docs/report.html"));
+      await vi.waitFor(() => expect(next.manager.list(chat).find(tab => tab.id === previewId)).toMatchObject({
+        url: "http://127.0.0.1:5555/report.html", control: "off",
+      }));
+
+      // Leaving the document ends the handle in the database as well, or the run
+      // after this one would serve a document this tab has left.
+      await next.manager.navigate(documentId, "https://example.com/real");
+      expect(next.manager.list(chat).find(tab => tab.id === documentId)).toMatchObject({ control: "off", source: undefined });
+      expect(store.listBrowserTabs().find(row => row.id === documentId)?.source).toBeUndefined();
+      const last = fixture({ initial: store.listBrowserTabs(), serve: served, persist });
+      const count = served.mock.calls.length;
+      const stale = last.manager.list(chat).find(tab => tab.id === documentId);
+      if (stale) {
+        last.attach(stale.id);
+        last.manager.setActive(stale.id);
+      }
+      expect(stale?.source).toBeUndefined();
+      expect(served.mock.calls.length).toBe(count);
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("isolates every local preview from signed-in web storage and other previews", async () => {

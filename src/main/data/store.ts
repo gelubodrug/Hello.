@@ -298,6 +298,17 @@ export class DataStore {
         this.db.exec(`ALTER TABLE messages ADD COLUMN model TEXT;
       PRAGMA user_version = 7;`);
       })();
+    if (version < 8)
+      this.db.transaction(() => {
+        // The handle that can produce a page again: `artifact:<id>` for a
+        // generated document, a folder-relative path for a previewed file. A
+        // tab whose page is served by the app is saved by this handle and not
+        // by the local address it happened to be at, because that port dies
+        // with the app. Nullable: an ordinary web page has no handle, and a
+        // tab saved before this column existed reads as one.
+        this.db.exec(`ALTER TABLE browser_tabs ADD COLUMN source TEXT;
+      PRAGMA user_version = 8;`);
+      })();
   }
 
   // ── Library of skills, plugins and MCP servers ────────────────────────────
@@ -944,12 +955,16 @@ export class DataStore {
     const rows = this.db
       .prepare('SELECT * FROM browser_tabs ORDER BY rowid')
       .all() as Array<
-      Pick<BrowserTab, 'id' | 'conversationId' | 'title' | 'url'> & { control?: string }
+      Pick<BrowserTab, 'id' | 'conversationId' | 'title' | 'url'> & { control?: string; source?: string | null }
     >;
-    return rows.map(({ control, ...row }) => ({
+    return rows.map(({ control, source, ...row }) => ({
       ...row,
       // What the human chose for this page, kept between sessions.
       control: control === 'read' || control === 'full' ? control : 'off',
+      // The handle that produces this page again, when the page has one. Absent
+      // rather than empty: the browser asks `!tab.source` to tell an ordinary
+      // web page from one the app serves, and an empty string is not a handle.
+      ...(typeof source === 'string' && source ? { source } : {}),
       loading: false,
       progress: null,
       canGoBack: false,
@@ -965,8 +980,8 @@ export class DataStore {
       throw new Error('Browser tab belongs to another conversation.');
     this.db
       .prepare(
-        `INSERT INTO browser_tabs(id,conversationId,title,url,control) VALUES (@id,@conversationId,@title,@url,@control)
-      ON CONFLICT(id) DO UPDATE SET title=excluded.title,url=excluded.url,control=excluded.control`,
+        `INSERT INTO browser_tabs(id,conversationId,title,url,control,source) VALUES (@id,@conversationId,@title,@url,@control,@source)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title,url=excluded.url,control=excluded.control,source=excluded.source`,
       )
       .run({
         id: tab.id,
@@ -974,6 +989,9 @@ export class DataStore {
         title: tab.title,
         url: tab.url,
         control: tab.control === 'read' || tab.control === 'full' ? tab.control : 'off',
+        // A tab that navigates away from the page the app served for it loses
+        // its handle, and the row must lose it too: NULL, not the old handle.
+        source: typeof tab.source === 'string' && tab.source ? tab.source : null,
       });
   }
   deleteBrowserTab(id: string): void {

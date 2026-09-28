@@ -59,6 +59,8 @@ interface RecordTab {
   attachNonce?: string;
   /** The slot a chat's generated document lives in, reused by the next one. */
   artifact?: boolean;
+  /** Whether the restore database holds a row for this tab right now. */
+  saved?: boolean;
   /** Set while its document is being served again after a restart. */
   serving?: boolean;
   /** The exact address this chat's generated document is being served at. */
@@ -364,6 +366,9 @@ export class BrowserManager {
           },
           pending: new Set(),
           navigation: 0,
+          // It came from a row, so a row is what must go when it stops being
+          // the page that row described.
+          saved: true,
           // A restored document keeps its slot and its own session: the page is
           // the same generated page, and it is still not the signed-in web.
           ...(saved.source
@@ -581,11 +586,20 @@ export class BrowserManager {
     // A generated document outlives the session it was made in: its tab is
     // saved by the handle that can produce it again, never by a local URL
     // whose port dies with the app.
-    if (record.tab.source)
+    if (record.tab.source) {
       this.options.save({ ...record.tab, control: "off", url: "about:blank", loading: false });
-    else if (!record.tab.pageOwned && !record.tab.sessionOnly)
+      record.saved = true;
+    } else if (!record.tab.pageOwned && !record.tab.sessionOnly) {
       // With its grant: what the human chose for this page is kept for it.
       this.options.save({ ...record.tab });
+      record.saved = true;
+    } else if (record.saved) {
+      // It had a handle and has left it. Its row was only ever there for the
+      // handle — a local page in a session of its own is not restored — so the
+      // row goes with it, or the next run would serve a document this tab left.
+      this.options.remove(record.tab.id);
+      record.saved = false;
+    }
     this.options.emit({ ...record.tab });
     this.notifyPage({ type: "updated", tab: { ...record.tab } });
   }

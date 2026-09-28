@@ -401,7 +401,7 @@ describe('a browser tab’s grant between sessions', () => {
     store.close();
     // Roll the file back to how version 4 left it: no control column at all.
     const raw = new Database(store.databasePath);
-    raw.exec(`ALTER TABLE browser_tabs DROP COLUMN control; DROP TABLE browser_downloads; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version = 4;`);
+    raw.exec(`ALTER TABLE browser_tabs DROP COLUMN control; ALTER TABLE browser_tabs DROP COLUMN source; DROP TABLE browser_downloads; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version = 4;`);
     raw.close();
     store = createDataStore(directory, codec);
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'off' }]);
