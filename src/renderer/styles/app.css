@@ -261,11 +261,36 @@ svg {
   padding-inline: var(--sp-8);
 }
 .sidebar-search input {
-  width: 100%;
+  flex: 1;
   padding: var(--sp-4);
   border: 0;
   background: transparent;
   font-size: var(--fs-12);
+}
+.sidebar-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-tertiary);
+  cursor: pointer;
+}
+.sidebar-search-clear:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+.sidebar-search-count {
+  flex: none;
+  font-size: var(--fs-11);
+  color: var(--ink-tertiary);
+  min-width: 16px;
+  text-align: right;
 }
 .chat-list {
   flex: 1;
@@ -313,6 +338,33 @@ svg {
 .chat-list-row > .icon-button[aria-expanded="true"] {
   opacity: 1;
 }
+.chat-list-show-more {
+  display: block;
+  width: 100%;
+  padding: var(--sp-8) var(--sp-12);
+  border: 0;
+  background: transparent;
+  color: var(--ink-tertiary);
+  font: var(--fs-14)/1.5 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-8);
+  transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
+}
+.chat-list-show-more:hover {
+  color: var(--ink-primary);
+  background: var(--surface-hover);
+}
+.chat-list-show-more:active {
+  background: var(--surface-active);
+}
+.chat-list-row {
+  animation: chat-list-row-in var(--motion-base) var(--ease-out);
+}
+@keyframes chat-list-row-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -341,6 +393,44 @@ svg {
 .sidebar-pin-toggle[aria-pressed="true"] {
   background: var(--surface-hover);
   color: var(--ink-primary);
+}
+/* A switch in the composer's row reads as on: filled, not merely hovered. */
+.composer-controls .icon-button[aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--ink-primary);
+}
+/* Plan is switched on the Tasks tab, where its steps would land. A switch is
+   drawn as a switch: the track says on or off at a glance, and the tab itself
+   goes quiet while nothing is being written into it. */
+.plan-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-tertiary);
+  cursor: pointer;
+  transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+.plan-switch:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+.plan-switch[aria-checked="true"] {
+  color: var(--color-success);
+}
+.plan-switch:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+.tab-pill[data-plan="off"] > .chat-page-tab {
+  color: var(--ink-tertiary);
 }
 .pill {
   display: inline-flex;
@@ -893,7 +983,7 @@ svg {
   font-size: var(--fs-11);
   color: var(--ink-tertiary);
   text-align: center;
-  margin: var(--sp-12) 0 var(--sp-24);
+  padding: var(--sp-16) 0 var(--sp-8);
 }
 .conversation-empty {
   display: flex;
@@ -951,6 +1041,34 @@ svg {
   background: var(--surface-raised);
   padding: var(--sp-12) var(--sp-16);
 }
+.user-bubble--editing {
+  padding: var(--sp-8);
+}
+.message-edit-textarea {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  max-height: 180px;
+  border: 0;
+  border-radius: var(--r-8);
+  padding: var(--sp-8);
+  background: var(--surface-panel);
+  color: var(--ink-primary);
+  font: inherit;
+  font-size: var(--fs-15);
+  line-height: var(--lh-normal);
+  resize: vertical;
+}
+.message-edit-textarea:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.message-edit-actions {
+  display: flex;
+  gap: var(--sp-8);
+  justify-content: flex-end;
+  padding-top: var(--sp-8);
+}
 .message-actions {
   display: flex;
   flex-wrap: wrap;
@@ -963,6 +1081,17 @@ svg {
   font-size: var(--fs-11);
   margin-left: var(--sp-8);
 }
+.message-model { display: inline-block; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+/* Under the composer: how full the window is. Quiet until it matters. */
+.context-meter { display: flex; align-items: center; gap: var(--sp-8); padding: var(--sp-4) var(--sp-8) 0; color: var(--ink-tertiary); font-size: var(--fs-11); font-variant-numeric: tabular-nums; line-height: 1.2; min-width: 0; }
+.context-meter-bar { position: relative; flex: none; width: 64px; height: 4px; border-radius: var(--r-pill); background: var(--surface-active); overflow: hidden; }
+.context-meter-fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--ink-tertiary); transition: width var(--motion-base) var(--ease-out), background-color var(--motion-base) var(--ease-out); }
+.context-meter[data-level="warn"] .context-meter-fill { background: var(--color-warning); }
+.context-meter[data-level="full"] .context-meter-fill { background: var(--color-error); }
+.context-meter[data-level="warn"] .context-meter-note { color: var(--color-warning); }
+.context-meter[data-level="full"] .context-meter-note { color: var(--color-error); }
+.context-meter-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .context-meter-fill { transition: none; } }
 .waiting-response {
   font-size: var(--fs-13);
   color: var(--ink-tertiary);
@@ -1256,6 +1385,7 @@ svg {
   background: transparent;
   font-size: var(--fs-15);
   line-height: 1.5;
+  transition: height var(--motion-fast) var(--ease-out);
 }
 .composer textarea:focus-visible {
   outline: none;
@@ -1365,7 +1495,16 @@ svg {
 }
 .busy-dot {
   background: var(--color-accent);
+  animation: busy-dot-pulse 1.4s var(--ease-out, ease-in-out) infinite;
 }
+@keyframes busy-dot-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .busy-dot { animation: none; } }
+[data-reduced-motion="true"] .busy-dot { animation: none; }
+/* Waiting for the person: ready, asking, or failed. Steady, where "working" pulses. */
+.attention-dot { width: 7px; height: 7px; }
+.attention-dot[data-kind="done"] { background: var(--color-accent); }
+.attention-dot[data-kind="approval"], .attention-dot[data-kind="question"] { background: var(--color-warning); }
+.attention-dot[data-kind="error"] { background: var(--color-error); }
 .jump-to-latest {
   align-self: center;
   margin-block: 0 var(--sp-4);
@@ -1711,18 +1850,117 @@ svg {
   flex-direction: row;
   align-items: center;
 }
-.settings-two-columns {
+/* Numbers of one or a few digits get a field their size, three to a row;
+   the choices sit three to a row under them. */
+.settings-numbers {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-16);
+  grid-template-columns: repeat(3, minmax(0, 160px));
+  gap: var(--sp-12);
 }
-.settings-two-columns > label,
+.settings-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-12);
+}
+.settings-numbers > label,
 .settings-field {
   display: flex;
   flex-direction: column;
   gap: var(--sp-8);
   font-size: var(--fs-12);
   color: var(--ink-secondary);
+}
+.settings-form > .settings-note {
+  margin-top: calc(var(--sp-8) * -1);
+  font-size: var(--fs-12);
+}
+/* Servers found on this Mac: one quiet row each, the one in use checked. */
+.settings-servers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.settings-servers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+}
+.settings-servers > p {
+  margin: 0;
+  padding: var(--sp-8) 0;
+  font-size: var(--fs-12);
+}
+.settings-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-server {
+  display: grid;
+  grid-template-columns: auto max-content minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: var(--sp-8) var(--sp-12);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) ease;
+}
+.settings-server:hover { background: var(--surface-hover); }
+.settings-server[aria-pressed="true"] { background: var(--surface-active); }
+.settings-server:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+.settings-server-dot,
+.settings-status[data-state="ok"]::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+.settings-server-models {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+.settings-server-action {
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+}
+/* Whether the address answers, said right under it. */
+.settings-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+  margin: calc(var(--sp-8) * -1) 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+.settings-status[data-state="ok"]::before { content: ""; flex: none; }
+.settings-status[data-state="error"] { color: var(--color-error); }
+.settings-status .text-button {
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--ink-primary);
+  text-decoration: underline;
+}
+.settings-form > .settings-add-key {
+  align-self: flex-start;
+  margin: calc(var(--sp-8) * -1) 0;
+  font-size: var(--fs-12);
 }
 .settings-select {
   display: flex;
@@ -1740,15 +1978,6 @@ svg {
 }
 .settings-select:hover {
   background: var(--surface-hover);
-}
-.settings-storage {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
-}
-.settings-storage .text-button {
-  max-width: 100%;
-  font-size: var(--fs-11);
 }
 .settings-saved {
   display: flex;
@@ -1876,8 +2105,11 @@ svg {
   .transcript {
     padding-inline: var(--sp-12);
   }
-  .settings-two-columns {
+  .settings-choices {
     grid-template-columns: 1fr;
+  }
+  .settings-numbers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .dialog-backdrop {
     padding: var(--sp-12);
@@ -2242,12 +2474,17 @@ svg {
 .merged-steps { padding-left: var(--sp-16); }
 
 /* Quick filters for a searchable menu: what kind of thing, one tap. Typing
-   stays the way to find a particular one — these only narrow the field. */
+   stays the way to find a particular one — these only narrow the field.
+   They are drawn like the browser's tab pills: one line each, a long name
+   fading out at its end rather than wrapping. The row is shared out equally
+   and always fits: every pill is the same width whatever its name, all of
+   them stay in view, and none is ever scrolled away. */
 .menu-filters {
   position: sticky;
   top: calc(-1 * var(--menu-padding) + var(--control-md));
   z-index: 1;
   display: flex;
+  align-items: center;
   gap: var(--sp-4);
   padding: 0 var(--sp-8) var(--sp-8);
   background: var(--menu-fill);
@@ -2255,13 +2492,46 @@ svg {
   margin-bottom: var(--sp-4);
 }
 .menu-filter {
-  padding: 2px var(--sp-8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
+  height: var(--control-sm);
+  padding: 0 var(--sp-8);
   border: 0;
   border-radius: var(--r-pill);
   background: transparent;
   color: var(--menu-muted);
   font: inherit;
   font-size: var(--fs-11);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
+}
+.menu-filter.menu-filter-all {
+  flex: none;
+  width: var(--control-sm);
+  padding: 0;
+  border-radius: 50%;
 }
 .menu-filter:hover { color: var(--menu-ink); background: var(--menu-hover); }
 .menu-filter[aria-pressed="true"] { color: var(--menu-ink); background: var(--menu-active); }
+.menu-filter:focus-visible { outline: var(--focus-ring-width) solid var(--color-focus-ring); outline-offset: -2px; }
+
+/* A restart: the transcript stays, the model's memory begins below the line. */
+.thread-restart { display: flex; align-items: center; gap: var(--sp-12); margin: var(--sp-16) 0; color: var(--ink-tertiary); font-size: var(--fs-12); white-space: nowrap; }
+.thread-restart::before, .thread-restart::after { content: ""; flex: 1; height: 1px; background: var(--color-border); }
+.dialog-check { display: flex; align-items: center; gap: var(--sp-8); margin: var(--sp-12) 0 0; color: var(--ink-secondary); font-size: var(--fs-13); cursor: pointer; }
+.dialog-check input { margin: 0; accent-color: var(--color-focus-ring); }
+
+/* Find in chat: a small bar over the transcript; matches painted, not wrapped. */
+.chat-find { position: absolute; top: var(--sp-8); right: var(--sp-16); z-index: 6; display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-12); border: 1px solid var(--menu-edge); border-radius: var(--r-pill); background: var(--menu-fill); box-shadow: var(--menu-shadow); color: var(--menu-muted); }
+.chat-find input { width: min(220px, 40vw); border: 0; background: transparent; color: var(--menu-ink); font: inherit; font-size: var(--fs-13); outline: none; }
+.chat-find-count { min-width: 5.5em; text-align: right; font-size: var(--fs-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
+::highlight(hello-find) { background-color: color-mix(in srgb, var(--color-warning) 32%, transparent); color: inherit; }
+::highlight(hello-find-current) { background-color: var(--color-warning); color: #111; }
+/* A sidebar row found by what was said in it: the words around the match. */
+.chat-list-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.chat-list-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-11); color: var(--ink-tertiary); }
+.chat-list-snippet mark { background: color-mix(in srgb, var(--color-warning) 30%, transparent); color: var(--ink-secondary); border-radius: 2px; }

@@ -1,7 +1,10 @@
 import type { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserWindow, HandlerDetails, WindowOpenHandlerResponse } from "electron";
-import type { BrowserTab } from "../src/shared/types";
+import type { BrowserDownload, BrowserTab } from "../src/shared/types";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const native = vi.hoisted(() => ({
   views: [] as unknown[],
@@ -49,9 +52,12 @@ vi.mock("electron", async () => {
     };
     mainFrame = {
       executeJavaScript: vi
-        .fn<() => Promise<unknown>>()
-        .mockResolvedValue("Page text"),
+        .fn<(code: string) => Promise<unknown>>()
+        .mockResolvedValue({ text: "Page text", lines: [], count: 0 }),
       isDestroyed: () => this.destroyed,
+      frames: [] as unknown[],
+      name: "",
+      url: "https://example.com/",
     };
     executeJavaScript = vi.fn();
     zoom = 1;
@@ -61,6 +67,8 @@ vi.mock("electron", async () => {
     getZoomFactor = () => this.zoom;
     executeJavaScriptInIsolatedWorld = vi.fn(async () => this.viewport);
     capturePage = vi.fn(async () => native.picture(1600, 1200));
+    /** A download main asked this page for, with the page's own session. */
+    downloadURL = vi.fn();
     setWindowOpenHandler = vi.fn();
     isDestroyed = () => this.destroyed;
     isLoading = () => this.loading;
@@ -113,7 +121,9 @@ import {
   BrowserManager,
   BROWSER_ATTACH_TIMEOUT_MS,
   BROWSER_OPERATION_TIMEOUT_MS,
+  safeFileName,
 } from "../src/main/browser/manager";
+import { DOWNLOAD_FINISH_MS, DOWNLOAD_START_MS } from "../src/main/browser/agent-input";
 import { EventEmitter as Emitter } from "node:events";
 
 type FakeGuest = EventEmitter & {
@@ -123,8 +133,11 @@ type FakeGuest = EventEmitter & {
   loading: boolean;
   url: string;
   mainFrame: {
-    executeJavaScript: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
+    executeJavaScript: ReturnType<typeof vi.fn<(code: string) => Promise<unknown>>>;
     isDestroyed(): boolean;
+    frames: unknown[];
+    name: string;
+    url: string;
   };
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn<(url: string) => Promise<void>>>;
@@ -137,6 +150,7 @@ type FakeGuest = EventEmitter & {
   sendInputEvent: ReturnType<typeof vi.fn>;
   executeJavaScriptInIsolatedWorld: ReturnType<typeof vi.fn>;
   capturePage: ReturnType<typeof vi.fn>;
+  downloadURL: ReturnType<typeof vi.fn>;
 };
 type FakePartition = EventEmitter & {
   setPermissionCheckHandler: ReturnType<typeof vi.fn>;
@@ -161,6 +175,7 @@ const pinnedPreferences = (partition: string, session: unknown) => ({
   webSecurity: true,
   allowRunningInsecureContent: false,
   backgroundThrottling: true,
+  plugins: true,
   session,
 });
 /** Let the manager's own awaits (mounting a page, then calling into it) run. */
@@ -174,8 +189,8 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conversationId: string, source: string) => Promise<string> } = []) {
-  const { initial = [], serve } = Array.isArray(options) ? { initial: options } : options;
+function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conversationId: string, source: string) => Promise<string>; folder?: string; downloadsFolder?: string; initialDownloads?: BrowserDownload[] } = []) {
+  const { initial = [], serve, folder, downloadsFolder, initialDownloads } = Array.isArray(options) ? { initial: options } : options;
   const window = {
     webContents: new Emitter(),
     isDestroyed: () => false,
@@ -186,10 +201,19 @@ function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conv
   const remove = vi.fn();
   const emit = vi.fn();
   const lifecycle = vi.fn();
+  const saveDownload = vi.fn();
+  const removeDownload = vi.fn();
+  const downloadEvent = vi.fn();
   const manager = new BrowserManager({
     window: window as unknown as BrowserWindow,
     initial,
     conversationExists: (id) => ["chat", "other"].includes(id),
+    ...(folder ? { folderFor: () => folder } : {}),
+    ...(downloadsFolder ? { downloadsFolder: () => downloadsFolder } : {}),
+    ...(initialDownloads ? { initialDownloads } : {}),
+    saveDownload,
+    removeDownload,
+    downloadEvent,
     save,
     remove,
     emit,
@@ -220,7 +244,7 @@ function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conv
     manager.setActive(tab.id);
     return tab;
   };
-  return { manager, window, save, remove, emit, lifecycle, open, attach };
+  return { manager, window, save, remove, emit, lifecycle, saveDownload, removeDownload, downloadEvent, open, attach };
 }
 beforeEach(() => {
   native.views.length = 0;
@@ -257,6 +281,35 @@ describe("native browser lifecycle and grants", () => {
       callback,
     );
     expect(callback).toHaveBeenCalledWith(false);
+  });
+
+  // A video's full-screen button did nothing: the session refused the
+  // `fullscreen` permission with everything else (user, 26.09).
+  it("lets the page on screen fill the screen, and refuses it to a tab out of sight, a stranger and every other permission", () => {
+    const f = fixture();
+    const shown = f.open();
+    const hidden = f.manager.create("chat", "https://example.org");
+    f.attach(hidden.id);
+    f.manager.setActive(shown.id);
+    const partition = native.partition as FakePartition;
+    const ask = (contents: unknown, permission: string) => {
+      const callback = vi.fn();
+      partition.setPermissionRequestHandler.mock.calls.at(-1)?.[0](contents, permission, callback);
+      return callback.mock.calls[0]?.[0];
+    };
+    const check = partition.setPermissionCheckHandler.mock.calls.at(-1)?.[0] as (contents: unknown, permission: string) => boolean;
+    expect(ask(guestAt(0), "fullscreen")).toBe(true);
+    expect(check(guestAt(0), "fullscreen")).toBe(true);
+    expect(ask(guestAt(1), "fullscreen")).toBe(false);
+    expect(ask({ id: "stranger" }, "fullscreen")).toBe(false);
+    for (const permission of ["camera", "media", "notifications", "geolocation", "pointerLock", "clipboard-read"])
+      expect(ask(guestAt(0), permission)).toBe(false);
+    // The tab on screen changes: so does who may.
+    f.manager.setActive(hidden.id);
+    expect(ask(guestAt(0), "fullscreen")).toBe(false);
+    expect(ask(guestAt(1), "fullscreen")).toBe(true);
+    f.manager.setActive(null);
+    expect(ask(guestAt(1), "fullscreen")).toBe(false);
   });
 
   it("refuses a guest whose attach nonce is unknown or already spent", () => {
@@ -331,31 +384,32 @@ describe("native browser lifecycle and grants", () => {
     expect(() => f.manager.action(tab.id, "back")).toThrow(/not open in the app window/);
   });
 
-  it("starts and restores every grant Off, never persists grants, and validates restored URLs", () => {
-    const saved: BrowserTab = {
-      id: "old",
-      conversationId: "chat",
-      title: "Old",
-      url: "file:///etc/passwd",
-      control: "full",
-      loading: true,
-      canGoBack: true,
-      canGoForward: true,
-    };
-    const f = fixture([saved]);
-    expect(f.manager.list()[0]).toMatchObject({
-      url: "about:blank",
-      control: "off",
-      loading: false,
-      canGoBack: false,
+  // A new tab starts Off; the grant the human sets on a page is saved with it
+  // and comes back with it between sessions (user, 22.09). A generated
+  // document is the exception: its Full is granted again when it is served
+  // again, never restored blind.
+  it("starts a new tab Off, keeps a restored page's grant, and validates restored URLs", () => {
+    const saved: BrowserTab[] = [
+      { id: "old", conversationId: "chat", title: "Old", url: "file:///etc/passwd",
+        control: "full", loading: true, progress: null, canGoBack: true, canGoForward: true },
+      { id: "billing", conversationId: "chat", title: "Billing", url: "https://platform.example/billing",
+        control: "full", loading: false, progress: null, canGoBack: false, canGoForward: false },
+      { id: "doc", conversationId: "chat", title: "Doc", url: "about:blank", source: "artifact:00000000-0000-4000-8000-000000000001",
+        control: "full", loading: false, progress: null, canGoBack: false, canGoForward: false },
+    ];
+    const f = fixture(saved);
+    // A non-web URL is never restored; the grant on it is moot and dropped with it.
+    expect(f.manager.list().find(tab => tab.id === "old")).toMatchObject({
+      url: "about:blank", control: "full", loading: false, progress: null, canGoBack: false,
     });
+    expect(f.manager.list().find(tab => tab.id === "billing")?.control).toBe("full");
+    expect(f.manager.list().find(tab => tab.id === "doc")?.control).toBe("off");
     const tab = f.open();
     expect(tab.control).toBe("off");
     f.manager.control(tab.id, "full");
-    expect(
-      f.manager.list("chat").find((item) => item.id === tab.id)?.control,
-    ).toBe("full");
-    expect(f.save.mock.calls.at(-1)?.[0].control).toBe("off");
+    expect(f.manager.list("chat").find((item) => item.id === tab.id)?.control).toBe("full");
+    // Saved WITH the grant, so the next session opens where this one left off.
+    expect(f.save.mock.calls.at(-1)?.[0]).toMatchObject({ id: tab.id, control: "full" });
     expect(f.emit.mock.calls.at(-1)?.[0].control).toBe("full");
   });
 
@@ -412,40 +466,48 @@ describe("native browser lifecycle and grants", () => {
     return { details, response: handler(details) as WindowOpenHandlerResponse };
   }
 
-  it("opens a popup as a child window pinned to this manager's preferences, not as a tab", () => {
+  // A page that opens a window gets a tab beside the one it came from, never a
+  // window outside the app: an invoice's "View" opened a native window the
+  // human had to hunt for and the agent could not see at all (user, 22.09).
+  it("opens a popup as a tab beside its opener, with the opener's grant, and never a window", () => {
     const f = fixture();
     const parent = f.open();
-    const { response } = popup(guestAt());
-    expect(response.action).toBe("allow");
-    expect(response.outlivesOpener).toBe(true);
-    expect(response.overrideBrowserWindowOptions?.webPreferences).toEqual(
-      pinnedPreferences("persist:hello-web", native.partition),
-    );
-    expect(response.overrideBrowserWindowOptions?.webPreferences).not.toHaveProperty("preload");
-    // A child window is not a tab: nothing is opened, saved or announced.
-    expect(f.manager.list("chat").map((tab) => tab.id)).toEqual([parent.id]);
-    expect(f.lifecycle).not.toHaveBeenCalled();
+    f.manager.control(parent.id, "full");
+    const { details, response } = popup(guestAt());
+    // No native window, whatever Chromium was asked for.
+    expect(response).toEqual({ action: "deny" });
     expect(native.guests).toHaveLength(1);
-    expect(guestAt().loadURL).toHaveBeenCalledOnce();
+    const [, opened] = f.manager.list("chat");
+    expect(opened).toMatchObject({
+      url: details.url,
+      openerId: parent.id,
+      pageOwned: true,
+      // The human granted the opener; the popup is that page carrying on.
+      control: "full",
+    });
+    expect(f.lifecycle).toHaveBeenCalledWith(expect.objectContaining({
+      type: "opened", foreground: true, tab: expect.objectContaining({ id: opened.id }),
+    }));
+    // Site-opened tabs are live for this session only, never restored.
+    expect(f.save).not.toHaveBeenCalledWith(expect.objectContaining({ id: opened.id }));
   });
 
-  it("denies a non-web popup and makes even a background-tab popup a child window, not a deferred tab", () => {
+  it("denies a non-web or blank popup, and keeps a background-tab popup in the background", () => {
     const f = fixture();
     const parent = f.open();
-    for (const url of ["file:///private/file", "javascript:alert(1)", "https://user:secret@example.com"])
+    for (const url of ["file:///private/file", "javascript:alert(1)", "https://user:secret@example.com", "about:blank"])
       expect(popup(guestAt(), { url }).response).toEqual({ action: "deny" });
+    expect(f.manager.list("chat").map((tab) => tab.id)).toEqual([parent.id]);
+    expect(f.lifecycle).not.toHaveBeenCalled();
     const { response } = popup(guestAt(), {
       disposition: "background-tab", features: "", frameName: "_blank",
       url: "https://example.com/result",
-      postBody: { contentType: "application/x-www-form-urlencoded", data: [{ type: "rawData", bytes: Buffer.from("q=example") }] },
     });
-    expect(response.action).toBe("allow");
-    expect(response.overrideBrowserWindowOptions?.webPreferences).toEqual(
-      pinnedPreferences("persist:hello-web", native.partition),
-    );
-    expect(f.manager.list("chat").map((tab) => tab.id)).toEqual([parent.id]);
-    expect(f.lifecycle).not.toHaveBeenCalled();
-    expect(guestAt().loadURL).toHaveBeenCalledOnce();
+    expect(response).toEqual({ action: "deny" });
+    expect(f.manager.list("chat")).toHaveLength(2);
+    expect(f.lifecycle).toHaveBeenCalledWith(expect.objectContaining({ type: "opened", foreground: false }));
+    // An Off opener opens an Off tab: nothing is granted that was not.
+    expect(f.manager.list("chat")[1].control).toBe("off");
   });
 
   it("keeps a tab whose page the window unmounts, and lets the window mount it again", () => {
@@ -468,7 +530,7 @@ describe("native browser lifecycle and grants", () => {
     f.manager.control(tab.id, "full");
     const controller = new AbortController();
     guestAt().mainFrame.executeJavaScript.mockReturnValueOnce(new Promise(() => {}));
-    const action = f.manager.agentAction("chat", tab.id, "click", "#link", "", controller.signal);
+    const action = f.manager.agentAction("chat", tab.id, "click", { selector: "#link" }, "", controller.signal);
     const rejected = expect(action).rejects.toThrow(/stopped/);
     await flush();
     controller.abort();
@@ -489,7 +551,7 @@ describe("native browser lifecycle and grants", () => {
     f.manager.control(tab.id, "read");
     for (const action of ["click", "type", "scroll"] as const) {
       await expect(
-        f.manager.agentAction("chat", tab.id, action, "#save"),
+        f.manager.agentAction("chat", tab.id, action, { selector: "#save" }),
       ).rejects.toThrow(/read only/);
     }
     await expect(f.manager.read(tab.id, "other")).rejects.toThrow(
@@ -497,7 +559,7 @@ describe("native browser lifecycle and grants", () => {
     );
     expect(guestAt().mainFrame.executeJavaScript).not.toHaveBeenCalled();
     await expect(f.manager.read(tab.id, "chat")).resolves.toMatchObject({
-      text: "Page text",
+      text: expect.stringContaining("Page text"),
     });
   });
 
@@ -719,17 +781,18 @@ describe("native browser lifecycle and grants", () => {
     expect(f.save.mock.calls.some(([saved]) => saved.id === first.id)).toBe(false);
   });
 
-  it("inherits the opener's isolated preview session for a popup's child window", async () => {
+  it("keeps a popup from an isolated preview in that preview's own session", async () => {
     const f = fixture();
     const opening = f.manager.agentOpen('chat', 'http://127.0.0.1:4321/local/index.html', undefined, { isolated: true });
     const { guest, preferences } = f.attach(f.manager.list('chat')[0].id);
     await opening;
-    const { response } = popup(guest);
-    expect(response.action).toBe('allow');
-    expect(response.overrideBrowserWindowOptions?.webPreferences).toEqual(
-      pinnedPreferences(preferences.partition as string, preferences.session),
-    );
-    expect(response.overrideBrowserWindowOptions?.webPreferences?.session).not.toBe(native.partition);
+    expect(popup(guest).response).toEqual({ action: 'deny' });
+    const opened = f.manager.list('chat')[1];
+    // The new tab's page is pinned to the same isolated partition and session:
+    // a generated page's popup is still not the signed-in web.
+    const { preferences: popupPreferences } = f.attach(opened.id);
+    expect(popupPreferences).toEqual(pinnedPreferences(preferences.partition as string, preferences.session));
+    expect(popupPreferences.session).not.toBe(native.partition);
   });
 
   it("wipes and releases a preview's isolated session when its tab closes or the browser disposes", async () => {
@@ -795,7 +858,7 @@ describe("native browser lifecycle and grants", () => {
     f.manager.control(tab.id, "full");
     guestAt().loading = true;
     await expect(
-      f.manager.agentAction("chat", tab.id, "click", "#save"),
+      f.manager.agentAction("chat", tab.id, "click", { selector: "#save" }),
     ).rejects.toThrow(/loading/);
     f.manager.control(tab.id, "off");
     guestAt().loading = false;
@@ -813,7 +876,7 @@ describe("native browser lifecycle and grants", () => {
       const pending = deferred<unknown>();
       const guest = guestAt();
       guest.mainFrame.executeJavaScript.mockReturnValueOnce(pending.promise);
-      const action = f.manager.agentAction("chat", tab.id, "click", "#save");
+      const action = f.manager.agentAction("chat", tab.id, "click", { selector: "#save" });
       const rejected = expect(action).rejects.toThrow(/revoked/);
       await flush();
       f.manager.control(tab.id, mode);
@@ -837,7 +900,7 @@ describe("native browser lifecycle and grants", () => {
     f.manager.control(tab.id, "full");
     const pending = deferred<unknown>();
     guestAt().mainFrame.executeJavaScript.mockReturnValueOnce(pending.promise);
-    const action = f.manager.agentAction("chat", tab.id, "click", "#save");
+    const action = f.manager.agentAction("chat", tab.id, "click", { selector: "#save" });
     const rejected = expect(action).rejects.toThrow(/revoked/);
     await flush();
     f.manager.control(tab.id, "off");
@@ -863,7 +926,7 @@ describe("native browser lifecycle and grants", () => {
       "chat",
       tab.id,
       "type",
-      "#name",
+      { selector: "#name" },
       "hello",
       controller.signal,
     );
@@ -906,7 +969,7 @@ describe("native browser lifecycle and grants", () => {
     const guest = guestAt();
     guest.mainFrame.executeJavaScript.mockReturnValueOnce(new Promise(() => {}));
     vi.useFakeTimers();
-    const action = f.manager.agentAction("chat", tab.id, "scroll", "", 100);
+    const action = f.manager.agentAction("chat", tab.id, "scroll", {}, 100);
     const rejected = expect(action).rejects.toThrow(/timed out/);
     await vi.advanceTimersByTimeAsync(0); // Let the page resolve and the operation start.
     await vi.advanceTimersByTimeAsync(BROWSER_OPERATION_TIMEOUT_MS);
@@ -982,7 +1045,7 @@ describe("native browser lifecycle and grants", () => {
         "chat",
         tab.id,
         "click",
-        "#save",
+        { selector: "#save" },
         "",
         controller.signal,
       ),
@@ -1003,7 +1066,7 @@ describe("native browser lifecycle and grants", () => {
     expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ id: tab.id }));
     expect(native.guests).toHaveLength(0);
     const { guest } = f.attach(tab.id);
-    await expect(reading).resolves.toMatchObject({ text: "Page text" });
+    await expect(reading).resolves.toMatchObject({ text: expect.stringContaining("Page text") });
     expect(guest.mainFrame.executeJavaScript).toHaveBeenCalledOnce();
   });
 
@@ -1026,7 +1089,7 @@ describe("native browser lifecycle and grants", () => {
     const f = fixture();
     const tab = f.manager.create("chat", "https://example.com");
     f.manager.control(tab.id, "full");
-    const action = f.manager.agentAction("chat", tab.id, "click", "#save");
+    const action = f.manager.agentAction("chat", tab.id, "click", { selector: "#save" });
     const rejected = expect(action).rejects.toThrow(/Off/);
     f.manager.control(tab.id, "off"); // Revoked while the window was still mounting.
     const { guest } = f.attach(tab.id);
@@ -1083,9 +1146,11 @@ describe("agent pointer and screenshot", () => {
     expect(guest.capturePage).toHaveBeenCalledOnce();
     await f.manager.agentPointer("chat", tab.id, drag);
     expect(guest.sendInputEvent).toHaveBeenCalledTimes(8);
-    // The viewport is read in a world of its own, never the page's.
+    // The viewport is read in a world of its own, never the page's; the page
+    // is asked only what is at the point, for the result's words.
     expect(guest.executeJavaScriptInIsolatedWorld.mock.calls[0][0]).not.toBe(0);
-    expect(guest.mainFrame.executeJavaScript).not.toHaveBeenCalled();
+    expect(guest.mainFrame.executeJavaScript).toHaveBeenCalledOnce();
+    expect(String(guest.mainFrame.executeJavaScript.mock.calls[0][0])).toContain("document.elementFromPoint(10, 10)");
     // Nothing about the tab changed: not shown, hidden, reloaded or navigated.
     expect(guest.loadURL).toHaveBeenCalledOnce();
     expect(guest.reload).not.toHaveBeenCalled();
@@ -1164,5 +1229,457 @@ describe("agent pointer and screenshot", () => {
     guest.capturePage.mockResolvedValueOnce(native.picture(0, 0));
     await expect(f.manager.agentScreenshot("chat", tab.id, shot)).rejects.toThrow(/no picture/);
     expect(guest.sendInputEvent).not.toHaveBeenCalled();
+  });
+});
+
+// A click is real mouse input at the control's centre, the page only saying
+// where that is — a DOM click left a menu that opens on pointerdown shut, and
+// the model went on to guess pixels (user, 24.09: Neon's invoice menu).
+describe("an element named by its words or its ref", () => {
+  it("asks the page where the control is, then clicks there for real, and says so", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'button "enable this API"', x: 65, y: 318 });
+    await expect(
+      f.manager.agentAction("chat", tab.id, "click", { label: "enable this API" }),
+    ).resolves.toBe('Clicked button "enable this API" at (65, 318).');
+    const script = String((guest.mainFrame.executeJavaScript.mock.calls.at(-1) as unknown[] | undefined)?.[0]);
+    expect(script).toContain('find({"label":"enable this API"})');
+    expect(script).toContain("elementFromPoint");
+    expect(guest.sendInputEvent.mock.calls.map((call) => call[0])).toEqual([
+      { type: "mouseMove", x: 65, y: 318 },
+      { type: "mouseDown", x: 65, y: 318, button: "left", clickCount: 1 },
+      { type: "mouseUp", x: 65, y: 318, button: "left", clickCount: 1 },
+    ]);
+    // By ref — one the latest read gave — the same; covered, the page clicked it itself and that is said.
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ text: "Billing", lines: Array.from({ length: 12 }, (_, index) => `e${index + 1} button "…"`), count: 12 });
+    await f.manager.read(tab.id, "chat");
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'menuitem "Download"', x: 1560, y: 643, covered: 'div "Request billing support"' });
+    await expect(f.manager.agentAction("chat", tab.id, "click", { ref: "e12" })).resolves.toBe(
+      'Clicked menuitem "Download" directly: its centre (1560, 643) is covered by div "Request billing support". If nothing happened, close what covers it and click again.',
+    );
+    expect(String((guest.mainFrame.executeJavaScript.mock.calls.at(-1) as unknown[] | undefined)?.[0])).toContain('find({"ref":"e12"})');
+    expect(guest.sendInputEvent).toHaveBeenCalledTimes(3);
+    // A centre off the viewport is refused before anything is sent.
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'button "Far"', x: 5000, y: 10 });
+    await expect(f.manager.agentAction("chat", tab.id, "click", { label: "Far" })).rejects.toThrow(/outside this tab's viewport/);
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce("Clicked.");
+    await expect(f.manager.agentAction("chat", tab.id, "click", { label: "Odd" })).rejects.toThrow(/did not say where the element is/);
+  });
+
+  it("reads the controls with refs, roles, words, state and centre", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    await f.manager.read(tab.id, "chat");
+    const script = String((guestAt().mainFrame.executeJavaScript.mock.calls.at(-1) as unknown[] | undefined)?.[0]);
+    expect(script).toContain("__helloAgentRefs");
+    expect(script).toContain("getBoundingClientRect");
+  });
+
+  // A payment field or an embedded widget lives in an iframe; a read that
+  // stopped at the main frame never saw it (user, 24.09). Refs run on across
+  // frames, centres are moved to the page, and a click by ref lands there.
+  it("reads the frames inside the page too, and clicks a control in one by its ref, on the page", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    // Which page script this is: the frame boxes, a scan, a locate, a type.
+    const kind = (code: string) => code.includes("querySelectorAll('iframe')") ? "boxes"
+      : code.includes("const stored = { start:") ? "scan" : code.includes("find({") ? "find" : "other";
+    const child = {
+      executeJavaScript: vi.fn(async (code: string) => kind(code) === "scan"
+        ? { text: "Card number", lines: ['e2 textbox "Card number" (empty) @ (250, 250)'], count: 1 }
+        : code.includes("is not a text field") ? 'Entered text into textbox "Card number".'
+          : { what: 'textbox "Card number"', x: 150, y: 50 }),
+      isDestroyed: () => false, frames: [], name: "__privateStripeFrame9", url: "https://js.stripe.com/v3/elements-inner-card",
+    };
+    const blank = { executeJavaScript: vi.fn(), isDestroyed: () => false, frames: [], name: "", url: "about:blank" };
+    guest.mainFrame.frames = [child, blank];
+    guest.mainFrame.executeJavaScript.mockImplementation(async (code: string) => kind(code) === "boxes"
+      ? [{ name: "__privateStripeFrame9", src: "https://js.stripe.com/v3/elements-inner-card", x: 100, y: 200, width: 300, height: 100 }]
+      : kind(code) === "scan"
+        ? { text: "Pay for order 42", lines: ['e1 button "Pay" @ (60, 400)'], count: 1 }
+        : { what: 'button "Pay"', x: 60, y: 400 });
+    const read = await f.manager.read(tab.id, "chat");
+    expect(read.text).toContain("Pay for order 42");
+    expect(read.text).toContain('--- frame "__privateStripeFrame9" ---\nCard number');
+    expect(read.text).toContain('e1 button "Pay" @ (60, 400)\ne2 textbox "Card number" (empty) @ (250, 250) [in frame "__privateStripeFrame9"]');
+    // The frame was scanned from e2, at its place on the page.
+    const scanned = String(child.executeJavaScript.mock.calls[0][0]);
+    expect(scanned).toContain("start: 2");
+    expect(scanned).toContain("+ 100)");
+    expect(blank.executeJavaScript).not.toHaveBeenCalled();
+    // The ref goes to its frame; the click goes to the page.
+    await expect(f.manager.agentAction("chat", tab.id, "click", { ref: "e2" })).resolves.toBe('Clicked textbox "Card number" at (250, 250).');
+    expect(String(child.executeJavaScript.mock.calls.at(-1)?.[0])).toContain('find({"ref":"e2"})');
+    expect(guest.sendInputEvent.mock.calls.map(call => call[0])).toEqual([
+      { type: "mouseMove", x: 250, y: 250 },
+      { type: "mouseDown", x: 250, y: 250, button: "left", clickCount: 1 },
+      { type: "mouseUp", x: 250, y: 250, button: "left", clickCount: 1 },
+    ]);
+    await expect(f.manager.agentAction("chat", tab.id, "type", { ref: "e2" }, "4242")).resolves.toBe('Entered text into textbox "Card number".');
+    await expect(f.manager.agentAction("chat", tab.id, "click", { ref: "e1" })).resolves.toBe('Clicked button "Pay" at (60, 400).');
+    await expect(f.manager.agentAction("chat", tab.id, "click", { ref: "e7" })).rejects.toThrow(/Ref e7 is not from the latest browser_read/);
+  });
+
+  // agent-browser's wait: the page somewhere before it is read (user, 24.09).
+  it("waits for words, a control, an address or the load, at the grant each needs, and gives up in time", async () => {
+    const f = fixture();
+    const tab = f.open();
+    const guest = guestAt();
+    vi.useFakeTimers();
+    await expect(f.manager.agentWait("chat", tab.id, { text: "Paid", timeoutMs: 2_000 })).rejects.toThrow(/Agent control is Off/);
+    // An address and the load read nothing: any mode.
+    const url = f.manager.agentWait("chat", tab.id, { url: "https://*.com/", timeoutMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await url).toMatch(/^Waited 0\.0 s: an address matching "https:\/\/\*\.com\/" — there now/);
+    guest.loading = true;
+    const load = f.manager.agentWait("chat", tab.id, { load: true, timeoutMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(600);
+    guest.loading = false;
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await load).toMatch(/^Waited 0\.[5-9] s: the page to finish loading — there now/);
+    f.manager.control(tab.id, "read");
+    let asked = 0;
+    guest.mainFrame.executeJavaScript.mockImplementation(async () => (asked += 1) >= 3);
+    const words = f.manager.agentWait("chat", tab.id, { text: "Paid", timeoutMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(await words).toMatch(/^Waited 0\.5 s: the words "Paid" — there now\. Read the page again/);
+    expect(String(guest.mainFrame.executeJavaScript.mock.calls.at(-1)?.[0])).toContain('"Paid".replace(');
+    guest.mainFrame.executeJavaScript.mockImplementation(async () => false);
+    const never = f.manager.agentWait("chat", tab.id, { target: { label: "Refund" }, timeoutMs: 1_000 });
+    const outcome = never.catch((error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(1_400);
+    expect(await outcome).toMatch(/^Waited 1\.[0-2] s and a control {"label":"Refund"} did not come\. browser_read shows what the page has now/);
+    const nap = f.manager.agentWait("chat", tab.id, { ms: 300, timeoutMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await nap).toBe("Waited 300 ms.");
+  });
+
+  it("draws the refs on the page for an annotated screenshot, lists them with it, and erases them after", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    guest.mainFrame.executeJavaScript.mockImplementation(async (code: string) => code.includes("const stored = { start:")
+      ? { text: "Invoice", lines: ['e1 button "Download" @ (60, 40)'], count: 1 } : true);
+    const shot = await f.manager.agentScreenshot("chat", tab.id, { frames: 1, intervalMs: 500, refs: true });
+    expect(shot.legend).toBe('e1 button "Download" @ (60, 40)');
+    expect(shot.frames).toHaveLength(1);
+    const scripts = guest.mainFrame.executeJavaScript.mock.calls.map(call => String(call[0]));
+    expect(scripts[0]).toContain("layer.appendChild(tag)");
+    expect(scripts.at(-1)).toContain("__hello-annotate");
+    expect(scripts.at(-1)).toContain("layer.remove()");
+    // Without refs nothing is drawn, and there is no legend.
+    guest.mainFrame.executeJavaScript.mockClear();
+    const plain = await f.manager.agentScreenshot("chat", tab.id, { frames: 1, intervalMs: 500 });
+    expect(plain.legend).toBeUndefined();
+    expect(guest.mainFrame.executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  it("appends what the read left out, and says what a pointer click landed on", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ text: "Settings", lines: ['e1 tab "Billing" @ (410, 415)'], count: 1,
+      note: '2 controls of the page behind the open dialog "Settings" are not listed: nothing behind it takes a click while it is open.' });
+    const read = await f.manager.read(tab.id, "chat");
+    expect(read.text).toMatch(/e1 tab "Billing" @ \(410, 415\)\n2 controls of the page behind the open dialog "Settings" are not listed/);
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'link "Projects"', ref: "e13", control: true });
+    await expect(f.manager.agentPointer("chat", tab.id, { action: "click", x: 130, y: 200, button: "left", clickCount: 1 })).resolves.toBe(
+      ' It landed on link "Projects" (e13) — a control. Click controls with browser_click ref "e13": it finds the control wherever the page has scrolled, and a point does not.');
+    expect(guest.sendInputEvent).toHaveBeenCalledTimes(3);
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'div "Background"', ref: "", control: false });
+    await expect(f.manager.agentPointer("chat", tab.id, { action: "hover", x: 5, y: 5 })).resolves.toBe(' It is over div "Background".');
+    // A page that will not say still gets the input.
+    guest.mainFrame.executeJavaScript.mockRejectedValueOnce(new Error("frame gone"));
+    await expect(f.manager.agentPointer("chat", tab.id, { action: "click", x: 5, y: 5, button: "left", clickCount: 1 })).resolves.toBe("");
+    expect(guest.sendInputEvent).toHaveBeenCalledTimes(7);
+  });
+
+  it("presses one key as from the keyboard, at Full only, and only a key it knows", async () => {
+    const f = fixture();
+    const tab = f.open();
+    await expect(f.manager.agentKey("chat", tab.id, "Enter")).rejects.toThrow(/Agent control is Off/);
+    f.manager.control(tab.id, "read");
+    await expect(f.manager.agentKey("chat", tab.id, "Enter")).rejects.toThrow(/read only/);
+    f.manager.control(tab.id, "full");
+    await expect(f.manager.agentKey("chat", tab.id, "F5")).rejects.toThrow(/Unknown key "F5"/);
+    await expect(f.manager.agentKey("chat", tab.id, "Enter")).resolves.toBe("Pressed Enter.");
+    expect(guestAt().sendInputEvent.mock.calls.map((call) => call[0])).toEqual([
+      { type: "keyDown", keyCode: "Return" }, { type: "char", keyCode: "Return" }, { type: "keyUp", keyCode: "Return" },
+    ]);
+    await f.manager.agentKey("chat", tab.id, "Escape");
+    expect(guestAt().sendInputEvent.mock.calls.slice(3).map((call) => call[0])).toEqual([
+      { type: "keyDown", keyCode: "Escape" }, { type: "keyUp", keyCode: "Escape" },
+    ]);
+  });
+});
+
+// A download is the CHAT's, wherever it came from — a tab, a popup a link
+// opened for it, a tab since closed — and it lands in the chat's folder or,
+// like any browser's, in the system Downloads folder (user, 24.09: "ca în
+// Chrome, profesional": a list with the file, its size, Show in Finder).
+describe("a page offering a download", () => {
+  function item(filename: string, options: { url?: string; total?: number; mime?: string } = {}) {
+    const listeners = new Map<string, Array<(event: unknown, state: string) => void>>();
+    let received = 0;
+    const listen = vi.fn((name: string, listener: (event: unknown, state: string) => void) => {
+      listeners.set(name, [...(listeners.get(name) ?? []), listener]);
+    });
+    const fake = {
+      getFilename: () => filename,
+      getURL: () => options.url ?? `https://billing.example/files/${filename}?token=secret`,
+      getMimeType: () => options.mime ?? "application/pdf",
+      getTotalBytes: () => options.total ?? 0,
+      getReceivedBytes: () => received,
+      setSavePath: vi.fn(),
+      on: listen,
+      once: listen,
+      cancel: vi.fn(() => fake.finish("cancelled")),
+      progress: (bytes: number) => { received = bytes; for (const listener of listeners.get("updated") ?? []) listener({}, "progressing"); },
+      finish: (state = "completed") => { if (state === "completed" && !received) received = 1234; for (const listener of listeners.get("done") ?? []) listener({}, state); },
+    };
+    return fake;
+  }
+  const offer = (download: ReturnType<typeof item>, guest: unknown) => {
+    const event = { preventDefault: vi.fn() };
+    (native.partition as EventEmitter).emit("will-download", event, download, guest);
+    return event;
+  };
+
+  it("saves it into the chat's folder under a safe, unused name, on the chat's list, with its progress and source", () => {
+    const folder = mkdtempSync(join(tmpdir(), "hello-downloads-"));
+    writeFileSync(join(folder, "invoice.pdf"), "already here");
+    try {
+      vi.useFakeTimers();
+      const f = fixture({ folder });
+      const tab = f.open();
+      const download = item("../../invoice.pdf", { total: 4000, url: "https://billing.example/i/inv_1/pdf?s=ap" });
+      expect(offer(download, guestAt()).preventDefault).not.toHaveBeenCalled();
+      expect(download.setSavePath).toHaveBeenCalledWith(join(folder, "invoice-2.pdf"));
+      const listed = () => f.manager.downloadsOf("chat");
+      expect(listed()).toMatchObject([{
+        conversationId: "chat", tabId: tab.id, name: "invoice-2.pdf", path: join(folder, "invoice-2.pdf"), state: "saving",
+        total: 4000, url: "https://billing.example/i/inv_1/pdf", mimeType: "application/pdf",
+      }]);
+      expect(f.saveDownload).toHaveBeenCalledWith(expect.objectContaining({ state: "saving" }));
+      expect(f.downloadEvent).toHaveBeenCalledWith({ type: "updated", download: expect.objectContaining({ state: "saving" }) });
+      // Progress reaches the window, not the disk.
+      vi.advanceTimersByTime(300);
+      download.progress(2000);
+      expect(listed()[0]).toMatchObject({ bytes: 2000, state: "saving" });
+      expect(f.saveDownload).toHaveBeenCalledTimes(1);
+      download.finish();
+      expect(listed()[0]).toMatchObject({ state: "saved", bytes: 2000, total: 4000, finishedAt: expect.any(Number) });
+      expect(f.saveDownload).toHaveBeenLastCalledWith(expect.objectContaining({ state: "saved" }));
+      expect(f.lifecycle).toHaveBeenCalledWith(expect.objectContaining({
+        type: "downloaded", id: tab.id, conversationId: "chat", download: expect.objectContaining({ name: "invoice-2.pdf", state: "saved" }),
+      }));
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("lands in the system Downloads folder when the chat has no folder, is refused only with no folder at all, and never from no page of ours", () => {
+    const downloads = mkdtempSync(join(tmpdir(), "hello-system-downloads-"));
+    try {
+      const f = fixture({ downloadsFolder: downloads });
+      f.open();
+      const download = item("invoice.pdf");
+      expect(offer(download, guestAt()).preventDefault).not.toHaveBeenCalled();
+      expect(download.setSavePath).toHaveBeenCalledWith(join(downloads, "invoice.pdf"));
+      expect(f.manager.downloadFolder("chat")).toBe(downloads);
+      // One partition, one listener: the next manager must be the only one.
+      f.manager.dispose();
+    } finally {
+      rmSync(downloads, { recursive: true, force: true });
+    }
+    const bare = fixture();
+    bare.open();
+    const refused = item("invoice.pdf");
+    // The second fixture's page is the second guest the window made.
+    expect(offer(refused, guestAt(1)).preventDefault).toHaveBeenCalledOnce();
+    expect(refused.setSavePath).not.toHaveBeenCalled();
+    expect(bare.manager.downloadsOf("chat")).toMatchObject([{ name: "invoice.pdf", state: "refused", reason: "there is no folder to save into" }]);
+    expect(() => bare.manager.downloadFolder("chat")).toThrow(/no folder/);
+    const stranger = { preventDefault: vi.fn() };
+    (native.partition as EventEmitter).emit("will-download", stranger, item("x.bin"), { id: "not-ours" });
+    expect(stranger.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("makes a link's popup that only carried the file the opener's download, and closes that popup again", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "hello-downloads-"));
+    try {
+      const f = fixture({ folder });
+      const tab = f.open();
+      const handler = guestAt().setWindowOpenHandler.mock.calls[0][0] as (details: HandlerDetails) => WindowOpenHandlerResponse;
+      expect(handler({ url: "https://billing.example/i/inv_1/pdf", disposition: "foreground-tab" } as HandlerDetails)).toEqual({ action: "deny" });
+      const popup = f.manager.list("chat").find((candidate) => candidate.openerId === tab.id)!;
+      expect(popup).toBeDefined();
+      const { guest } = f.attach(popup.id);
+      // The navigation became a download: the popup's page never committed anything.
+      guest.url = "about:blank";
+      const download = item("inv_1.pdf");
+      offer(download, guest);
+      expect(f.manager.downloadsOf("chat")).toMatchObject([{ name: "inv_1.pdf", tabId: tab.id, state: "saving" }]);
+      // The popup goes once the download handler has returned — a moment later.
+      await vi.waitFor(() => expect(f.manager.list("chat").map((candidate) => candidate.id)).toEqual([tab.id]));
+      expect(f.lifecycle).toHaveBeenCalledWith(expect.objectContaining({ type: "closed", id: popup.id, openerId: tab.id }));
+      download.finish();
+      expect(f.manager.downloadsOf("chat")[0]).toMatchObject({ state: "saved", tabId: tab.id });
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("tells the click that caused it where the file went, finished or still saving", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "hello-downloads-"));
+    try {
+      const f = fixture({ folder });
+      const tab = f.open();
+      f.manager.control(tab.id, "full");
+      const guest = guestAt();
+      guest.mainFrame.executeJavaScript.mockImplementationOnce(async () => {
+        const download = item("receipt.pdf");
+        offer(download, guest);
+        download.finish();
+        return { what: 'button "Download receipt"', x: 10, y: 20 };
+      });
+      vi.useRealTimers();
+      const done = await f.manager.agentAction("chat", tab.id, "click", { label: "Download receipt" });
+      expect(done).toContain('Clicked button "Download receipt" at (10, 20).');
+      expect(done).toContain(`Saved receipt.pdf → ${join(folder, "receipt.pdf")} (1234 bytes). It is on disk now; do not look for another way to fetch it.`);
+      vi.useFakeTimers();
+      guest.mainFrame.executeJavaScript.mockImplementationOnce(async () => {
+        offer(item("statement.pdf", { total: 9000 }), guest);
+        return { what: 'button "Download statement"', x: 10, y: 20 };
+      });
+      const slow = f.manager.agentAction("chat", tab.id, "click", { label: "Download statement" });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await slow).toContain(`Download started: statement.pdf → ${join(folder, "statement.pdf")} (0 of 9000 bytes); still saving. It will be on disk in a moment — browser_downloads shows when`);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("is listed between sessions, can be cancelled, taken off the list, cleared, opened where it is", () => {
+    const folder = mkdtempSync(join(tmpdir(), "hello-downloads-"));
+    try {
+      writeFileSync(join(folder, "old.pdf"), "kept");
+      const earlier: BrowserDownload[] = [
+        { id: "old", conversationId: "chat", name: "old.pdf", path: join(folder, "old.pdf"), state: "saved", bytes: 4, startedAt: 1, finishedAt: 2 },
+        { id: "gone", conversationId: "chat", name: "gone.pdf", path: join(folder, "gone.pdf"), state: "saved", bytes: 4, startedAt: 3, finishedAt: 4 },
+        { id: "theirs", conversationId: "other", name: "theirs.pdf", state: "failed", startedAt: 5 },
+      ];
+      const f = fixture({ folder, initialDownloads: earlier });
+      f.open();
+      expect(f.manager.downloadsOf("chat").map((download) => download.id)).toEqual(["gone", "old"]);
+      expect(f.manager.downloadPath("old")).toBe(join(folder, "old.pdf"));
+      expect(() => f.manager.downloadPath("gone")).toThrow(/no longer where it was saved/);
+      const saving = item("big.zip", { total: 9000 });
+      offer(saving, guestAt());
+      const id = f.manager.downloadsOf("chat")[0].id;
+      expect(() => f.manager.downloadPath(id)).toThrow(/still being saved/);
+      // Clear leaves what is still saving; cancel ends it, and it says so.
+      f.manager.clearDownloads("chat");
+      expect(f.manager.downloadsOf("chat").map((download) => download.id)).toEqual([id]);
+      expect(f.removeDownload).toHaveBeenCalledWith("old");
+      expect(f.downloadEvent).toHaveBeenCalledWith({ type: "removed", id: "old", conversationId: "chat" });
+      f.manager.cancelDownload(id);
+      expect(saving.cancel).toHaveBeenCalledOnce();
+      expect(f.manager.downloadsOf("chat")[0]).toMatchObject({ state: "cancelled", reason: "cancelled" });
+      expect(f.lifecycle).toHaveBeenCalledWith(expect.objectContaining({ type: "downloaded", download: expect.objectContaining({ state: "cancelled" }) }));
+      f.manager.removeDownload(id);
+      expect(f.manager.downloadsOf("chat")).toEqual([]);
+      expect(() => f.manager.removeDownload(id)).toThrow(/no longer listed/);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  // The model asks for the file itself: the document open in the tab, or
+  // a link's address, fetched by the page with the page's own session — the
+  // one thing a shell does not have (user, 23.09: curl after curl at a
+  // Stripe invoice, "the browser has no download function").
+  describe("asked for by the model", () => {
+    /** The page answering a download request the way Chromium does: a will-download on its session. */
+    const offering = (guest: FakeGuest, finish = true) =>
+      guest.downloadURL.mockImplementation((url: string) => {
+        const download = item(url.split("/").pop() || "download");
+        offer(download, guest);
+        if (finish) download.finish();
+      });
+
+    it("saves the file at a link's address, or the page shown in the tab, and says where it is", async () => {
+      const folder = mkdtempSync(join(tmpdir(), "hello-downloads-"));
+      try {
+        const f = fixture({ folder });
+        const tab = f.open();
+        f.manager.control(tab.id, "full");
+        const guest = guestAt();
+        offering(guest);
+        vi.useRealTimers();
+        await expect(f.manager.agentDownload("chat", tab.id, "https://billing.example/invoice.pdf")).resolves.toMatchObject({
+          name: "invoice.pdf", path: join(folder, "invoice.pdf"), state: "saved", bytes: 1234, tabId: tab.id,
+        });
+        expect(guest.downloadURL).toHaveBeenCalledWith("https://billing.example/invoice.pdf");
+        // No address: the page in the tab is the file.
+        await f.manager.agentDownload("chat", tab.id, undefined);
+        expect(guest.downloadURL).toHaveBeenLastCalledWith("https://example.com/");
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
+      }
+    });
+
+    it("needs Full and a web address, and hands back a refusal instead of hiding it", async () => {
+      const f = fixture();
+      const tab = f.open();
+      await expect(f.manager.agentDownload("chat", tab.id, "https://billing.example/invoice.pdf")).rejects.toThrow(/Agent control is Off/);
+      f.manager.control(tab.id, "read");
+      await expect(f.manager.agentDownload("chat", tab.id, "https://billing.example/invoice.pdf")).rejects.toThrow(/read only/);
+      f.manager.control(tab.id, "full");
+      await expect(f.manager.agentDownload("chat", tab.id, "file:///etc/passwd")).rejects.toThrow(/web address/);
+      expect(guestAt().downloadURL).not.toHaveBeenCalled();
+      offering(guestAt());
+      vi.useRealTimers();
+      // No folder anywhere: the same refusal a click gets, returned, not thrown away.
+      await expect(f.manager.agentDownload("chat", tab.id, "https://billing.example/invoice.pdf")).resolves.toMatchObject({
+        name: "invoice.pdf", state: "refused", reason: "there is no folder to save into",
+      });
+    });
+
+    it("gives up on an address nothing starts from, and answers with a file still being written", async () => {
+      const folder = mkdtempSync(join(tmpdir(), "hello-downloads-"));
+      try {
+        const f = fixture({ folder });
+        const tab = f.open();
+        f.manager.control(tab.id, "full");
+        vi.useFakeTimers();
+        const nothing = f.manager.agentDownload("chat", tab.id, "https://billing.example/not-a-file");
+        const refused = nothing.catch((error: Error) => error.message);
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_START_MS + 200);
+        expect(await refused).toMatch(/Nothing started downloading from https:\/\/billing.example\/not-a-file within 10 s/);
+        offering(guestAt(), false);
+        const slow = f.manager.agentDownload("chat", tab.id, "https://billing.example/big.zip");
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_FINISH_MS + 500);
+        expect(await slow).toMatchObject({ name: "big.zip", path: join(folder, "big.zip"), state: "saving" });
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("makes a proposed name safe", () => {
+    expect(safeFileName("../../.hidden/../invoice.pdf")).toBe("invoice.pdf");
+    expect(safeFileName("C:\\\\Users\\\\x\\\\report.csv")).toBe("report.csv");
+    expect(safeFileName("...")).toBe("download");
+    expect(safeFileName("")).toBe("download");
+    expect(safeFileName("bad\u0000name\u001f.txt")).toBe("badname.txt");
   });
 });

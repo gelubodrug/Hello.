@@ -45,16 +45,39 @@ export interface DiscoveredSkill { id: string; name: string; description: string
 export interface DiscoveredResources { mcp: DiscoveredMcpServer[]; skills: DiscoveredSkill[]; }
 /** A model the endpoint offers, with the limits it publishes for it. */
 export interface ModelChoice { id: string; contextWindow?: number; maxOutputTokens?: number; }
+/** One connection's models for the chat's picker: the one in use (unnamed until kept), a kept one, or a server running on this Mac. A connection that could not answer keeps its place with the reason. */
+export interface ConnectionModels { name: string; endpointUrl: string; active: boolean; models: ModelChoice[]; error?: string; }
+/** A model server found running on this Mac, named after what it is and the port it took. */
+export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[]; }
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
 export interface ResourceChange { conversationId?: string }
-export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; createdAt: number; updatedAt: number; }
+/** Three switches a chat carries. `planning` is the Plan switch: off by
+ *  default, because a two-line request answered with a written plan is slower
+ *  than the answer. `runbook` and `tasks` are the two shared pages: on by
+ *  default, and when one is off it is gone from the UI and invisible to the
+ *  model — no page, no tool, nothing about it in what the model is told. */
+export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean;
+  /** When the chat was last restarted: the model's memory begins here; what came before stays for the person. */
+  freshFrom?: number;
+  createdAt: number; updatedAt: number; }
 export interface ChatAttachment { id: string; name: string; kind: 'text' | 'image'; size: number; }
 export interface ChatDropResult { folder?: string; attachments: ChatAttachment[]; }
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string; durationMs?: number }
   | { type: 'tool'; id: string; name: string; input: string; output?: string; status: 'running' | 'complete' | 'error' | 'approval'; approvalId?: string; durationMs?: number };
-export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; parts?: MessagePart[]; status: 'complete' | 'streaming' | 'error'; createdAt: number; error?: string | null; usage?: { input: number; output: number }; runtimePhase?: 'starting' | 'working' | 'compacting' | 'retrying'; }
+export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; parts?: MessagePart[]; status: 'complete' | 'streaming' | 'error'; createdAt: number; error?: string | null; usage?: MessageUsage; runtimePhase?: 'starting' | 'working' | 'compacting' | 'retrying';
+  /** The model that wrote this reply, as it was selected when the reply began. */
+  model?: string; }
+/**
+ * What a reply cost in tokens. input and output add up every call the reply
+ * made — a tool step sends the whole context again — so they are its bill,
+ * not its size; context is the prompt of its latest call: how full the
+ * model's window is now.
+ */
+export interface MessageUsage { input: number; output: number; context?: number; cost?: number; }
+/** A message that has the words searched for, and the words around them. */
+export interface MessageMatch { conversationId: string; messageId: string; role: 'user' | 'assistant'; snippet: string; createdAt: number; }
 export interface NotebookEntry { id: string; conversationId: string; kind: NotebookKind; title: string; body: string; createdAt: number; updatedAt: number; }
 export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 /**
@@ -77,7 +100,7 @@ export interface TerminalSession { id: string; conversationId: string; title: st
 export interface TerminalData { id: string; data: string; sequence: number; }
 export interface TerminalExit { id: string; exitCode: number; }
 export interface TerminalAttach { session: TerminalSession; scrollback: string; sequence: number; }
-export interface BrowserTab { id: string; conversationId: string; title: string; url: string; control: AgentControl; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string | null; pageOwned?: boolean; openerId?: string; sessionOnly?: boolean;
+export interface BrowserTab { id: string; conversationId: string; title: string; url: string; control: AgentControl; loading: boolean; progress: number | null; canGoBack: boolean; canGoForward: boolean; error?: string | null; pageOwned?: boolean; openerId?: string; sessionOnly?: boolean;
   /** Bumped when the page must be re-created; the renderer keys its guest on it. */
   generation?: number;
   /** The isolated session a generated preview runs in, chosen by the main process. */
@@ -86,9 +109,36 @@ export interface BrowserTab { id: string; conversationId: string; title: string;
    *  or a path inside the chat's folder. A local URL dies with the app; a
    *  handle does not, so this is what a tab is saved by. */
   source?: string; }
+/**
+ * A file a page offered, or the model asked for, and where it went. One list
+ * per chat, kept between sessions: a download from a link that opened in a
+ * popup, or from a tab since closed, is still this chat's download.
+ */
+export interface BrowserDownload {
+  id: string;
+  conversationId: string;
+  /** The tab it came from — its opener, when the link opened a popup for it. */
+  tabId?: string;
+  name: string;
+  path?: string;
+  /** Where it came from: origin and path, never a query string or credentials. */
+  url?: string;
+  mimeType?: string;
+  state: 'saving' | 'saved' | 'failed' | 'cancelled' | 'refused';
+  reason?: string;
+  /** Bytes on disk so far, and the whole size when the server said it. */
+  bytes?: number;
+  total?: number;
+  startedAt: number;
+  finishedAt?: number;
+}
+export type BrowserDownloadEvent =
+  | { type: 'updated'; download: BrowserDownload }
+  | { type: 'removed'; id: string; conversationId: string };
 export type BrowserLifecycleEvent =
   | { type: 'opened'; tab: BrowserTab; foreground: boolean; userRequested?: boolean }
-  | { type: 'closed'; id: string; conversationId: string; openerId?: string };
+  | { type: 'closed'; id: string; conversationId: string; openerId?: string }
+  | { type: 'downloaded'; id: string; conversationId: string; download: BrowserDownload };
 export interface ViewBounds { x: number; y: number; width: number; height: number; }
 export interface BrowserContent { title: string; url: string; text: string; }
 /**
@@ -152,15 +202,26 @@ export interface HelloAPI {
   conversations: {
     list(): Promise<Conversation[]>;
     create(title?: string): Promise<Conversation>;
-    update(id: string, patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder' }): Promise<Conversation>;
+    update(id: string, patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean }): Promise<Conversation>;
     delete(id: string): Promise<void>;
+    /** The model starts fresh from now; messages, tabs, terminals, notes and the folder stay. */
+    restart(id: string): Promise<Conversation>;
+    /** Messages of every chat that have these words, newest first, a few per chat. Optional for an older preload. */
+    search?(query: string): Promise<MessageMatch[]>;
+    /** The chat empty as new — messages, queue, attachments and, with notes, its Runbook and Tasks go; tabs, terminals, downloads and the folder stay. */
+    reset(id: string, options?: { notes?: boolean }): Promise<Conversation>;
     messages(id: string): Promise<Message[]>;
     export(id: string): Promise<string | null>;
   };
   settings: {
     get(): Promise<AppSettings>;
     save(patch: SettingsPatch): Promise<AppSettings>;
-    models(): Promise<ModelChoice[]>;
+    /** An endpoint's models, asked afresh: the one given, or the one in use. */
+    models(endpointUrl?: string): Promise<ModelChoice[]>;
+    /** Every model the chat can reach: the endpoint in use, kept connections and servers on this Mac. */
+    catalog(): Promise<ConnectionModels[]>;
+    /** Model servers running on this Mac, looked for afresh. */
+    localServers(): Promise<LocalServer[]>;
     /** Keeps the endpoint and model as currently saved under a name. */
     rememberConnection(name: string): Promise<AppSettings>;
     /** Makes a remembered connection the active endpoint and model. */
@@ -188,7 +249,15 @@ export interface HelloAPI {
     disconnect(id: string): Promise<void>;
     onChange(listener: (event: ResourceChange) => void): () => void;
   };
-  system: { chooseFolder(): Promise<string | null>; pathsForFiles(files: File[]): string[]; openExternal(url: string): Promise<void>; revealPath(path: string): Promise<void>; copy(content: { text: string; html?: string }): Promise<void>; };
+  system: { chooseFolder(): Promise<string | null>; pathsForFiles(files: File[]): string[]; openExternal(url: string): Promise<void>; revealPath(path: string): Promise<void>; copy(content: { text: string; html?: string }): Promise<void>;
+    /** A macOS notification about one chat; clicking it brings that chat forward. Optional for an older preload. */
+    notify?(input: { title: string; body: string; conversationId: string }): Promise<boolean>;
+    /** The number on the Dock icon: chats waiting for the person. 0 clears it. */
+    badge?(count: number): Promise<void>;
+    /** A notification was clicked: the chat it was about. */
+    onFocusConversation?(listener: (conversationId: string) => void): () => void;
+    /** The app's window gained or lost the OS focus. */
+    onWindowFocus?(listener: (focused: boolean) => void): () => void; };
   terminal: {
     list(): Promise<TerminalSession[]>;
     workers(): Promise<WorkerInfo[]>;
@@ -197,6 +266,8 @@ export interface HelloAPI {
     write(id: string, data: string): Promise<void>;
     resize(id: string, cols: number, rows: number): Promise<void>;
     close(id: string): Promise<void>;
+    /** A pane opened without the renderer asking — the model opened it. */
+    onCreated(listener: (session: TerminalSession) => void): () => void;
     onData(listener: (event: TerminalData) => void): () => void;
     onExit(listener: (event: TerminalExit) => void): () => void;
   };
@@ -218,6 +289,20 @@ export interface HelloAPI {
     onLifecycle?(listener: (event: BrowserLifecycleEvent) => void): () => void;
     /** Optional during renderer hot updates against an older desktop preload. */
     onFocus?(listener: () => void): () => void;
+    /** This chat's downloads: the list, what to do with one, and where they land. */
+    downloads: {
+      list(conversationId: string): Promise<BrowserDownload[]>;
+      open(id: string): Promise<void>;
+      reveal(id: string): Promise<void>;
+      cancel(id: string): Promise<void>;
+      /** Off the list; the file stays. */
+      remove(id: string): Promise<void>;
+      /** Every finished one off the list. */
+      clear(conversationId: string): Promise<void>;
+      /** The chat's attached folder, else the system Downloads folder. */
+      folder(conversationId: string): Promise<string>;
+      onChange(listener: (event: BrowserDownloadEvent) => void): () => void;
+    };
     /** Design / Annotate. Human-only: no agent tool reaches these. */
     mode: {
       /** Needs Read or Full on the tab and a page that finished loading. Replaces another mode on the same tab. */

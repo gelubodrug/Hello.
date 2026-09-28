@@ -65,7 +65,11 @@ interface PendingRequest {
   resolve: (value: PiRpcResponse) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** How long this command is given once Pi is not busy on its behalf. */
+  timeoutMs: number;
 }
+/** How long a prompt may wait on the compaction Pi runs before accepting it. */
+export const COMPACTION_TIMEOUT_MS = 15 * 60_000;
 
 function timeoutValue(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value)
@@ -294,17 +298,9 @@ export class PiRpcProcess {
     } catch (error) {
       return Promise.reject(error);
     }
+    const allowed = timeoutValue(timeoutMs, timeoutValue(this.options.requestTimeoutMs, DEFAULT_TIMEOUT_MS));
     return new Promise<PiRpcResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        // An unacknowledged command may already be acting: close rather than
-        // continue a warm session whose state is now unknown to the caller.
-        this.fail(new Error(`Pi command timed out (${command.type}).`));
-      }, timeoutValue(
-        timeoutMs,
-        timeoutValue(this.options.requestTimeoutMs, DEFAULT_TIMEOUT_MS),
-      ));
-      timer.unref();
-      this.pending.set(id, { command: command.type, resolve, reject, timer });
+      this.pending.set(id, { command: command.type, resolve, reject, timeoutMs: allowed, timer: this.expiry(command.type, allowed) });
       void this.enqueueWrite(line).catch((error: unknown) => {
         this.fail(this.asError(error, "Pi command could not be sent."));
       });
@@ -417,6 +413,8 @@ export class PiRpcProcess {
       }
       return;
     }
+    if (record.type === "compaction_start") this.rearm("prompt", COMPACTION_TIMEOUT_MS);
+    else if (record.type === "compaction_end") this.rearm("prompt");
     for (const listener of this.listeners) {
       try {
         listener(record as PiRpcEvent);
@@ -426,6 +424,28 @@ export class PiRpcProcess {
     }
   }
 
+  private expiry(command: string, ms: number): ReturnType<typeof setTimeout> {
+    // An unacknowledged command may already be acting: close rather than
+    // continue a warm session whose state is now unknown to the caller.
+    const timer = setTimeout(() => this.fail(new Error(`Pi command timed out (${command}).`)), ms);
+    timer.unref();
+    return timer;
+  }
+  /**
+   * A prompt is acknowledged only after Pi's preflight, and preflight compacts
+   * first when the last turn left the context over the line — a summary the
+   * model has to write, minutes on a local model. The prompt's clock does not
+   * run while Pi says it is compacting (user, 24.09: "Pi command timed out
+   * (prompt)" three times running, each try compacting the same history from
+   * scratch and dying at 30 s); it runs again, from the start, when Pi is done.
+   */
+  private rearm(command: string, ms?: number): void {
+    for (const pending of this.pending.values()) {
+      if (pending.command !== command) continue;
+      clearTimeout(pending.timer);
+      pending.timer = this.expiry(pending.command, ms ?? pending.timeoutMs);
+    }
+  }
   private fail(error: Error): void {
     if (this.closed || this.stopping) return;
     this.failure = error;

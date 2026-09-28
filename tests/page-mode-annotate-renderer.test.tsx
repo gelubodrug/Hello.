@@ -31,7 +31,7 @@ vi.mock('../src/renderer/api', () => ({
 import { AnnotateBar } from '../src/renderer/browser/annotate/AnnotateBar';
 import { usePageMode } from '../src/renderer/browser/usePageMode';
 
-const tab: BrowserTab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, canGoBack: false, canGoForward: false };
+const tab: BrowserTab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false };
 const SHOT = { url: 'https://example.test/app', marks: [{ n: 1, color: 'yellow', text: 'Too dim', inView: true }, { n: 3, color: 'pink', text: 'Below', inView: false }] };
 const PATH = '/data/page-captures/chat-1/0000.png';
 const flush = async () => { for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); }); };

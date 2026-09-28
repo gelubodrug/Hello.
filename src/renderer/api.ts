@@ -25,9 +25,11 @@ function previewAPI(): HelloAPI {
       create: async (title='New chat') => { const chat = {id:crypto.randomUUID(),title,folder:null,createdAt:Date.now(),updatedAt:Date.now()}; conversations=[chat,...conversations]; persistChats(); return chat; },
       update: async (id,patch) => { const chat=conversations.find(item=>item.id===id); if(!chat) throw new Error('Chat not found.'); Object.assign(chat,patch,{updatedAt:Date.now()}); persistChats(); return {...chat}; },
       delete: async (id) => {conversations=conversations.filter(chat=>chat.id!==id);persistChats();},
+      restart: async (id) => { const chat=conversations.find(item=>item.id===id); if(!chat) throw new Error('Chat not found.'); chat.freshFrom=Date.now(); persistChats(); return {...chat}; },
+      reset: async (id, options) => { const chat=conversations.find(item=>item.id===id); if(!chat) throw new Error('Chat not found.'); delete chat.freshFrom; if(options?.notes!==false){entries=entries.filter(entry=>entry.conversationId!==id);write('entries',entries);emitNotebook({conversationId:id,kind:'runbook'});emitNotebook({conversationId:id,kind:'tasks'});} persistChats(); return {...chat}; },
       messages: async () => [], export: unsupported,
     },
-    settings: {get:async()=>settings,save:async(patch)=>{const {apiKey,...safe}=patch; settings={...settings,...safe,apiKeySet:false};write('settings',settings);return settings;},models:unsupported,rememberConnection:unsupported,useConnection:unsupported,forgetConnection:unsupported},
+    settings: {get:async()=>settings,save:async(patch)=>{const {apiKey,...safe}=patch; settings={...settings,...safe,apiKeySet:false};write('settings',settings);return settings;},models:unsupported,catalog:unsupported,localServers:async()=>[],rememberConnection:unsupported,useConnection:unsupported,forgetConnection:unsupported},
     chat:{attach:unsupported,previewAttachment:unsupported,send:unsupported,queue:unsupported,queued:async()=>[],reviseQueued:unsupported,dropQueued:unsupported,stop:async()=>{},retry:unsupported,approve:unsupported,onEvent:()=>()=>{}},
     // The design preview has no library: importing runs in the desktop app.
     extensions:{list:async()=>[],importResource:unsupported,examples:async()=>[],importExample:unsupported,addMcp:unsupported,discover:async()=>({mcp:[],skills:[]}),importDiscovered:unsupported,update:unsupported,remove:unsupported,active:async()=>[],setActive:unsupported,status:async()=>[],probe:unsupported,disconnect:unsupported,onChange:()=>()=>{}},
@@ -53,8 +55,8 @@ function previewAPI(): HelloAPI {
         await navigator.clipboard.write([new ClipboardItem({'text/plain':new Blob([text],{type:'text/plain'}),'text/html':new Blob([html],{type:'text/html'})})]);
       }else await navigator.clipboard.writeText(text);
     }},
-    terminal:{list:async()=>[],workers:async()=>[],create:unsupported,attach:unsupported,write:unsupported,resize:async()=>{},close:async()=>{},onData:()=>()=>{},onExit:()=>()=>{}},
-    browser:{create:unsupported,navigate:unsupported,action:unsupported,setActive:async()=>{},attach:unsupported,detach:async()=>{},control:unsupported,read:unsupported,close:async()=>{},onUpdate:()=>()=>{},mode:{arm:unsupported,disarm:async()=>{},release:async()=>{},capture:unsupported,copy:unsupported,onEvent:()=>()=>{}}},
+    terminal:{list:async()=>[],workers:async()=>[],create:unsupported,attach:unsupported,write:unsupported,resize:async()=>{},close:async()=>{},onCreated:()=>()=>{},onData:()=>()=>{},onExit:()=>()=>{}},
+    browser:{create:unsupported,navigate:unsupported,action:unsupported,setActive:async()=>{},attach:unsupported,detach:async()=>{},control:unsupported,read:unsupported,close:async()=>{},onUpdate:()=>()=>{},downloads:{list:async()=>[],open:unsupported,reveal:unsupported,cancel:unsupported,remove:unsupported,clear:unsupported,folder:unsupported,onChange:()=>()=>{}},mode:{arm:unsupported,disarm:async()=>{},release:async()=>{},capture:unsupported,copy:unsupported,onEvent:()=>()=>{}}},
   };
 }
 
@@ -63,6 +65,7 @@ const bridge = desktop ? window.hello : previewAPI();
 export function onNativeBrowserFocus(listener: () => void): () => void {
   return bridge.browser.onFocus?.(listener) ?? (() => {});
 }
+const stale = async (): Promise<never> => { throw new Error('Downloads need the updated Hello. main process and preload. Reopen Hello. when ready.'); };
 export const api: HelloAPI = {
   ...bridge,
   files: {...(bridge.files ?? {
@@ -83,6 +86,10 @@ export const api: HelloAPI = {
   }, send: async (id,text,attachmentIds) => {
     if(attachmentIds?.length&&typeof bridge.chat.attach!=='function')throw new Error('Attachments need the updated Hello. main process and preload. Reopen Hello. when ready.');
     await bridge.chat.send(id,text,attachmentIds);
+  }},
+  browser: {...bridge.browser, downloads: bridge.browser.downloads ?? {
+    list: async () => [], onChange: () => () => {},
+    open: stale, reveal: stale, cancel: stale, remove: stale, clear: stale, folder: stale,
   }},
   system: {...bridge.system, pathsForFiles: files => {
     if(typeof bridge.system.pathsForFiles!=='function')throw new Error('File drops need the updated Hello. preload. Reopen Hello. when ready.');

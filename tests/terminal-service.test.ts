@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Conversation,
   NotebookPaths,
@@ -23,6 +23,7 @@ import {
   SCROLLBACK_CHARS,
   MAX_SESSIONS,
   capFlush,
+  plainTranscript,
 } from "../src/main/terminal/service";
 import { WORKER_CATALOG } from "../src/main/terminal/cli-workers";
 import type { PtyProcess, SpawnPty } from "../src/main/terminal/native";
@@ -102,6 +103,8 @@ function fixture(withNotebookContext = false) {
     instructionsPath: join(root, 'context with spaces; "quotes"', "HELLO.md"),
     instructions: "Hello Tasks are app entries for this chat. Wait for the human's request.",
     close: vi.fn(async () => {}),
+    listen: vi.fn(),
+    answer: vi.fn(),
   };
   const openNotebookContext = vi.fn<(
     conversationId: string,
@@ -115,6 +118,7 @@ function fixture(withNotebookContext = false) {
   });
   const emitData = vi.fn<(event: TerminalData) => void>();
   const emitExit = vi.fn<(event: TerminalExit) => void>();
+  const onWorkerReport = vi.fn();
   const service = new MainTerminalService({
     lookupConversation: lookup,
     endpoint: () => ({
@@ -126,6 +130,7 @@ function fixture(withNotebookContext = false) {
     userDataDir: root,
     emitData,
     emitExit,
+    onWorkerReport,
     home: root,
     spawn,
     env: {
@@ -155,6 +160,7 @@ function fixture(withNotebookContext = false) {
     processes,
     spawn,
     emitData,
+    onWorkerReport,
     emitExit,
   };
 }
@@ -215,7 +221,7 @@ describe("main terminal service", () => {
   });
 
   it.each(["claude", "codex"] as const)(
-    "launches %s directly with both empty notebook paths and no injected prompt or bypass",
+    "launches %s directly with both empty notebook paths, no injected prompt, and its own never-ask flag",
     async (workerId) => {
       const f = fixture();
       const session = await f.service.create("chat", workerId);
@@ -226,7 +232,11 @@ describe("main terminal service", () => {
       });
       expect(f.spawn).toHaveBeenCalledWith(
         `/test-bin/${workerId}`,
-        [],
+        // A pane opened from Hello starts in that client's never-ask mode
+        // (user, 20.09); nothing else is added to its argv.
+        [workerId === "claude"
+          ? "--dangerously-skip-permissions"
+          : "--dangerously-bypass-approvals-and-sandbox"],
         expect.objectContaining({
           cwd: f.folder,
           env: expect.objectContaining({
@@ -515,5 +525,207 @@ describe("main terminal service", () => {
     await expect(pending).rejects.toThrow(/closed/);
     expect(f.notebookContext.close).toHaveBeenCalledOnce();
     expect(f.spawn).not.toHaveBeenCalled();
+  });
+});
+
+
+// A CLI worker paints its screen over and over, so a pane's raw scrollback is
+// mostly cursor moves. What the chat reads is what a person would say was on
+// the screen (user, 18.09: "sa vad ce a facut kimi").
+describe("a pane as words", () => {
+  it("drops escape sequences, keeps a rewritten line as it ended, and collapses blank runs", () => {
+    const raw = [
+      "\u001b]0;Kimi Code\u0007",
+      "\u001b[2J\u001b[H\u001b[1mWelcome to Kimi Code!\u001b[0m",
+      "",
+      "",
+      "Reading files... 10%\rReading files... 80%\rReading files... done",
+      "\u001b[32mcreated index.html\u001b[0m   ",
+    ].join("\n");
+    expect(plainTranscript(raw)).toBe(
+      "Welcome to Kimi Code!\n\nReading files... done\ncreated index.html",
+    );
+  });
+
+  it("returns the end when there is more than asked for, and says it was cut", () => {
+    const long = Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n");
+    const tail = plainTranscript(long, 40);
+    expect(tail.startsWith("...\n")).toBe(false);
+    expect(tail.slice(0, 2)).toBe("\u2026\n");
+    expect(tail.endsWith("line 199")).toBe(true);
+    expect(tail.length).toBeLessThanOrEqual(42);
+  });
+});
+
+// A TUI reads a chunk ending in a carriage return as PASTED text: the line
+// landed in Kimi's prompt box and sat there, while the chat kept saying it had
+// sent it (user, 18.09). Enter goes on its own, and the verdict comes from the
+// screen — never from the fact that a tool ran.
+describe("typing a line into a pane", () => {
+  const waits = { echo: 1, enter: 1, retry: 1, start: 20 };
+  // The fixture runs on fake timers; this one waits on the screen, so from the
+  // moment the pane exists it waits on a real clock.
+  const pane = async () => {
+    const f = fixture();
+    const session = await f.service.create(f.conversation.id);
+    vi.useRealTimers();
+    return { f, session, pty: f.processes[0] };
+  };
+  const written = (pty: FakePty) => pty.write.mock.calls.map(call => String(call[0]));
+
+  it("writes the words and the Enter separately, and says SENT when the prompt lets go", async () => {
+    const { f, session, pty } = await pane();
+    // A TUI echoes into its prompt box, then repaints: the message moves up
+    // into the transcript and the box comes back empty.
+    pty.write.mockImplementation((data: string) => {
+      if (data === "\r") pty.print("\r\n  list the git repos\r\n  thinking…\r\n> \u2588\r\n");
+      else pty.print(`> ${data}`);
+    });
+    const evidence = await f.service.submit(session.id, "list the git repos", waits);
+    expect(written(pty)).toEqual(["list the git repos", "\r"]);
+    expect(evidence).toMatchObject({ echoed: true, submitted: true });
+    expect(evidence.tail).toContain("list the git repos");
+    // Nothing moved by itself after the line went in, so it does not claim so.
+    expect(evidence.started).toBe(false);
+  });
+
+  it("says it started only when the screen moves on by itself afterwards", async () => {
+    const { f, session, pty } = await pane();
+    pty.write.mockImplementation((data: string) => {
+      if (data === "\r") {
+        pty.print("\r\n  list the git repos\r\n> \u2588\r\n");
+        // The worker picks the task up a moment later, on its own.
+        setTimeout(() => pty.print("\r\nSearching for .git directories…\r\n"), 5);
+      } else pty.print(`> ${data}`);
+    });
+    const evidence = await f.service.submit(session.id, "list the git repos", waits);
+    expect(evidence).toMatchObject({ submitted: true, started: true });
+    expect(evidence.tail).toContain("Searching for .git directories…");
+  });
+
+  it("says NOT SENT while the prompt still holds the line, after trying Enter again", async () => {
+    const { f, session, pty } = await pane();
+    // A pane asking something of its own keeps the words on the prompt line.
+    pty.write.mockImplementation((data: string) => {
+      if (data !== "\r" && data !== "\n") pty.print(`> ${data}\r\nTrust this folder? (y/n)\r\n> ${data}`);
+    });
+    const evidence = await f.service.submit(session.id, "list the git repos", waits);
+    expect(evidence).toMatchObject({ echoed: true, submitted: false });
+    expect(evidence.tail).toContain("Trust this folder?");
+    // It pressed Enter, waited, and tried the other Enter before giving up.
+    expect(written(pty)).toEqual(["list the git repos", "\r", "\n"]);
+  });
+
+  it("reports nothing echoed when the pane shows nothing of it", async () => {
+    const { f, session } = await pane();
+    const evidence = await f.service.submit(session.id, "hello there", waits);
+    expect(evidence).toMatchObject({ echoed: false, submitted: true });
+  });
+
+  it("refuses to type into a pane whose process has gone", async () => {
+    const { f, session, pty } = await pane();
+    pty.exit(0);
+    await expect(f.service.submit(session.id, "anything", waits)).rejects.toThrow(/has exited/);
+  });
+});
+
+// Waiting once, instead of the chat reading the screen every second.
+describe("waiting on a pane", () => {
+  const pane = async () => {
+    const f = fixture(true);
+    const session = await f.service.create(f.conversation.id, "kimi");
+    vi.useRealTimers();
+    return { f, session, pty: f.processes[0] };
+  };
+
+  it("ends the moment the worker speaks", async () => {
+    const { f, session, pty } = await pane();
+    pty.print("working…\r\n");
+    const listen = f.notebookContext.listen as unknown as { mock: { calls: Array<[(report: unknown) => void]> } };
+    setTimeout(() => listen.mock.calls[0][0]({ kind: "report", status: "done", text: "found 51" }), 30);
+    const waited = await f.service.waitFor(session.id, { seconds: 5, quietMs: 60_000, tickMs: 10 });
+    expect(waited.outcome).toBe("reported");
+    expect(waited.waitedMs).toBeLessThan(2_000);
+  });
+
+  it("ends when the screen has been still for a while", async () => {
+    const { f, session, pty } = await pane();
+    pty.print("done, nothing more to say\r\n");
+    const waited = await f.service.waitFor(session.id, { seconds: 5, quietMs: 30, tickMs: 10 });
+    expect(waited.outcome).toBe("quiet");
+    expect(waited.tail).toContain("done, nothing more to say");
+  });
+
+  it("says it is still working when the screen keeps moving, and stops at the time given", async () => {
+    const { f, session, pty } = await pane();
+    const busy = setInterval(() => pty.print("."), 10);
+    try {
+      const waited = await f.service.waitFor(session.id, { seconds: 1, quietMs: 10_000, tickMs: 10 });
+      expect(waited.outcome).toBe("still working");
+      expect(waited.waitedMs).toBeLessThan(3_000);
+    } finally {
+      clearInterval(busy);
+    }
+  });
+
+  it("ends when the process goes", async () => {
+    const { f, session, pty } = await pane();
+    setTimeout(() => pty.exit(0), 30);
+    const waited = await f.service.waitFor(session.id, { seconds: 5, quietMs: 60_000, tickMs: 10 });
+    expect(waited.outcome).toBe("exited");
+  });
+});
+
+// A dialog is answered with a key, not with a sentence typed into it.
+describe("pressing a key in a pane", () => {
+  it("writes the key's own bytes and says whether the screen moved", async () => {
+    const f = fixture();
+    const session = await f.service.create(f.conversation.id);
+    vi.useRealTimers();
+    const pty = f.processes[0];
+    pty.write.mockImplementation((data: string) => {
+      if (data === "\u001b") pty.print("\r\n> \r\n");
+    });
+    const pressed = await f.service.press(session.id, "escape", { settle: 20 });
+    expect(pty.write).toHaveBeenCalledWith("\u001b");
+    expect(pressed.changed).toBe(true);
+    const quiet = await f.service.press(session.id, "ctrl-c", { settle: 20 });
+    expect(pty.write).toHaveBeenLastCalledWith("\u0003");
+    expect(quiet.changed).toBe(false);
+  });
+});
+
+// The worker speaks to the chat that opened it, and what it says carries the
+// pane it came from and the last lines of its screen — where a CLI leaves
+// "still to do" (user, 18.09).
+describe("a worker reporting through its pane", () => {
+  it("carries the report, the pane it came from and the end of its screen", async () => {
+    const f = fixture(true);
+    const session = await f.service.create(f.conversation.id, "kimi");
+    f.processes[0].print("Reading files\r\ncreated index.html\r\nStill to do: the print stylesheet.\r\n");
+    await vi.waitFor(() => expect(f.emitData).toHaveBeenCalled());
+    const listen = f.notebookContext.listen as unknown as { mock: { calls: Array<[(report: unknown) => void]> } };
+    listen.mock.calls[0][0]({ kind: "report", status: "done", text: "Built the page." });
+    expect(f.onWorkerReport).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: f.conversation.id,
+      paneId: session.id,
+      title: "Kimi Code",
+      worker: "kimi",
+      kind: "report",
+      status: "done",
+      text: "Built the page.",
+    }));
+    const event = f.onWorkerReport.mock.calls[0][0] as { tail: string };
+    expect(event.tail).toContain("created index.html");
+    expect(event.tail).toContain("Still to do: the print stylesheet.");
+  });
+
+  it("hands an answer back only through a pane that has a channel", async () => {
+    const f = fixture(true);
+    const worker = await f.service.create(f.conversation.id, "kimi");
+    f.service.answerWorker(worker.id, "ask-3", "Write beside it.");
+    expect(f.notebookContext.answer).toHaveBeenCalledWith("ask-3", "Write beside it.");
+    const plain = await f.service.create(f.conversation.id);
+    expect(() => f.service.answerWorker(plain.id, "ask-3", "no")).toThrow(/no channel back/);
   });
 });

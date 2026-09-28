@@ -38,7 +38,7 @@ const { DesignComposer } = await import('../src/renderer/browser/design/DesignCo
 
 const baseTab: BrowserTab = {
   id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app',
-  control: 'read', loading: false, canGoBack: false, canGoForward: false,
+  control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false,
 };
 const makePick = (overrides: Partial<PagePick> = {}): PagePick => ({
   kind: 'design', armId: 'arm-1', tabId: 'tab-1', url: 'https://example.test/app', selector: '#go', tag: 'button',

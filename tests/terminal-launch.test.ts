@@ -83,6 +83,8 @@ describe("reused CLI launch boundary", () => {
       },
       security: { auth: { selectedType: "openai" } },
       model: { name: spec.endpoint.model },
+      // The flag was removed from qwen-code 0.20; the mode lives here now.
+      tools: { approvalMode: "yolo" },
     });
     expect(launch.args).toEqual(["--model", spec.endpoint.model]);
   });
@@ -115,7 +117,8 @@ describe("reused CLI launch boundary", () => {
       KIMI_MODEL_PROVIDER_TYPE: "openai",
     });
     expect(readdirSync(launch.env.KIMI_CODE_HOME)).toEqual([]);
-    expect(launch.args).toEqual([]);
+    // `--auto` is Never Ask; `--yolo` since 0.40 only means "Ask When Needed".
+    expect(launch.args).toEqual(["--auto"]);
   });
 
   it("provides OpenCode's inline runtime schema and environment placeholder", () => {
@@ -132,6 +135,7 @@ describe("reused CLI launch boundary", () => {
     expect(launch.args).toEqual([
       "--model",
       `hello-active/${spec.endpoint.model}`,
+      "--auto",
     ]);
     expect(launch.env.OPENCODE_CONFIG_CONTENT).not.toContain(
       "test-only-sentinel",
@@ -157,6 +161,18 @@ describe("reused CLI launch boundary", () => {
     ).toEqual(["codex"]);
   });
 
+/** The switch each client actually honours. */
+const NEVER_ASK: Record<string, string[]> = {
+  claude: ["--dangerously-skip-permissions"],
+  codex: ["--dangerously-bypass-approvals-and-sandbox"],
+  kimi: ["--auto"],
+  opencode: ["--auto"],
+  aider: ["--yes-always"],
+  // qwen-code 0.20 moved the mode into settings.json; Pi has no such flag.
+  qwen: [],
+  pi: [],
+};
+
   it.each(WORKER_CATALOG)(
     "builds exact $id argv, path discovery and child-only credentials",
     (worker) => {
@@ -165,9 +181,12 @@ describe("reused CLI launch boundary", () => {
       expect(launch.command).toBe(`/fake/${worker.binary}`);
       expect(launch.env.HELLO_RUNBOOK_PATH).toBe(spec.notebooks.runbook);
       expect(launch.env.HELLO_RUNBOOK_TASKS_PATH).toBe(spec.notebooks.tasks);
-      expect(launch.args.join(" ")).not.toMatch(
-        /dangerously|yolo|--auto\b|--yes-always|test-only-sentinel/,
-      );
+      // Every pane starts in the never-ask mode that client actually has
+      // (user, 20.09). Where a client has none — Pi — it carries none.
+      expect(launch.args).toEqual(expect.arrayContaining(NEVER_ASK[worker.id]));
+      expect(launch.args.join(" ")).not.toContain("test-only-sentinel");
+      if (worker.id === "pi")
+        expect(launch.args.join(" ")).not.toMatch(/dangerously|yolo|--auto\b|--yes-always/);
       expect(launch.env).not.toHaveProperty("OPENCODE_PERMISSION");
       if (worker.usesActiveModel) {
         expect(Object.values(launch.env)).toContain("test-only-sentinel");
@@ -192,17 +211,20 @@ describe("reused CLI launch boundary", () => {
             ).not.toContain("test-only-sentinel");
         }
       } else {
-        expect(launch.args).toEqual([]);
+        // Claude and Codex keep their own credentials; the only thing Hello
+        // adds to their argv is the never-ask flag.
+        expect(launch.args).toEqual(NEVER_ASK[worker.id]);
         expect(Object.values(launch.env)).not.toContain("test-only-sentinel");
       }
     },
   );
 
   it("does not require endpoint credentials for Claude/Codex but explains missing active-model configuration", () => {
+    // Codex needs no endpoint of ours, and still starts in its never-ask mode.
     expect(
       prepareCliWorkerLaunch({ ...input(WORKER_CATALOG[1]), endpoint: null })
         .args,
-    ).toEqual([]);
+    ).toEqual(["--dangerously-bypass-approvals-and-sandbox"]);
     expect(() =>
       prepareCliWorkerLaunch({ ...input(WORKER_CATALOG[2]), endpoint: null }),
     ).toThrow(/endpoint and model/);
@@ -248,23 +270,31 @@ describe("reused CLI launch boundary", () => {
           HELLO_NOTEBOOK_BRIDGE_TOKEN: "fake-bridge-secret",
         },
         close: vi.fn(async () => {}),
+        listen: vi.fn(),
+        answer: vi.fn(),
       };
       const launch = prepareCliWorkerLaunch({ ...spec, context });
       expect(launch.notebookContext).toBe(true);
       expect(launch.env).toMatchObject(context.env);
       expect(launch.command).toBe(spec.worker.command);
       expect(launch.args.join(" ")).not.toContain("fake-bridge-secret");
+      // A pane is opened to be worked in, never handed a task at launch.
+      // `--auto` is not on this list any more: it is the never-ask mode.
       expect(launch.args.some((arg) => [
         "--prompt", "-p", "--prompt-interactive", "-i",
-        "--message", "--message-file", "--print", "--yes", "--auto",
+        "--message", "--message-file", "--print", "--yes",
       ].includes(arg))).toBe(false);
 
       switch (worker.id) {
         case "claude":
-          expect(launch.args).toEqual(["--append-system-prompt-file", context.instructionsPath]);
+          expect(launch.args).toEqual([
+            "--append-system-prompt-file", context.instructionsPath,
+            "--dangerously-skip-permissions",
+          ]);
           break;
         case "codex": {
-          expect(launch.args).toHaveLength(2);
+          expect(launch.args).toHaveLength(3);
+          expect(launch.args[2]).toBe("--dangerously-bypass-approvals-and-sandbox");
           expect(launch.args[0]).toBe("-c");
           expect(launch.args[1]).toBe(`developer_instructions=${JSON.stringify(context.instructions)}`);
           expect(JSON.parse(launch.args[1].slice("developer_instructions=".length))).toBe(context.instructions);
@@ -272,7 +302,9 @@ describe("reused CLI launch boundary", () => {
         }
         case "qwen":
         case "kimi": {
-          expect(launch.args).toEqual(worker.id === "qwen" ? ["--model", spec.endpoint.model] : []);
+          expect(launch.args).toEqual(worker.id === "qwen"
+            ? ["--model", spec.endpoint.model]
+            : ["--auto"]);
           const directory = worker.id === "qwen" ? launch.env.QWEN_HOME : launch.env.KIMI_CODE_HOME;
           const file = join(directory, worker.id === "qwen" ? "QWEN.md" : "AGENTS.md");
           expect(directory).toBe(launch.configurationDirectory);
@@ -282,7 +314,7 @@ describe("reused CLI launch boundary", () => {
           break;
         }
         case "opencode": {
-          expect(launch.args).toEqual(["--model", `hello-active/${spec.endpoint.model}`]);
+          expect(launch.args).toEqual(["--model", `hello-active/${spec.endpoint.model}`, "--auto"]);
           const config = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT);
           expect(config.instructions).toEqual([context.instructionsPath]);
           expect(config.provider["hello-active"].options.apiKey).toBe("{env:HELLO_CLI_WORKER_API_KEY}");
@@ -308,6 +340,8 @@ describe("reused CLI launch boundary", () => {
         instructionsPath: join(spec.userDataDir, "HELLO.md"),
         instructions: "Wait for the human; do not run a task at launch.",
         close: vi.fn(async () => {}),
+        listen: vi.fn(),
+        answer: vi.fn(),
       },
     });
     expect(launch.notebookContext).not.toBe(true);
@@ -315,6 +349,7 @@ describe("reused CLI launch boundary", () => {
       "--model", `openai/${spec.endpoint.model}`,
       "--openai-api-base", "http://127.0.0.1:1234/v1",
       "--no-auto-commits", "--no-show-model-warnings",
+      "--yes-always",
     ]);
     expect(launch.configurationDirectory).toBeUndefined();
   });

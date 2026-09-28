@@ -190,7 +190,15 @@ JSON records. Prompt acknowledgment is acceptance; `agent_end` can precede retry
 or compaction, so completion follows `agent_settled`. The current ChatService Stop
 closes the owned runtime and cancels its tool work. The transport's graceful
 `abort()` also clears queued messages first if used. Disposal terminates the child process group and waits for closure;
-request timeouts close a session whose command state is uncertain.
+request timeouts close a session whose command state is uncertain. A prompt's
+timeout does not run while Pi reports compaction (`compaction_start` to
+`compaction_end`, fifteen minutes at most). A chat's row menu has Restart and
+Reset: both stop the turn (waiting for its tools), close the runtime and delete
+the chat's private Pi directory while nothing new may start in it. Restart
+stores `chat-fresh:<id>`, so only messages from then on seed the next session
+and the transcript shows the line; Reset deletes the messages, queue,
+attachments and — when asked — Runbook and Tasks. Tabs, terminals, downloads,
+switches and the folder stay in both.
 [pi-events.ts](../src/main/chat/pi-events.ts) maps streaming and final events
 into Hello's ordered text/thinking/tool parts and reported input/output usage.
 The displayed runtime phase is transient, not a new database status or proof of
@@ -308,6 +316,31 @@ data URLs at the tool boundary for compatibility; native navigation still reject
 `data:` and `file:`. Tool results report `contentVerified: false`: a loaded tab
 is not evidence of a correct visualization.
 
+## Chat awareness: context, attention, search
+
+A reply records the model that wrote it (`messages.model`, database version 7)
+and its usage: `input`/`output` add every call of the reply — each tool step
+sends the context again — and `context` is the prompt of its latest call, the
+size of the model's window now; `cost` is kept when the provider reports one.
+The composer's meter (`ContextMeter.tsx`) reads the latest `context` against the
+chat's window, amber from 75% and red from 90%, and names the latest reply's
+model when it is not the one selected. The window calibration compares one
+call's peak prompt with the window, never the reply's total.
+
+`attention.ts` turns a reply's change into what the person owes it — an approval
+that appeared, a worker question queued, a reply that failed or finished — for
+a chat that is not on screen or while the window lacks the OS focus
+(`hello:window-focus`). The sidebar row keeps a steady dot until the chat is
+looked at, the Dock shows how many chats wait (`system.badge`), and a native
+notification (`system.notify`) brings its chat forward when clicked.
+
+`store.searchMessages` finds words in every chat's messages (SQLite `LIKE`,
+newest first, three per chat) with the words around the first match; the sidebar
+search lists chats by title or content and opens a content match on its message.
+`ChatFind.tsx` is find in the open chat (Cmd/Ctrl+F or Cmd/Ctrl+K): it paints
+matches with the CSS Custom Highlight API, so React's DOM is never wrapped or
+mutated, and remembers the words per chat.
+
 ## Browser and terminal lifecycle
 
 File drops use Electron `webUtils.getPathForFile` in preload for real disk files.
@@ -327,9 +360,35 @@ model until submission. A single directory is returned for explicit composer
 folder attachment. Snapshots persist independently of folder changes and are
 removed with the conversation; preparation/deletion guards suppress late sends.
 
-Browser tabs persist their identity, conversation, title and URL. Restored tabs
-start Agent control Off, and their page is created only when the window mounts a
-guest for them. Tabs share the persistent `persist:hello-web` browser session;
+Browser tabs persist their identity, conversation, title, URL and Agent control
+mode (`browser_tabs.control`, database version 5). A restored web tab keeps the
+mode the person chose; an artifact or previewed-file tab is stored Off and gets
+its grant back only when served again. A restored page is created only when
+the window mounts a guest for it. A chat's downloads live in `browser_downloads`
+(database version 6): main registers every `will-download` on the chat, saves
+into the chat folder or the system Downloads folder, reports progress to the
+window (`hello:browser-download`), closes a popup that only carried a file, and
+marks a download still saving at startup as failed. A page's controls are
+read with refs (`e1`, `e2` …), role, words, state and centre, kept on the
+page until it changes (`agent-target.ts`); `browser_click` takes a ref, words
+or a selector, asks the page only where the control is, and main sends real
+mouse input at that point — or, when something covers it, the page clicks the
+control itself and the result says what covers it; `browser_press` sends one
+key as from the keyboard. A read scans the page's frames too — each visible
+`<iframe>`, placed by its box in its parent, up to twelve and three deep —
+with refs running on across frames and centres moved to page coordinates, so
+a control in a payment frame is clicked by ref like any other; `browser_wait`
+polls for words, a control, an address (substring or `*` pattern), the load or
+a time; `browser_screenshot annotate: true` writes each ref on the page before
+the picture and erases it after, returning the list with the image. A read is what a
+person could use now, as an accessibility tree has it: with a modal dialog open
+(`dialog:modal` or `aria-modal`) only its words and controls are listed, a
+background marked `aria-hidden`/`inert` is left out, controls on screen come
+before those off screen and those covered or transparent until hover, and what
+did not fit is counted. A ref from before a dialog opened, or one naming another
+control than the label given with it, gives way to the label; a click on
+something behind the dialog is refused with what to do. `browser_pointer` asks
+the page what is at its point before sending and says so in its result. Tabs share the persistent `persist:hello-web` browser session;
 conversation ownership does not mean separate cookie stores. A hidden pane keeps
 its page and its state.
 

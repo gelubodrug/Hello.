@@ -30,7 +30,9 @@ import type {
 } from "../../shared/types";
 import { ConversationView } from "../chat/ConversationView";
 import { Notebook } from "../notebook/Notebook";
+import { PlanSwitch } from "./PlanSwitch";
 import { BrowserPane } from "../browser/BrowserPane";
+import type { FindJump } from "../chat/ChatFind";
 import { TerminalPane } from "../terminal/TerminalPane";
 import { ToolTabStrip } from './ToolTabStrip';
 import { FilesPane, type FileRequest } from '../files/FilesPane';
@@ -44,6 +46,16 @@ import {
 import { api } from '../api';
 
 const CHAT_PAGES = ["chat", "runbook", "tasks"] as const;
+/**
+ * Which pages this chat shows. A shared page the human switched off is gone
+ * from the UI entirely — it is switched back on from the chat's menu, not from
+ * a tab that is no longer there (user, 20.09).
+ */
+export function chatPagesFor(
+  conversation: { runbook?: boolean; tasks?: boolean },
+): ReadonlyArray<(typeof CHAT_PAGES)[number]> {
+  return CHAT_PAGES.filter(kind => kind === "chat" || conversation[kind] !== false);
+}
 
 export interface WorkspacePrefs {
   chatOpen: boolean;
@@ -96,6 +108,9 @@ export interface WorkspaceProps {
   onLaunch: (kind: "browser" | "terminal", workerId?: WorkerId) => void;
   onCloseTool: (tool: BrowserTab | TerminalSession) => void;
   onBrowserChange: (tab: BrowserTab) => void;
+  onEditMessage: (id: string, text: string) => void;
+  /** A search result chosen in the sidebar, for this chat's find. */
+  jump?: FindJump | null;
   quote: ChatQuote | null;
   onQuote: (text: string, extra?: ChatQuoteExtra) => void;
   onQuoteConsumed: () => void;
@@ -128,6 +143,12 @@ export function Workspace(props: WorkspaceProps) {
     });
     return () => { alive = false; unsubscribe?.(); };
   }, [conversation.id]);
+  const planning = conversation.planning === true;
+  const pages = chatPagesFor(conversation);
+  useEffect(() => {
+    // A page that has just gone cannot stay the one being read.
+    if (ui.chatTab !== "chat" && !pages.includes(ui.chatTab)) onUI({ chatTab: "chat" });
+  }, [pages.join(), ui.chatTab]);
   const fileNonce = useRef(0);
   const choosingFolder = useRef(false);
   const dragSplit = useRef<number | null>(null);
@@ -346,11 +367,12 @@ export function Workspace(props: WorkspaceProps) {
           >
             <header className="panel-header pane-tab-header">
                 <div className="pills" role="tablist" aria-label={`${modeLabel} pages`}>
-                  {CHAT_PAGES.map((kind) => (
+                  {pages.map((kind) => (
                     <div
                       className="tab-pill"
                       key={kind}
                       data-active={ui.chatTab === kind}
+                      data-plan={kind === "tasks" ? (planning ? "on" : "off") : undefined}
                     >
                       <button
                         type="button"
@@ -372,14 +394,14 @@ export function Workspace(props: WorkspaceProps) {
                             const nextIndex = event.key === "Home"
                               ? 0
                               : event.key === "End"
-                                ? CHAT_PAGES.length - 1
-                                : (CHAT_PAGES.indexOf(kind) +
+                                ? pages.length - 1
+                                : (pages.indexOf(kind) +
                                     (event.key === "ArrowRight" ? 1 : -1) +
-                                    CHAT_PAGES.length) % CHAT_PAGES.length;
+                                    pages.length) % pages.length;
                             onUI({
                               ...(minimized ? { minimized: false } : {}),
                               focus: "chat",
-                              chatTab: CHAT_PAGES[nextIndex],
+                              chatTab: pages[nextIndex],
                             });
                             event.currentTarget
                               .closest('[role="tablist"]')
@@ -402,6 +424,19 @@ export function Workspace(props: WorkspaceProps) {
                           <span>{pageLabels[kind]}</span>
                         </span>
                       </button>
+                      {/* Plan is switched where its steps would land, and
+                        *  nowhere else (user, 18.09). */}
+                      {kind === "tasks" && (
+                        <PlanSwitch
+                          planning={planning}
+                          onChange={next => {
+                            void api.conversations
+                              .update(conversation.id, { planning: next })
+                              .then(props.onConversationChange)
+                              .catch(props.reportError);
+                          }}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -451,6 +486,9 @@ export function Workspace(props: WorkspaceProps) {
                   quote={props.quote}
                   onQuoteConsumed={props.onQuoteConsumed}
                   reportError={props.reportError}
+                  onEditMessage={props.onEditMessage}
+                  active={active && ui.chatTab === "chat"}
+                  jump={props.jump}
                 />
               </div>
               {(["runbook", "tasks"] as const).map((kind) => (

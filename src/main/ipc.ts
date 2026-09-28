@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, type BrowserWindow } from 'electron';
+import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, Notification, type BrowserWindow } from 'electron';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,7 +65,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('conversations.create',(title)=>store.createConversation(title===undefined?undefined:str(title,'title',250)));
   handle('conversations.update',(id,value)=>{
     const conversationId=str(id);
-    const patch=record(value);const clean:{title?:string;folder?:string|null;chatMode?:'chat'|'coder'}={};
+    const patch=record(value);const clean:{title?:string;folder?:string|null;chatMode?:'chat'|'coder';planning?:boolean;runbook?:boolean;tasks?:boolean}={};
     if(patch.title!==undefined)clean.title=str(patch.title,'title',250);
     if(patch.folder!==undefined){
       if(patch.folder===null)clean.folder=null;
@@ -76,12 +76,28 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
       if(chat.isRunning(conversationId))throw new Error('Stop the current response before changing chat mode.');
       clean.chatMode=patch.chatMode;
     }
+    if(patch.planning!==undefined){
+      if(typeof patch.planning!=='boolean')throw new Error('Planning is on or off.');
+      // The tool list and the instructions are decided when a turn starts.
+      if(chat.isRunning(conversationId))throw new Error('Stop the current response before turning Plan on or off.');
+      clean.planning=patch.planning;
+    }
+    for(const page of ['runbook','tasks'] as const){
+      if(patch[page]===undefined)continue;
+      if(typeof patch[page]!=='boolean')throw new Error(`${page} is on or off.`);
+      // What the model may see is decided when a turn starts.
+      if(chat.isRunning(conversationId))throw new Error('Stop the current response before changing the shared pages.');
+      clean[page]=patch[page] as boolean;
+    }
     const previousFolder=store.getConversation(conversationId).folder;
     const updated=store.updateConversation(conversationId,clean);
     if(updated.folder!==previousFolder)revokePreviews(conversationId);
     return updated;
   });
   handle('conversations.delete',async(id)=>{id=str(id);await chat.deleteSession(id);for(const item of terminal.list())if(item.conversationId===id)terminal.close(item.id);browser.closeConversation(id);revokePreviews(id);await deleteArtifacts(id);store.deleteConversation(id);});
+  handle('conversations.restart',(id)=>chat.restart(str(id)));
+  handle('conversations.search',(query)=>store.searchMessages(typeof query==='string'?query.slice(0,200):''));
+  handle('conversations.reset',(id,options)=>{const input=options===undefined||options===null?{}:record(options);if(input.notes!==undefined&&typeof input.notes!=='boolean')throw new Error('notes must be true or false.');return chat.reset(str(id),{notes:input.notes!==false});});
   handle('conversations.messages',(id)=>store.listMessages(str(id)));
   handle('conversations.export',async(id)=>{
     const conversation=store.getConversation(str(id));
@@ -108,7 +124,9 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.rememberConnection',(name)=>store.rememberConnection(str(name)));
   handle('settings.useConnection',(url)=>{const saved=store.useConnection(str(url));void chat.settleModelLimits();return saved;});
   handle('settings.forgetConnection',(url)=>store.forgetConnection(str(url)));
-  handle('settings.models',()=>chat.models());
+  handle('settings.models',(url)=>chat.models(url===undefined?undefined:str(url,'endpoint',2000)));
+  handle('settings.catalog',()=>chat.catalog());
+  handle('settings.localServers',()=>chat.localServers(true));
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
   handle('chat.previewAttachment',(id,attachmentId)=>chat.previewAttachment(str(id),str(attachmentId)));
   handle('chat.send',(id,text,attachmentIds)=>{
@@ -289,6 +307,32 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(html!==undefined)await clipboard.write([new ClipboardItem({'text/plain':input.text,'text/html':html})]);
     else await clipboard.writeText(input.text);
   });
+  // A chat waiting for the person while they are elsewhere: a native
+  // notification that brings that chat forward, and the count on the Dock.
+  const notices=new Set<Notification>();
+  handle('system.notify',(value)=>{
+    const input=record(value);
+    const title=str(input.title,'title',200),body=str(input.body,'body',500),conversationId=str(input.conversationId);
+    store.getConversation(conversationId);
+    if(typeof Notification!=='function'||!Notification.isSupported())return false;
+    const notice=new Notification({title,body});
+    notices.add(notice);
+    const done=()=>notices.delete(notice);
+    notice.on('click',()=>{
+      done();
+      if(window.isDestroyed())return;
+      if(window.isMinimized())window.restore();
+      window.show();window.focus();
+      window.webContents.send('hello:focus-conversation',conversationId);
+    });
+    notice.on('close',done);
+    notice.show();
+    return true;
+  });
+  handle('system.badge',(value)=>{
+    const count=typeof value==='number'&&Number.isInteger(value)&&value>=0&&value<1000?value:0;
+    app.setBadgeCount?.(count);
+  });
   handle('system.revealPath',(input)=>{
     const target=resolve(str(input,'path',8192));
     const allowed=[store.dataDir,...store.listConversations().flatMap(c=>c.folder?[c.folder]:[])];
@@ -313,6 +357,14 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('browser.control',(id,mode)=>browser.control(str(id),mode as AgentControl));
   handle('browser.read',(id)=>browser.read(str(id)));
   handle('browser.close',(id)=>browser.close(str(id)));
+  // The chat's downloads. Paths come from main's own list, never from the window.
+  handle('browser.downloads.list',(id)=>browser.downloadsOf(str(id)));
+  handle('browser.downloads.open',async(id)=>{const failure=await shell.openPath(browser.downloadPath(str(id)));if(failure)throw new Error(failure);});
+  handle('browser.downloads.reveal',(id)=>shell.showItemInFolder(browser.downloadPath(str(id))));
+  handle('browser.downloads.cancel',(id)=>browser.cancelDownload(str(id)));
+  handle('browser.downloads.remove',(id)=>browser.removeDownload(str(id)));
+  handle('browser.downloads.clear',(id)=>browser.clearDownloads(str(id)));
+  handle('browser.downloads.folder',(id)=>browser.downloadFolder(str(id)));
   // Design / Annotate: the human's own gestures on a page. Grants are checked
   // in the controller against the tab as main holds it, never as sent here.
   if(pageModes){

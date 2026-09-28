@@ -22,6 +22,7 @@ import {
   type WorkerLaunch,
 } from "./cli-workers";
 import { resolveTerminalShell, terminalEnv } from "./env";
+import { lastLines, type WorkerReport } from "./report-channel";
 import { probeNodePty, type PtyProcess, type SpawnPty } from "./native";
 import type { WorkerNotebookContext } from "./notebook-context";
 
@@ -37,6 +38,35 @@ export function trimScrollback(text: string, limit = SCROLLBACK_CHARS): string {
   return breakAt >= 0 && breakAt < 4096 ? tail.slice(breakAt + 1) : tail;
 }
 
+/**
+ * A pane's output as words, for an agent to read: escape sequences removed,
+ * a line rewritten in place kept only as it ended, and runs of blank lines
+ * collapsed. A CLI worker paints its screen over and over, so the raw
+ * scrollback is mostly cursor moves and repaints; this is what a person would
+ * say was on the screen, not a faithful terminal.
+ */
+export function plainTranscript(scrollback: string, limit = 8_000): string {
+  const text = scrollback
+    // OSC (title, hyperlinks) up to its terminator, then CSI/other escapes.
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b[[\]()#;?]*[0-9;]*[A-Za-z]/g, '')
+    .replace(/\u001b./g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  const lines = text.split('\n').map(line => {
+    // A progress line rewrites itself with carriage returns: keep what it says now.
+    const written = line.split('\r').filter(part => part.trim() !== '').at(-1) ?? '';
+    return written.replace(/[ \t]+$/, '');
+  });
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (line === '' && kept.at(-1) === '') continue;
+    kept.push(line);
+  }
+  const joined = kept.join('\n').trim();
+  return joined.length <= limit ? joined : `…\n${joined.slice(-limit)}`;
+}
+
 export function capFlush(text: string, limit = MAX_FLUSH_CHARS): string {
   if (text.length <= limit) return text;
   const marker =
@@ -47,6 +77,8 @@ export function capFlush(text: string, limit = MAX_FLUSH_CHARS): string {
 
 interface LiveSession {
   view: TerminalSession;
+  /** Resolved when this worker speaks, so a wait ends the moment it does. */
+  waiters: Set<() => void>;
   pty: PtyProcess;
   cols: number;
   rows: number;
@@ -68,11 +100,87 @@ export interface MainTerminalServiceOptions {
   ) => Promise<WorkerNotebookContext>;
   emitData: (event: TerminalData) => void;
   emitExit: (event: TerminalExit) => void;
+  /** A worker spoke to the chat that opened it: a report, a note, a question. */
+  onWorkerReport?: (event: WorkerReportEvent) => void;
   userDataDir: string;
   env?: NodeJS.ProcessEnv;
   home?: string;
   spawn?: SpawnPty;
   detectWorkers?: () => DetectedWorker[];
+}
+
+/**
+ * The keys a chat may press in a pane. A CLI that is asking something of its
+ * own — a trust prompt, a model picker, a menu — is not at its prompt, and a
+ * line typed into it goes into the dialog (user, 20.09: Pi sat in its model
+ * picker while the chat kept "sending" a question). Answering a dialog takes
+ * keys, so these are the keys.
+ */
+export const PANE_KEYS = {
+  enter: "\r",
+  escape: "\u001b",
+  up: "\u001b[A",
+  down: "\u001b[B",
+  left: "\u001b[D",
+  right: "\u001b[C",
+  tab: "\t",
+  space: " ",
+  backspace: "\u007f",
+  y: "y",
+  n: "n",
+  "ctrl-c": "\u0003",
+  "ctrl-d": "\u0004",
+} as const;
+export type PaneKey = keyof typeof PANE_KEYS;
+
+/** What the screen showed after typing a line into a pane. */
+export interface SubmitEvidence {
+  /** The words appeared in the pane: it is taking input. */
+  echoed: boolean;
+  /** The prompt let go of them: Enter was accepted. */
+  submitted: boolean;
+  /** The screen moved on its own afterwards: something is running. */
+  started: boolean;
+  /** The last lines, as they stand now. */
+  tail: string;
+}
+
+/**
+ * Whether the INPUT AREA still holds these words.
+ *
+ * What was sent stays on screen — a TUI prints the message above its prompt —
+ * so "is the text somewhere in the tail" answers nothing. The input area is
+ * what comes after the last prompt line, and that is where a line that was
+ * never taken is still sitting.
+ */
+export function promptHolds(transcript: string, line: string): boolean {
+  const wanted = normalize(line);
+  if (!wanted) return false;
+  // A long line wraps, so both ends are looked for: either identifies it.
+  const ends = [wanted.slice(0, 24), wanted.slice(-24)];
+  const lines = transcript
+    .split("\n")
+    .map(text => text.replace(/[│|┃┆┊╎]/g, " ").trim())
+    .filter(Boolean);
+  // `findLastIndex` needs a newer lib target than this project compiles to.
+  let prompt = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1)
+    if (/^[>❯›$#%]/.test(lines[index])) { prompt = index; break; }
+  const area = normalize((prompt >= 0 ? lines.slice(prompt) : lines.slice(-2)).join(" "));
+  return ends.some(end => end.length > 0 && area.includes(end));
+}
+const normalize = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+const pause = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); });
+
+/** What a worker said, and which pane said it. */
+export interface WorkerReportEvent extends WorkerReport {
+  conversationId: string;
+  paneId: string;
+  title: string;
+  worker?: WorkerId;
+  /** The end of its screen: where a CLI leaves what is still to do. */
+  tail: string;
 }
 
 export class MainTerminalService {
@@ -203,6 +311,7 @@ export class MainTerminalService {
       };
       const session: LiveSession = {
         view,
+        waiters: new Set(),
         pty,
         cols: 80,
         rows: 24,
@@ -215,6 +324,20 @@ export class MainTerminalService {
       };
       created = session;
       this.sessions.set(view.id, session);
+      // The worker speaks to the chat that opened it. Its last lines ride
+      // along: a CLI puts "still to do" on the screen, not in the report.
+      notebookContext?.listen(report => {
+        this.flush(session);
+        for (const wake of [...session.waiters]) wake();
+        this.options.onWorkerReport?.({
+          ...report,
+          conversationId,
+          paneId: view.id,
+          title: view.title,
+          ...(view.workerId ? { worker: view.workerId } : {}),
+          tail: lastLines(plainTranscript(session.scrollback, 4_000), 30),
+        });
+      });
       session.listeners.push(
         pty.onData((data) => {
           session.pending = capFlush(session.pending + data);
@@ -298,6 +421,142 @@ export class MainTerminalService {
       scrollback: session.scrollback,
       sequence: session.sequence,
     };
+  }
+
+  /** What this pane has printed lately, as words. Never its raw escapes. */
+  transcript(id: string, limit?: number): { session: TerminalSession; text: string } {
+    const session = this.get(id);
+    this.flush(session);
+    return { session: { ...session.view }, text: plainTranscript(session.scrollback, limit) };
+  }
+
+  /** Hands an answer to a worker blocked on a question it asked. */
+  answerWorker(id: string, askId: string, text: string): void {
+    const session = this.get(id);
+    if (!session.notebookContext)
+      throw new Error("This pane has no channel back to the worker.");
+    session.notebookContext.answer(askId, text);
+  }
+
+  /**
+   * Types a line into a pane and presses Enter — and then LOOKS.
+   *
+   * Two things went wrong without this (user, 18.09). A TUI reads a chunk that
+   * ends in a carriage return as pasted text, so the line landed in the prompt
+   * box and sat there: Enter has to arrive on its own, after the text. And the
+   * chat then said "sent" because it had called a tool, not because anything
+   * had been submitted. So this reports what the screen shows: whether the
+   * words appeared, and whether the prompt let go of them.
+   */
+  async submit(
+    id: string,
+    line: string,
+    waits: { echo?: number; enter?: number; retry?: number; start?: number } = {},
+  ): Promise<SubmitEvidence> {
+    const session = this.get(id);
+    if (session.view.status !== "running")
+      throw new Error("This terminal process has exited.");
+    if (line.length > 8_000) throw new Error("Terminal input is too large.");
+    const echoWait = waits.echo ?? 150;
+    const enterWait = waits.enter ?? 700;
+    const retryWait = waits.retry ?? 700;
+    const startWait = waits.start ?? 1_500;
+    const holds = () => promptHolds(plainTranscript(session.scrollback, 4_000), line);
+    session.pty.write(line);
+    await pause(echoWait);
+    this.flush(session);
+    const echoed = holds();
+    // Enter alone, in its own write: a chunk ending in CR is a paste.
+    session.pty.write("\r");
+    await pause(enterWait);
+    this.flush(session);
+    let submitted = !holds();
+    if (!submitted) {
+      // A slow repaint looks the same as a prompt that kept the line; wait
+      // once more before deciding, and only then try the other Enter.
+      await pause(retryWait);
+      this.flush(session);
+      submitted = !holds();
+      if (!submitted) {
+        session.pty.write("\n");
+        await pause(retryWait);
+        this.flush(session);
+        submitted = !holds();
+      }
+    }
+    // "It was sent" and "it is working" are two different claims, and the
+    // chat was making the second from the first (user, 18.09). This is the
+    // evidence for the second: the screen moved on by itself afterwards.
+    const settled = plainTranscript(session.scrollback, 4_000);
+    await pause(startWait);
+    this.flush(session);
+    const later = plainTranscript(session.scrollback, 4_000);
+    return {
+      echoed,
+      submitted,
+      started: submitted && later !== settled,
+      tail: lastLines(later, 30),
+    };
+  }
+
+  /**
+   * Waits for a worker to speak, or for its screen to go quiet — once, instead
+   * of the chat reading the pane every second and spending its turn on it
+   * (user, 20.09: "verific din secundă în secundă, nu așteaptă raportul").
+   */
+  async waitFor(
+    id: string,
+    options: { seconds: number; quietMs?: number; tickMs?: number } = { seconds: 60 },
+  ): Promise<{ outcome: "reported" | "quiet" | "still working" | "exited"; waitedMs: number; tail: string }> {
+    const session = this.get(id);
+    const quietMs = options.quietMs ?? 15_000;
+    const tickMs = options.tickMs ?? 400;
+    const deadline = Date.now() + Math.max(1_000, options.seconds * 1_000);
+    const started = Date.now();
+    let spoke = false;
+    const wake = () => { spoke = true; };
+    session.waiters.add(wake);
+    try {
+      this.flush(session);
+      let seen = session.scrollback;
+      let changedAt = Date.now();
+      while (Date.now() < deadline) {
+        await pause(tickMs);
+        this.flush(session);
+        if (spoke) break;
+        if (session.view.status !== "running") break;
+        if (session.scrollback !== seen) {
+          seen = session.scrollback;
+          changedAt = Date.now();
+        } else if (Date.now() - changedAt >= quietMs) break;
+      }
+      const quiet = Date.now() - changedAt >= quietMs;
+      return {
+        outcome: spoke ? "reported"
+          : session.view.status !== "running" ? "exited"
+            : quiet ? "quiet" : "still working",
+        waitedMs: Date.now() - started,
+        tail: lastLines(plainTranscript(session.scrollback, 4_000), 30),
+      };
+    } finally {
+      session.waiters.delete(wake);
+    }
+  }
+
+  /** Presses one key in a pane and reports what the screen did about it. */
+  async press(id: string, key: PaneKey, waits: { settle?: number } = {}): Promise<{ changed: boolean; tail: string }> {
+    const session = this.get(id);
+    if (session.view.status !== "running")
+      throw new Error("This terminal process has exited.");
+    const sequence = PANE_KEYS[key];
+    if (sequence === undefined) throw new Error(`There is no ${JSON.stringify(key)} key here.`);
+    this.flush(session);
+    const before = plainTranscript(session.scrollback, 4_000);
+    session.pty.write(sequence);
+    await pause(waits.settle ?? 700);
+    this.flush(session);
+    const after = plainTranscript(session.scrollback, 4_000);
+    return { changed: after !== before, tail: lastLines(after, 30) };
   }
 
   write(id: string, data: string): void {

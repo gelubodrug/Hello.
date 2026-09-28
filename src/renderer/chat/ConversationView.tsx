@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -12,21 +12,27 @@ import {
   Square,
   Terminal,
   Bot,
+  CodeXml,
+  Loader2,
+  MessageCircle,
   X,
 } from "lucide-react";
 import type {
   AppSettings,
   ChatAttachment,
   ChatQuote,
+  ConnectionModels,
   Conversation,
   Message,
   MessagePart,
-  ModelChoice,
   QueuedMessage,
   WorkerId,
   WorkerInfo,
 } from "../../shared/types";
 import { api } from "../api";
+import { modelName, suggestedName } from "../settings/presets";
+import { ContextMeter, dollars } from "./ContextMeter";
+import { ChatFind, type FindJump } from "./ChatFind";
 import { droppedPaths, hasFileDrop } from '../drop';
 import {
   Dialog,
@@ -44,7 +50,7 @@ import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolI
 import { activityLayout, activityRows, liveTail, stepLabel, suppliedDuration, thinkingTitle, type ActivityRow } from './activity';
 import { PendingMessages } from './PendingMessages';
 import { chatCopySnapshot } from './selection';
-import { ChatModeSwitch } from './ChatModeSwitch';
+import { PillSwitch } from './PillSwitch';
 import { ChatDisclosure } from './ChatDisclosure';
 import { ExtensionsPicker } from './ExtensionsPicker';
 
@@ -60,6 +66,20 @@ function readableJson(text: string) {
   } catch {
     return text;
   }
+}
+
+/** "Today 19:02" / "Yesterday 14:30" / "Jan 12 09:00" — per-message day separators. */
+function formatDayDate(ts: number): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const msg = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+  if (msg.getTime() === today.getTime()) return `Today ${time}`;
+  if (msg.getTime() === yesterday.getTime()) return `Yesterday ${time}`;
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date) + ` ${time}`;
 }
 
 function ToolOutput({ name, output }: { name: string; output: string }) {
@@ -337,6 +357,10 @@ export function MessageContent({ message, sources }: { message: Message; sources
   </>;
 }
 
+/** The line a restart draws through the transcript: the model reads nothing above it. */
+function RestartLine(): JSX.Element {
+  return <div className="thread-restart" role="separator" aria-label="Chat restarted">Restarted — the model starts fresh from here</div>;
+}
 function MessageRow({
   message,
   last,
@@ -344,6 +368,7 @@ function MessageRow({
   onRetry,
   onReuse,
   onAttachSelection,
+  onEditMessage,
   sources,
 }: {
   message: Message;
@@ -352,11 +377,16 @@ function MessageRow({
   onRetry: () => void;
   onReuse: () => void;
   onAttachSelection: (text: string) => void;
+  onEditMessage: (id: string, text: string) => void;
   sources: readonly WebSource[];
 }) {
   const [copied, setCopied] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [editingMessage, setEditingMessage] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
+  const editLock = useRef(false);
+  const field = useRef<HTMLTextAreaElement>(null);
   const [context, setContext] = useState<({ position: { x: number; y: number } } & ReturnType<typeof chatCopySnapshot>) | null>(null);
   const copyPayload = async (payload: { text: string; html?: string }) => {
     setCopying(true);
@@ -372,6 +402,13 @@ function MessageRow({
     }
   };
   const copyMessage = () => copyPayload({ text: withSourceLinks(message.content, sources) });
+  const saveEdit = () => {
+    if (!editDraft.trim() || editLock.current) return;
+    editLock.current = true;
+    onEditMessage(message.id, editDraft.trim());
+    setEditingMessage(false);
+    editLock.current = false;
+  };
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1800);
@@ -386,6 +423,7 @@ function MessageRow({
   return (
     <article
       tabIndex={0}
+      data-message-id={message.id}
       className={`message message-${message.role}`}
       aria-label={
         message.role === "user" ? "Your message" : "Assistant response"
@@ -401,7 +439,34 @@ function MessageRow({
     >
       {message.role === "user" ? (
         <>
-          <div className="user-bubble">{message.content}</div>
+          {editingMessage ? (
+            <div className="user-bubble user-bubble--editing">
+              <textarea
+                ref={field}
+                className="message-edit-textarea"
+                aria-label="Edit your message"
+                value={editDraft}
+                rows={2}
+                onChange={(event) => setEditDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setEditingMessage(false);
+                  }
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void saveEdit();
+                  }
+                }}
+              />
+              <div className="message-edit-actions">
+                <button className="pill primary-button" disabled={!editDraft.trim()} onClick={() => void saveEdit()}>Save</button>
+                <button className="pill" onClick={() => setEditingMessage(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="user-bubble">{message.content}</div>
+          )}
           <div className="message-actions user-message-actions">
             <IconButton
               label={copied ? "Message copied" : "Copy your message"}
@@ -412,6 +477,12 @@ function MessageRow({
             </IconButton>
             <button className="text-button" onClick={onReuse}>
               Use as draft
+            </button>
+            <button className="text-button" onClick={() => {
+              setEditingMessage(true);
+              setEditDraft(message.content);
+            }}>
+              Edit
             </button>
           </div>
         </>
@@ -441,10 +512,15 @@ function MessageRow({
             </IconButton>
           )}
           <MessageSources sources={sources} />
-          {message.usage && (
+          {(message.usage || message.model) && (
             <span className="message-usage">
-              {message.usage.input.toLocaleString()} in ·{" "}
-              {message.usage.output.toLocaleString()} out
+              {message.model && <span className="message-model" title={message.model}>{modelName(message.model)}</span>}
+              {message.model && message.usage && " · "}
+              {message.usage && <>
+                {message.usage.input.toLocaleString()} in ·{" "}
+                {message.usage.output.toLocaleString()} out
+                {message.usage.cost ? ` · ${dollars(message.usage.cost)}` : ""}
+              </>}
             </span>
           )}
         </div>
@@ -457,6 +533,8 @@ function MessageRow({
           { id: 'copy-markdown', label: 'Copy message as Markdown', action: () => void copyPayload(context.markdown) },
           { id: 'attach-selection', label: 'Attach selection as context', separator: true, disabled: !context.selection.text,
             action: () => onAttachSelection(context.selection.text) },
+          { id: 'edit-message', label: 'Edit message', separator: true, disabled: message.role !== 'user',
+            action: () => { setContext(null); setEditingMessage(true); setEditDraft(message.content); } },
         ] : []}
         onClose={reason => {
           if (reason === 'escape' && context?.range) {
@@ -484,6 +562,9 @@ export function ConversationView({
   quote,
   onQuoteConsumed,
   reportError,
+  onEditMessage,
+  active = true,
+  jump = null,
 }: {
   conversation: Conversation;
   messages: Message[];
@@ -496,8 +577,17 @@ export function ConversationView({
   quote: ChatQuote | null;
   onQuoteConsumed: () => void;
   reportError: (error: unknown) => void;
+  onEditMessage: (id: string, text: string) => void;
+  /** Whether this chat is the one on screen: its shortcuts are live only then. */
+  active?: boolean;
+  /** A search result chosen in the sidebar, to open this chat's find on. */
+  jump?: FindJump | null;
 }) {
   const draftKey = `hello.draft.${conversation.id}`;
+  // Where the model's memory begins after a restart: before the first message
+  // from then on, or after the last one when nothing has been said since.
+  const restartIndex = conversation.freshFrom === undefined ? -1
+    : (() => { const at = messages.findIndex(message => message.createdAt >= conversation.freshFrom!); return at < 0 ? messages.length : at; })();
   const [draft, setDraft] = useState(() => {
     try {
       return localStorage.getItem(draftKey) ?? "";
@@ -528,13 +618,13 @@ export function ConversationView({
       reason => { if (mounted.current && request === previewRequest.current) setPreview({ item, error: errorText(reason) }); },
     );
   };
-  const [dropActive, setDropActive] = useState(false);
   const [importing, setImporting] = useState(false);
   const importLock = useRef(false);
+  const [dropActive, setDropActive] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [error, setError] = useState<string | null>(null);
-  const [models, setModels] = useState<ModelChoice[]>([]);
+  const [catalog, setCatalog] = useState<ConnectionModels[]>([]);
   const [modelLoading, setModelLoading] = useState(false);
   const [showBottom, setShowBottom] = useState(false);
   const transcript = useRef<HTMLDivElement>(null);
@@ -686,38 +776,77 @@ export function ConversationView({
       reportError(reason);
     }
   };
-  const refreshModels = async () => {
+  /**
+   * The models are read once for this chat and kept. Settings already found
+   * them; rediscovering the whole catalogue every time the picker opens — and
+   * again after every pick — makes choosing a model wait on the network for
+   * nothing (user, 17.09). A list already in hand is shown at once, and a
+   * stale one is refreshed behind it rather than replaced by a blank menu.
+   */
+  const modelsReadAt = useRef(0);
+  const modelsReading = useRef<Promise<void> | null>(null);
+  const loadModels = (force = false): Promise<void> => {
+    // Opening the picker while the first read is still in flight is the same
+    // read, not a second one.
+    if (modelsReading.current) return modelsReading.current;
+    if (!force && modelsReadAt.current && Date.now() - modelsReadAt.current < 300_000) return Promise.resolve();
     setModelLoading(true);
-    try {
-      setModels(await api.settings.models());
-    } catch (reason) {
-      reportError(reason);
-    } finally {
-      setModelLoading(false);
-    }
+    const reading = (async () => {
+      try {
+        const listed = await api.settings.catalog();
+        if (!mounted.current) return;
+        setCatalog(listed);
+        modelsReadAt.current = Date.now();
+      } catch (reason) {
+        reportError(reason);
+      } finally {
+        modelsReading.current = null;
+        if (mounted.current) setModelLoading(false);
+      }
+    })();
+    modelsReading.current = reading;
+    return reading;
   };
-  const modelItems: MenuItem[] = models.length
-    ? models.map((model) => ({
-        id: model.id,
-        label: model.id,
-        detail: model.contextWindow ? `${model.contextWindow.toLocaleString('en')} tokens` : undefined,
-        checked: model.id === settings.model,
-        action: () => {
-          // Only the choice: main reads this model's published limits itself,
-          // so a model reached any other way launches on the same numbers.
-          void api.settings
-            .save({ model: model.id })
-            .then(onSettingsChange)
-            .catch(reportError);
-        },
-      }))
-    : [
-        {
-          id: "models-empty",
-          label: modelLoading ? "Loading models…" : "No models available",
-          disabled: true,
-        },
-      ];
+  useEffect(() => { void loadModels(); }, [conversation.id]);
+  // Every model the chat can reach, side by side: kept connections and the
+  // servers running on this Mac. A preset that was kept adds its models, it
+  // does not replace the others' (user, 14.09). With several connections their
+  // names become the quick filters, and picking a model elsewhere switches to
+  // that connection. One that could not answer keeps its place and says why.
+  const several = catalog.length > 1;
+  const modelItems: MenuItem[] = catalog.flatMap((connection): MenuItem[] => {
+    const name = connection.name || suggestedName(connection.endpointUrl) || connection.endpointUrl;
+    const group = several ? name : undefined;
+    // An error beside models is a refresh that failed on a connection whose
+    // models are already known: those models stand. Only a connection nobody
+    // has ever listed shows the reason instead (user, 17.09: OpenRouter's
+    // models disappeared here while Settings listed them fine).
+    if (connection.error && !connection.models.length)
+      return [{ id: `unreachable:${connection.endpointUrl}`, label: name, detail: connection.error, group, disabled: true }];
+    return connection.models.map((model) => ({
+      id: `${connection.endpointUrl} ${model.id}`,
+      label: modelName(model.id),
+      detail: [several ? name : '', model.contextWindow ? `${model.contextWindow.toLocaleString('en')} tokens` : '']
+        .filter(Boolean).join(' · ') || undefined,
+      group,
+      checked: connection.active && model.id === settings.model,
+      action: () => {
+        // Only the choice: main reads this model's published limits itself,
+        // so a model reached any other way launches on the same numbers.
+        void api.settings
+          .save(connection.active ? { model: model.id } : { endpointUrl: connection.endpointUrl, model: model.id })
+          .then(onSettingsChange)
+          .catch(reportError);
+      },
+    }));
+  });
+  if (!modelItems.length)
+    modelItems.push(
+      modelLoading
+        // Something in progress is a spinner, not a sentence (user, 17.09).
+        ? { id: "models-loading", label: "", leading: <Loader2 size={14} className="spin" aria-label="Reading models" />, disabled: true }
+        : { id: "models-empty", label: "No models available", disabled: true },
+    );
   const workerItems: MenuItem[] = workers.map((worker) => ({
     id: worker.id,
     label: worker.label,
@@ -749,6 +878,7 @@ export function ConversationView({
         setDropActive(false);
         void importDrop(event.dataTransfer);
       }}>
+      <ChatFind root={transcriptMessages} conversationId={conversation.id} active={active} messages={messages} jump={jump} />
       <div
         ref={transcript}
         className="transcript"
@@ -771,18 +901,21 @@ export function ConversationView({
           </div>
         ) : (
           <div ref={transcriptMessages}>
-            <div className="conversation-date">
-              {new Intl.DateTimeFormat(undefined, {
-                month: "short",
-                day: "numeric",
-              }).format(messages[0].createdAt)}
-            </div>
-            {messages.map((message, index) => (
-              <MessageRow
-                key={message.id}
+            {messages.map((message, index) => {
+              const prev = index > 0 ? messages[index - 1] : null;
+              const showDate = !prev || new Date(message.createdAt).toDateString() !== new Date(prev.createdAt).toDateString();
+              return (
+                <Fragment key={message.id}>
+                  {showDate && (
+                    <div className="conversation-date">
+                      {formatDayDate(message.createdAt)}
+                    </div>
+                  )}
+                  {index === restartIndex && <RestartLine />}
+                  <MessageRow
                 message={message}
                 sources={messageContext[index].sources}
-                last={index === messages.length - 1}
+                last={index === messages.length - 1 && (restartIndex < 0 || index >= restartIndex)}
                 streaming={busy}
                 onRetry={() => {
                   void api.chat.retry(conversation.id).catch(reportError);
@@ -795,13 +928,19 @@ export function ConversationView({
                   );
                   field.current?.focus();
                 }}
+                onEditMessage={(id, text) => {
+                  onEditMessage(id, text);
+                }}
                 onAttachSelection={text => {
                   const quoted = text.split('\n').map(line => `> ${line}`).join('\n');
                   setDraft(current => `${current}${current ? '\n\n' : ''}${quoted}\n\n`);
                   field.current?.focus({ preventScroll: true });
                 }}
               />
-            ))}
+              </Fragment>
+            )
+            })}
+            {restartIndex === messages.length && <RestartLine />}
           </div>
         )}
       </div>
@@ -911,8 +1050,13 @@ export function ConversationView({
             <span className="sr-only" role="status" aria-live="polite">
               {busy ? "Generating response" : ""}
             </span>
-            <ChatModeSwitch
+            <PillSwitch
+              label="Chat mode"
               value={conversation.chatMode ?? 'chat'}
+              options={[
+                { value: 'chat', label: 'Chat', title: 'Chat mode', Icon: MessageCircle },
+                { value: 'coder', label: 'Coder', title: 'Coder mode', Icon: CodeXml },
+              ]}
               disabled={busy}
               onChange={chatMode => {
                 if (chatMode === (conversation.chatMode ?? 'chat')) return;
@@ -943,10 +1087,10 @@ export function ConversationView({
                 searchPlaceholder={'search models try "free"'}
                 className="model-trigger"
                 items={modelItems}
-                onOpen={() => void refreshModels()}
+                onOpen={() => void loadModels()}
               >
-                <Truncated>{settings.model || "Choose model"}</Truncated>
-                <ChevronDown size={13} />
+                <Truncated>{settings.model ? modelName(settings.model) : "Choose model"}</Truncated>
+                {modelLoading ? <Loader2 size={13} className="browser-spinner"/> : <ChevronDown size={13} />}
               </MenuButton>
             </div>
             {busy ? (
@@ -971,6 +1115,7 @@ export function ConversationView({
             )}
           </div>
         </form>
+        <ContextMeter messages={messages} settings={settings} />
       </div>
     </div>
   );

@@ -201,7 +201,7 @@ describe('annotate in the controller', () => {
 
   const setup = (kinds?: Array<'design' | 'annotate'>) => {
     dataDir = mkdtempSync(join(tmpdir(), 'hello-annotate-'));
-    const tab: BrowserTab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, canGoBack: false, canGoForward: false };
+    const tab: BrowserTab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false };
     const contents = new Contents();
     const events: PageModeEvent[] = [];
     const controller = new PageModeController({

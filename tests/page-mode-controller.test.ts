@@ -66,7 +66,7 @@ describe('PageModeController', () => {
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'hello-page-mode-'));
-    tab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, canGoBack: false, canGoForward: false };
+    tab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false };
     contents = new Contents();
     observers = [];
     events = [];

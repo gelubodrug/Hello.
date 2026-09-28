@@ -27,16 +27,34 @@ tab, and `will-attach-webview` in main deletes every preference the tag asked fo
 and writes its own — sandbox, context isolation, no Node, no nested webviews, and
 the partition that tab belongs to. A tag presenting an unknown or spent nonce is
 refused, and a guest whose host is not this window is closed on sight. The
-browser session denies OS permission requests and downloads.
+browser session denies every permission request but one: `fullscreen`, and only
+for the page of the tab the window is showing, so a video can fill the screen
+while a tab out of sight never takes over the window. The page then covers the
+window until it leaves full screen; camera, microphone, notifications, location,
+clipboard reads and the rest stay refused.
 
-A page that opens a window gets a real child window with those same preferences
-and the opener's partition, not a tab: a `<webview>` cannot adopt an existing
-`WebContents`, so the alternative would have been to reopen the URL as a fresh
-GET and break `window.opener`, `postMessage` and form posts. Chromium retains
-opener/noopener, origin checks, referrer and form submission semantics; the app
-does not copy credentials or emulate authentication callbacks. Page resize/move
-requests cannot move the host app. Non-web navigation, nested webviews, and new
-windows from the privileged app renderer remain blocked.
+A page that opens a window gets a tab beside the one it came from, in the same
+partition and with the opener's Agent control, never a window outside the app:
+the human could not find a native popup and the agent could not see it at all.
+The popup's URL is loaded fresh in that tab, so what a child window would have
+kept — `window.opener`, `postMessage` to the opener, a prepared POST body — is
+given up; a non-web or blank popup is refused. The app does not copy credentials
+or emulate authentication callbacks. Non-web navigation, nested webviews, and
+new windows from the privileged app renderer remain blocked.
+
+A download lands in the chat's attached folder or, like any browser's, in the
+system Downloads folder, under a safe unused name; only a download from no page
+of Hello's own is refused. It belongs to the chat, not to a tab: a popup a link
+opened only to carry the file is closed again and the file is the opener's. The
+chat's list — name, size, state, source origin and path — is kept in the
+database (`browser_downloads`), shown on the browser toolbar with Open, Show in
+Finder, Copy path, Remove and Clear, and read by the model through
+`browser_downloads`. Open and reveal take the path from main's own list, never
+from the window. A page's own download control at Full, and `browser_download`
+at Full — the document shown in the tab or a file at an HTTP(S) address, fetched
+by the page with its own session — end the same way, and the tool result names
+the path or the refusal. Nothing here deletes a file; the result is a file in
+the person's folder, never a workspace write grant.
 
 **What DOM hosting costs.** The app renderer can now call `<webview>` methods on
 a guest it hosts — including `loadURL` and `executeJavaScript` — and main cannot
@@ -60,9 +78,10 @@ Chromium vulnerabilities.
 | --- | --- |
 | Search/read public internet directly | Bounded HTTP(S) GET, public-IP/DNS and redirect checks; no browser grant needed |
 | Read this conversation's Runbook | Conversation ownership; read-only for the main-chat agent |
-| Read/create/update this conversation's Tasks | Conversation ownership; task status updates validate the exact previously read line |
+| Read/create/update this conversation's Tasks | Conversation ownership; a task status update must quote the task's exact current source (its line is only where to look first) |
 | List/read attached-folder files | Attached folder, resolved-path containment, bounded text reads and common secret-path exclusions |
 | Write a file | The same path checks plus **Allow once** for that exact requested path/content |
+| Edit part of a file (`file_edit`) | The same path checks and approval; the exact text must occur once (or `all`); refused if the file changed during the approval wait |
 | Run a shell command | **Allow once** for the exact command; executes with the chat folder as working directory |
 | List owned browser-tab metadata | Conversation ownership, including metadata for Off tabs |
 | Read page content | That tab's Agent control **Read** or **Full** grant |
@@ -74,6 +93,14 @@ Chromium vulnerabilities.
 | Call a tool from an MCP server | Server activated for that conversation, re-checked at call time; Hello's own stdio client; **no per-call approval gate** |
 | Run a tool registered by an activated plugin extension | Explicit activation of that plugin; the extension is Node code inside the Pi child and is **not** gated per call |
 | Interactive terminal/CLI client | Explicit user launch; subsequent commands follow that process/client's authority |
+
+A write that would drop most of an existing file (over 2,000 characters, the new
+content under half of it) is refused unless the model sends `replace: true`, and
+every version a write or an edit replaces is kept in the app's own data
+(`file-history/<chat>/`, the last 40 per chat), so a bad rewrite can be undone
+without a commit to return to. Chat notifications carry the chat's title and
+the first line of a reply or of a worker's question; macOS may show them on the
+lock screen as it shows any app's.
 
 Approvals are one-use, expire, and are invalidated by Stop or application shutdown.
 Pi owns continuation, automatic compaction and transient model retries. Browser
@@ -210,8 +237,10 @@ no referrer. That service receives the source hostname, not its page path, query
 chat content or model credential. CSP permits this image origin specifically;
 arbitrary remote Markdown images still do not render.
 
-Every new or restored tab starts **Off** (grey). Opening a requested page/dev URL
-or HTML preview is available in every mode. **Read** (orange) permits page
+Every new tab starts **Off** (grey). The mode the person sets on a page is saved
+with the tab and comes back with it after a restart; a generated document or
+previewed file is the exception and returns Off until it is served again.
+Opening a requested page/dev URL or HTML preview is available in every mode. **Read** (orange) permits page
 inspection; **Full** (red) additionally permits DOM actions.
 Ownership and current access are checked in main, not inferred from a button's
 appearance. Ordinary manual browsing is still possible when Agent control is Off.
@@ -251,7 +280,8 @@ self-contained visuals and forbids sending private data to external chart
 services without user authorization. Opening does not inspect or verify content.
 Local HTML previews use fresh in-memory browser sessions, including inherited
 popup sessions; they cannot share cookies/storage with signed-in browser tabs or
-other previews. Permission/download denial applies to these sessions too.
+other previews. Permission denial and the download rule apply to these sessions
+too.
 
 Files explicitly dropped by the human are a separate input capability. Preload
 extracts native paths from real File objects; internal Files drags are resolved

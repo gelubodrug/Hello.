@@ -39,7 +39,7 @@ import { BrowserPane } from '../src/renderer/browser/BrowserPane';
 
 const tab: BrowserTab = {
   id: 'tab-1', conversationId: 'chat', title: 'Example Domain', url: 'https://example.com/',
-  control: 'read', loading: false, canGoBack: false, canGoForward: false,
+  control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false,
 };
 let root: Root;
 let host: HTMLDivElement;

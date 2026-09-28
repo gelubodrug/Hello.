@@ -112,6 +112,16 @@ export function presetFor(endpointUrl: string): EndpointPreset | undefined {
   return ENDPOINT_PRESETS.find(preset => preset.baseUrl.toLowerCase() === identity);
 }
 
+/**
+ * A model as a person reads it. llama.cpp names its model by the file it
+ * loaded — `/Users/q/Models/…/Nex-N2.5-mini-Q8_0.gguf` — and only the last part
+ * says anything. The id sent to the server stays whole. Vendor ids such as
+ * `deepseek/deepseek-r1:free` are not paths and are left alone.
+ */
+export function modelName(id: string): string {
+  return id.startsWith('/') ? id.split('/').filter(Boolean).pop() ?? id : id;
+}
+
 /** A name to offer when remembering a connection the presets do not cover. */
 export function suggestedName(endpointUrl: string): string {
   const preset = presetFor(endpointUrl);

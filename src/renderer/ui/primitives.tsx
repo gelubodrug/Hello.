@@ -478,15 +478,26 @@ export function MenuButton({
             </div>}
             {searchPlaceholder && groups.length > 1 && (
               <div className="menu-filters" role="group" aria-label="Kinds">
-                {[null, ...groups].map(kind => (
+                {/* "All" is not a kind among kinds: a small round check, not a pill. */}
+                <button
+                  type="button"
+                  className="menu-filter menu-filter-all"
+                  aria-label="All"
+                  title="All"
+                  aria-pressed={group === null}
+                  onClick={() => { setGroup(null); setActive(0); }}
+                >
+                  <Check size={12} aria-hidden />
+                </button>
+                {groups.map(kind => (
                   <button
-                    key={kind ?? "all"}
+                    key={kind}
                     type="button"
                     className="menu-filter"
                     aria-pressed={group === kind}
                     onClick={() => { setGroup(kind); setActive(0); }}
                   >
-                    {kind ?? "All"}
+                    <Truncated>{kind}</Truncated>
                   </button>
                 ))}
               </div>

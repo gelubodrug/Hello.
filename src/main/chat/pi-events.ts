@@ -18,6 +18,8 @@ export interface PiReportedUsage {
   totalTokens: number;
   /** A subset of output, not additional tokens. */
   reasoning?: number;
+  /** What the provider billed, when it said; 0 when it did not. */
+  cost?: number;
 }
 export interface PiCompactionState {
   active: boolean;
@@ -40,6 +42,8 @@ export interface PiEventUpdate {
   compaction?: PiCompactionState;
   /** Total provider-reported usage for this prompt, including compaction. */
   usage?: PiReportedUsage;
+  /** The largest prompt one call of this prompt sent: the most the window held. */
+  contextPeak?: number;
 }
 
 interface ActiveMessage {
@@ -101,18 +105,24 @@ function readUsage(value: unknown): PiReportedUsage | undefined {
   const cacheRead = count(usage.cacheRead) ?? 0;
   const cacheWrite = count(usage.cacheWrite) ?? 0;
   const reasoning = count(usage.reasoning);
+  const billed = object(usage.cost);
+  const cost = count(billed?.total) ?? count(usage.cost);
   return {
     input, output, cacheRead, cacheWrite,
     totalTokens: count(usage.totalTokens) ?? input + output + cacheRead + cacheWrite,
     ...(reasoning === undefined ? {} : { reasoning }),
+    ...(cost ? { cost } : {}),
   };
 }
+/** How big one call's prompt was: its uncached input and what it read from or wrote to the cache. */
+const promptOf = (usage: PiReportedUsage): number => usage.input + usage.cacheRead + usage.cacheWrite;
 function addUsage(a: PiReportedUsage, b: PiReportedUsage): PiReportedUsage {
   return {
     input: a.input + b.input, output: a.output + b.output,
     cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite,
     totalTokens: a.totalTokens + b.totalTokens,
     ...(a.reasoning === undefined && b.reasoning === undefined ? {} : { reasoning: (a.reasoning ?? 0) + (b.reasoning ?? 0) }),
+    ...(a.cost || b.cost ? { cost: (a.cost ?? 0) + (b.cost ?? 0) } : {}),
   };
 }
 const zeroUsage = (): PiReportedUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 });
@@ -129,6 +139,9 @@ export class PiEventMapper {
   private readonly endedMessages = new Set<string>();
   private committedUsage = zeroUsage();
   private hasUsage = false;
+  /** The prompt of the latest call that reported one, and the largest of them. */
+  private lastPrompt?: number;
+  private peakPrompt = 0;
   private settled = false;
   private phase: PiEventPhase = 'waiting';
   private pendingError?: string;
@@ -440,7 +453,11 @@ export class PiEventMapper {
   }
   private setActiveUsage(value: unknown): void {
     const usage = readUsage(value);
-    if (usage) { this.ensureActive().usage = usage; this.hasUsage = true; }
+    if (!usage) return;
+    this.ensureActive().usage = usage;
+    this.hasUsage = true;
+    const prompt = promptOf(usage);
+    if (prompt > 0) { this.lastPrompt = prompt; this.peakPrompt = Math.max(this.peakPrompt, prompt); }
   }
   private commitActiveUsage(): void {
     if (this.active?.usage) { this.committedUsage = addUsage(this.committedUsage, this.active.usage); this.active.usage = undefined; }
@@ -451,10 +468,30 @@ export class PiEventMapper {
   private refreshMessage(): void {
     this.message.content = this.message.parts!.filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text').map((part) => part.text).join('\n\n');
     const usage = this.usage();
-    if (usage) this.message.usage = {
-      input: (this.priorUsage?.input ?? 0) + usage.input + usage.cacheRead + usage.cacheWrite,
-      output: (this.priorUsage?.output ?? 0) + usage.output,
-    };
+    if (usage) {
+      const cost = (this.priorUsage?.cost ?? 0) + (usage.cost ?? 0);
+      const context = this.lastPrompt ?? this.priorUsage?.context;
+      this.message.usage = {
+        input: (this.priorUsage?.input ?? 0) + usage.input + usage.cacheRead + usage.cacheWrite,
+        output: (this.priorUsage?.output ?? 0) + usage.output,
+        ...(context ? { context } : {}),
+        ...(cost > 0 ? { cost } : {}),
+      };
+    }
+  }
+  /**
+   * After a turn Hello itself cut short — the model going round — the same
+   * reply goes on: the next prompt's events land in it as if the turn had
+   * not ended. What was already said, and its usage, stays.
+   */
+  resume(): void {
+    this.settled = false;
+    this.aborted = false;
+    this.pendingError = undefined;
+    this.active = undefined;
+    this.phase = 'waiting';
+    this.message.status = 'streaming';
+    this.message.error = null;
   }
   private snapshot(changed: boolean): PiEventUpdate {
     return {
@@ -463,6 +500,7 @@ export class PiEventMapper {
       ...(this.warning ? { warning: this.warning } : {}),
       ...(this.compaction ? { compaction: { ...this.compaction } } : {}),
       ...(this.hasUsage ? { usage: this.usage() } : {}),
+      ...(this.peakPrompt ? { contextPeak: this.peakPrompt } : {}),
     };
   }
 }

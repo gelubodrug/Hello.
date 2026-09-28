@@ -11,6 +11,8 @@ const bridge = vi.hoisted(() => ({
   openExternal: vi.fn(),
   showSaveDialog: vi.fn(),
   showOpenDialog: vi.fn(),
+  notices: [] as Array<{ options: { title: string; body: string }; listeners: Map<string, () => void>; show: ReturnType<typeof vi.fn> }>,
+  setBadgeCount: vi.fn(),
 }));
 vi.mock("electron", () => ({
    ipcMain: {
@@ -23,7 +25,14 @@ vi.mock("electron", () => ({
      showOpenDialog: bridge.showOpenDialog,
    },
    shell: { openExternal: bridge.openExternal, showItemInFolder: vi.fn() },
-   app: { getVersion: () => "0.1.0" },
+   app: { getVersion: () => "0.1.0", setBadgeCount: bridge.setBadgeCount },
+   Notification: class {
+     static isSupported() { return true; }
+     listeners = new Map<string, () => void>();
+     show = vi.fn();
+     constructor(readonly options: { title: string; body: string }) { bridge.notices.push(this); }
+     on(name: string, listener: () => void) { this.listeners.set(name, listener); return this; }
+   },
  }));
 import { registerIPC } from "../src/main/ipc";
 
@@ -37,8 +46,12 @@ afterEach(() => {
 });
 function fixture() {
   const frame = {};
-  const window = { webContents: { mainFrame: frame } };
+  const window = {
+    webContents: { mainFrame: frame, send: vi.fn() },
+    isDestroyed: () => false, isMinimized: () => true, restore: vi.fn(), show: vi.fn(), focus: vi.fn(),
+  };
   const store = {
+    getConversation: vi.fn((id: string) => { if (id !== "chat") throw new Error("Conversation not found."); return { id }; }),
     dataDir: "/temporary/hello-test",
     getApiKey: vi.fn(() => ""),
     listConversations: vi.fn(() => []),
@@ -166,5 +179,34 @@ describe("app IPC trust boundary", () => {
       f.call("browser.navigate", "tab", { url: "https://example.com" }),
     ).rejects.toThrow("Invalid address");
     expect(f.browser.navigate).not.toHaveBeenCalled();
+  });
+});
+
+// A chat waiting while the person is elsewhere: a native notification that
+// brings that chat forward, and the count on the Dock (user, 28.09).
+describe("notifications and the Dock", () => {
+  it("shows a notification for a chat of this app, and a click brings the window and that chat forward", async () => {
+    const f = fixture();
+    bridge.notices.length = 0;
+    await expect(f.call("system.notify", { title: "Invoices", body: "Saved all four invoices.", conversationId: "chat" })).resolves.toBe(true);
+    const [shown] = bridge.notices;
+    expect(shown.options).toEqual({ title: "Invoices", body: "Saved all four invoices." });
+    expect(shown.show).toHaveBeenCalledOnce();
+    shown.listeners.get("click")!();
+    expect(f.window.restore).toHaveBeenCalled();
+    expect(f.window.focus).toHaveBeenCalled();
+    expect(f.window.webContents.send).toHaveBeenCalledWith("hello:focus-conversation", "chat");
+    await expect(f.call("system.notify", { title: "x", body: "y", conversationId: "someone-else" })).rejects.toThrow(/not found/);
+    expect(bridge.notices).toHaveLength(1);
+  });
+
+  it("sets the Dock count, and clears it for anything that is not a small whole number", async () => {
+    const f = fixture();
+    await f.call("system.badge", 3);
+    expect(bridge.setBadgeCount).toHaveBeenLastCalledWith(3);
+    for (const odd of [-1, 2.5, "7", 5000, undefined]) {
+      await f.call("system.badge", odd);
+      expect(bridge.setBadgeCount).toHaveBeenLastCalledWith(0);
+    }
   });
 });

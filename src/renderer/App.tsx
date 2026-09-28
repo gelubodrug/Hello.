@@ -8,11 +8,16 @@ import {
   type ReactNode,
 } from "react";
 import {
+  BookOpen,
+  Eraser,
+  ListChecks,
+  ListTodo,
   MessageCircle,
   MoreHorizontal,
   PanelLeft,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   Settings,
   SquarePen,
@@ -28,7 +33,10 @@ import type {
   TerminalSession,
   WorkerId,
 } from "../shared/types";
+import type { MessageMatch, QueuedMessage } from "../shared/types";
+import type { FindJump } from "./chat/ChatFind";
 import { api } from './api';
+import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, strongest, type AttentionKind, type Seen } from "./attention";
 import {
   Dialog,
   ErrorNote,
@@ -108,6 +116,38 @@ function hasExpandedPane(ui: WorkspacePrefs): boolean {
   return ui.toolsOpen && ((ui.chatOpen && ui.expanded) || ui.toolsExpanded);
 }
 
+/** The snippet with each place the words occur marked. */
+function marked(snippet: string, words: string) {
+  const wanted = words.trim().toLocaleLowerCase();
+  if (!wanted) return snippet;
+  const folded = snippet.toLocaleLowerCase();
+  if (folded.length !== snippet.length) return snippet;
+  const pieces: Array<string | JSX.Element> = [];
+  let from = 0;
+  for (let at = folded.indexOf(wanted); at >= 0; at = folded.indexOf(wanted, at + wanted.length)) {
+    if (at > from) pieces.push(snippet.slice(from, at));
+    pieces.push(<mark key={at}>{snippet.slice(at, at + wanted.length)}</mark>);
+    from = at + wanted.length;
+  }
+  if (from < snippet.length) pieces.push(snippet.slice(from));
+  return pieces;
+}
+/** Unsaved notebook drafts of a chat whose notes are gone: only those proven to be its own. */
+function forgetNotebookDrafts(conversationId: string): void {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith("hello.notebook.")) continue;
+      try {
+        if (JSON.parse(localStorage.getItem(key) ?? "null")?.conversationId === conversationId)
+          localStorage.removeItem(key);
+      } catch {
+        /* Only entries proven to belong to this chat are removed. */
+      }
+    }
+  } catch {
+    /* Local preferences may be unavailable; the notes themselves are gone either way. */
+  }
+}
 function Application() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [shell, setShell] = useState<ShellState>(initialShell);
@@ -123,15 +163,31 @@ function Application() {
   const [rename, setRename] = useState<Conversation | null>(null);
   const [name, setName] = useState("");
   const [deleting, setDeleting] = useState<Conversation | null>(null);
+  const [restarting, setRestarting] = useState<Conversation | null>(null);
+  const [resetting, setResetting] = useState<Conversation | null>(null);
+  const [resetNotes, setResetNotes] = useState(true);
   const [ending, setEnding] = useState<TerminalSession | null>(null);
   const [launching, setLaunching] = useState(false);
   const [width, setWidth] = useState(window.innerWidth);
   const [quotes, setQuotes] = useState<Record<string, ChatQuote | null>>({});
+  const [showAllConversations, setShowAllConversations] = useState(false);
   const appRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(new Set<string>());
   const closingTools = useRef(new Set<string>());
   const overlayHeld = useRef(false);
+  // What each chat is waiting for from the person, until they look at it: an
+  // approval, a worker's question, a reply that failed or is ready.
+  const [attention, setAttention] = useState<Record<string, AttentionKind>>({});
+  // The sidebar search reads what was said, not only titles: the first match per chat.
+  const [hits, setHits] = useState<Record<string, MessageMatch>>({});
+  const [jump, setJump] = useState<FindJump | null>(null);
+  const [windowFocused, setWindowFocused] = useState(true);
+  const seenReplies = useRef(new Map<string, Seen>());
+  const queues = useRef(new Map<string, QueuedMessage[]>());
+  const viewing = useRef<{ id: string | null; focused: boolean }>({ id: null, focused: true });
+  const titles = useRef(new Map<string, string>());
+  const raise = useRef<(conversationId: string, kind: AttentionKind, message: Message | null, question?: string) => void>(() => {});
   const controllerRef =
     useRef<ReturnType<typeof createPreviewLayoutMotion<ShellState>>>();
   if (!controllerRef.current)
@@ -214,6 +270,11 @@ function Application() {
       })
       .catch(reportError);
     const unchat = api.chat.onEvent((event) => {
+      // Only a change is news: an approval that appeared, a reply that ended.
+      const previous = seenReplies.current.get(event.message.id);
+      const { kind, seen } = attentionFor(previous, event.message);
+      seenReplies.current.set(event.message.id, seen);
+      if (kind) raise.current(event.conversationId, kind, event.message);
       setMessages((current) => ({
         ...current,
         [event.conversationId]: put(
@@ -240,6 +301,16 @@ function Application() {
       ),
     );
     const unbrowserLifecycle = api.browser.onLifecycle?.((event) => {
+      if (event.type === "downloaded") {
+        // A file a page saved into the chat's folder, said where the person
+        // can see it; a failed one is an error, not a quiet nothing.
+        const { download } = event;
+        const folder = download.path?.split("/").slice(-2, -1)[0];
+        if (download.state === "saved") setNotice(`Saved ${download.name}${folder ? ` in ${folder}` : ""}.`);
+        else if (download.state === "cancelled") setNotice(`Cancelled ${download.name}.`);
+        else reportError(new Error(`${download.name} could not be saved${download.reason ? `: ${download.reason}` : ""}.`));
+        return;
+      }
       if (event.type === "opened") {
         const { tab } = event;
         setBoot(current => current ? { ...current, browsers: put(current.browsers, tab) } : current);
@@ -266,6 +337,19 @@ function Application() {
         });
       }
     });
+    // A pane the model opened is a pane the person must see: it arrives here
+    // the way a launched one does, and the tools side opens on it.
+    const uncreated = api.terminal.onCreated?.((session) => {
+      setBoot((current) =>
+        current ? { ...current, terminals: put(current.terminals, session) } : current,
+      );
+      updateUI(session.conversationId, {
+        toolsOpen: true,
+        toolsMinimized: false,
+        expanded: false,
+        toolId: session.id,
+      });
+    });
     const unterminal = api.terminal.onExit((event) =>
       setBoot((current) =>
         current
@@ -280,8 +364,22 @@ function Application() {
           : current,
       ),
     );
+    // A worker blocked on a question it put in a busy chat's waiting list.
+    const unqueue = api.chat.onQueue?.((event) => {
+      const before = queues.current.get(event.conversationId) ?? [];
+      queues.current.set(event.conversationId, event.items);
+      for (const item of newWorkerQuestions(before, event.items))
+        raise.current(event.conversationId, "question", null, item.text);
+    });
+    const unfocus = api.system.onWindowFocus?.((focused) => setWindowFocused(focused && !document.hidden));
+    const visibility = () => setWindowFocused(!document.hidden && document.hasFocus());
+    document.addEventListener("visibilitychange", visibility);
     return () => {
       alive = false;
+      uncreated?.();
+      unqueue?.();
+      unfocus?.();
+      document.removeEventListener("visibilitychange", visibility);
       unchat();
       unbrowser();
       unbrowserLifecycle?.();
@@ -340,6 +438,18 @@ function Application() {
       ),
     [],
   );
+  const handleEditMessage = useCallback((conversationId: string, messageId: string, text: string) => {
+    setMessages((current) => {
+      const messages = current[conversationId];
+      if (!messages) return current;
+      return {
+        ...current,
+        [conversationId]: messages.map((msg) =>
+          msg.id === messageId ? { ...msg, content: text } : msg,
+        ),
+      };
+    });
+  }, []);
   const updateUI = (id: string, patch: WorkspaceUpdate) =>
     request((current) => {
       const previous = {
@@ -384,6 +494,66 @@ function Application() {
     setError(null);
     request((current) => ({ ...current, activeId: id }));
   };
+  // Who is looking at what, for the moment something becomes news.
+  viewing.current = { id: shell.activeId ?? null, focused: windowFocused };
+  titles.current = new Map((boot?.conversations ?? []).map((row) => [row.id, row.title]));
+  raise.current = (conversationId, kind, message, question) => {
+    const now = viewing.current;
+    if (now.focused && now.id === conversationId) return;
+    setAttention((current) => ({ ...current, [conversationId]: strongest(current[conversationId], kind)! }));
+    void api.system
+      .notify?.({ title: titles.current.get(conversationId) ?? "Hello.", body: attentionNotice(kind, message, question), conversationId })
+      .catch(() => {});
+  };
+  // What was said, searched a moment after the typing stops.
+  useEffect(() => {
+    const term = search.trim();
+    if (term.length < 2 || typeof api.conversations.search !== "function") {
+      setHits({});
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      void api.conversations.search!(term)
+        .then((matches) => {
+          if (!alive) return;
+          const first: Record<string, MessageMatch> = {};
+          for (const match of matches) first[match.conversationId] ??= match;
+          setHits(first);
+        })
+        .catch(() => { if (alive) setHits({}); });
+    }, 180);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [search]);
+  const searchTerm = search.trim().toLowerCase();
+  const listed = (boot?.conversations ?? []).filter(
+    (row) => !searchTerm || row.title.toLowerCase().includes(searchTerm) || Boolean(hits[row.id]),
+  );
+  /** Open a chat from the list; found by what was said in it, open on that message. */
+  const open = (id: string) => {
+    select(id);
+    const hit = searchTerm ? hits[id] : undefined;
+    if (hit) setJump({ conversationId: id, messageId: hit.messageId, query: search.trim(), nonce: Date.now() });
+  };
+  // Looking at a chat is having seen what it was waiting with.
+  useEffect(() => {
+    const id = shell.activeId;
+    if (!id || !windowFocused) return;
+    setAttention((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }, [shell.activeId, windowFocused]);
+  // The Dock says how many chats are waiting.
+  useEffect(() => {
+    void api.system.badge?.(Object.keys(attention).length).catch(() => {});
+  }, [attention]);
+  // A notification clicked brings its chat forward.
+  const selectRef = useRef(select);
+  selectRef.current = select;
+  useEffect(() => api.system.onFocusConversation?.((id) => selectRef.current(id)) ?? (() => {}), []);
   const newChat = async () => {
     try {
       const conversation = await api.conversations.create();
@@ -490,27 +660,39 @@ function Application() {
       closingTools.current.delete(tool.id);
     }
   };
+  const restartConversation = async () => {
+    if (!restarting) return;
+    try {
+      changeConversation(await api.conversations.restart(restarting.id));
+      setRestarting(null);
+      setNotice("Chat restarted: the model starts fresh from here.");
+    } catch (reason) {
+      reportError(reason);
+    }
+  };
+  const resetConversation = async () => {
+    if (!resetting) return;
+    try {
+      const chat = await api.conversations.reset(resetting.id, { notes: resetNotes });
+      changeConversation(chat);
+      setMessages((current) => ({ ...current, [chat.id]: [] }));
+      if (resetNotes) forgetNotebookDrafts(chat.id);
+      setResetting(null);
+      setNotice("Chat reset: it starts empty, with its tabs and terminals.");
+    } catch (reason) {
+      reportError(reason);
+    }
+  };
   const removeConversation = async () => {
     if (!deleting) return;
     try {
       await api.conversations.delete(deleting.id);
       try {
         localStorage.removeItem(`hello.draft.${deleting.id}`);
-        for (const key of Object.keys(localStorage)) {
-          if (!key.startsWith("hello.notebook.")) continue;
-          try {
-            if (
-              JSON.parse(localStorage.getItem(key) ?? "null")
-                ?.conversationId === deleting.id
-            )
-              localStorage.removeItem(key);
-          } catch {
-            /* Only entries proven to belong to this chat are removed. */
-          }
-        }
       } catch {
         /* Persistent app deletion is complete even if local preferences are unavailable. */
       }
+      forgetNotebookDrafts(deleting.id);
       const next = boot!.conversations.filter((row) => row.id !== deleting.id);
       setBoot((current) =>
         current
@@ -540,6 +722,12 @@ function Application() {
       });
       setVisited((current) => current.filter((id) => id !== deleting.id));
       setDeleting(null);
+      setAttention((current) => {
+        if (!(deleting.id in current)) return current;
+        const next = { ...current };
+        delete next[deleting.id];
+        return next;
+      });
     } catch (reason) {
       reportError(reason);
     }
@@ -606,16 +794,33 @@ function Application() {
                     setSearch("");
                     setSearching(false);
                   }
+                  if (event.key === "Enter" && listed[0]) {
+                    event.preventDefault();
+                    open(listed[0].id);
+                  }
                 }}
               />
+              {search && (
+                <button
+                  type="button"
+                  className="sidebar-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => setSearch("")}
+                >
+                  <X size={12} />
+                </button>
+              )}
+              {search && (
+                <span className="sidebar-search-count" aria-live="polite">
+                  {listed.length}
+                </span>
+              )}
             </div>
           )}
           <span className="sidebar-section-label">Chats</span>
           <nav className="chat-list" aria-label="Conversations">
-            {boot?.conversations
-              .filter((row) =>
-                row.title.toLowerCase().includes(search.toLowerCase()),
-              )
+            {listed
+              .slice(0, showAllConversations || searchTerm ? undefined : 5)
               .map((conversation) => (
                 <div
                   className="chat-list-row"
@@ -627,17 +832,49 @@ function Application() {
                     aria-current={
                       shell.activeId === conversation.id ? "page" : undefined
                     }
-                    onClick={() => select(conversation.id)}
+                    onClick={() => open(conversation.id)}
                   >
                     <MessageCircle size={16} />
-                    <Truncated>{conversation.title}</Truncated>
+                    <span className="chat-list-text">
+                      <Truncated>{conversation.title}</Truncated>
+                      {searchTerm && hits[conversation.id] && (
+                        <span className="chat-list-snippet" title={hits[conversation.id].snippet}>
+                          {marked(hits[conversation.id].snippet, search)}
+                        </span>
+                      )}
+                    </span>
                     {messages[conversation.id]?.some(
                       (message) => message.status === "streaming",
-                    ) && <span className="status-dot busy-dot" />}
+                    ) ? <span className="status-dot busy-dot" role="img" aria-label="Working" />
+                      : attention[conversation.id] && (
+                        <span className="status-dot attention-dot" role="img" data-kind={attention[conversation.id]}
+                          aria-label={attentionLabel[attention[conversation.id]]} title={attentionLabel[attention[conversation.id]]} />
+                      )}
                   </button>
                   <MenuButton
                     label={`Actions for ${conversation.title}`}
                     items={[
+                      // The shared pages are switched here, in the menu, not on
+                      // the pages themselves: a page that is off is gone from
+                      // the UI, so it cannot carry its own switch (user, 20.09).
+                      ...([
+                        { id: 'runbook' as const, label: 'Runbook', on: conversation.runbook !== false },
+                        { id: 'tasks' as const, label: 'Tasks', on: conversation.tasks !== false },
+                        { id: 'planning' as const, label: 'Plan', on: conversation.planning === true },
+                      ]).map(page => ({
+                        id: `page:${page.id}`,
+                        label: `${page.label}: ${page.on ? 'on' : 'off'}`,
+                        icon: page.id === 'runbook' ? BookOpen : page.id === 'tasks' ? ListTodo : ListChecks,
+                        checked: page.on,
+                        stayOpen: true,
+                        action: () => {
+                          void api.conversations
+                            .update(conversation.id, { [page.id]: !page.on })
+                            .then(changeConversation)
+                            .catch(reportError);
+                        },
+                      })),
+                      { id: 'pages-separator', label: '', separator: true },
                       {
                         id: "rename",
                         label: "Rename",
@@ -653,6 +890,27 @@ function Application() {
                         action: () => exportConversation(conversation),
                       },
                       {
+                        // Fresh for the model, nothing lost for the person:
+                        // the tabs and terminals a new chat would not have.
+                        id: "restart",
+                        label: "Restart chat…",
+                        icon: RotateCcw,
+                        detail: "The model starts fresh; tabs, tools and messages stay",
+                        action: () => setRestarting(conversation),
+                      },
+                      {
+                        // Empty, as new, keeping the tools — what making a
+                        // new chat would lose.
+                        id: "reset",
+                        label: "Reset chat…",
+                        icon: Eraser,
+                        detail: "Empties the chat; tabs and terminals stay",
+                        action: () => {
+                          setResetNotes(true);
+                          setResetting(conversation);
+                        },
+                      },
+                      {
                         id: "delete",
                         label: "Delete…",
                         icon: Trash2,
@@ -665,6 +923,12 @@ function Application() {
                   </MenuButton>
                 </div>
               ))}
+            {!searchTerm && listed.length > 5 && !showAllConversations && (
+              <button className="chat-list-show-more" onClick={() => setShowAllConversations(true)}>Show more</button>
+            )}
+            {!searchTerm && listed.length > 5 && showAllConversations && (
+              <button className="chat-list-show-more" onClick={() => setShowAllConversations(false)}>Show less</button>
+            )}
           </nav>
           <div className="sidebar-footer">
             <button type="button" className="sidebar-settings" onClick={() => setSettingsOpen(true)}>
@@ -686,6 +950,7 @@ function Application() {
                   shell.workspaces[conversation.id] ?? defaultWorkspacePrefs()
                 }
                 messages={messages[conversation.id] ?? []}
+                jump={jump && jump.conversationId === conversation.id ? jump : null}
                 settings={boot.settings}
                 workers={boot.workers}
                 terminals={boot.terminals.filter(
@@ -718,6 +983,7 @@ function Application() {
                       : current,
                   )
                 }
+                onEditMessage={(id, text) => handleEditMessage(conversation.id, id, text)}
                 quote={quotes[conversation.id] ?? null}
                 onQuote={(text, extra) => {
                   setQuotes((current) => ({
@@ -835,6 +1101,57 @@ function Application() {
             </button>
           </div>
         </form>
+      </Dialog>
+      <Dialog
+        open={restarting !== null}
+        title="Restart chat?"
+        onClose={() => setRestarting(null)}
+      >
+        <p>
+          The model starts fresh from here and forgets everything above.
+          Messages, browser tabs, terminals, notes and the folder all stay.
+        </p>
+        <ErrorNote error={error} />
+        <div className="dialog-actions">
+          <button className="pill" onClick={() => setRestarting(null)}>
+            Cancel
+          </button>
+          <button className="pill" onClick={() => void restartConversation()}>
+            Restart chat
+          </button>
+        </div>
+      </Dialog>
+      <Dialog
+        open={resetting !== null}
+        title="Reset chat?"
+        onClose={() => setResetting(null)}
+      >
+        <p>
+          Every message of “{resetting?.title}”, its queued messages and
+          attachments are deleted, and the model starts with no context at
+          all. Browser tabs, terminals, downloads and the folder stay. Export
+          it first to keep a copy.
+        </p>
+        <label className="dialog-check">
+          <input
+            type="checkbox"
+            checked={resetNotes}
+            onChange={(event) => setResetNotes(event.target.checked)}
+          />
+          Also delete its Runbook and Tasks
+        </label>
+        <ErrorNote error={error} />
+        <div className="dialog-actions">
+          <button className="pill" onClick={() => setResetting(null)}>
+            Cancel
+          </button>
+          <button
+            className="pill danger-button"
+            onClick={() => void resetConversation()}
+          >
+            Reset chat
+          </button>
+        </div>
       </Dialog>
       <Dialog
         open={deleting !== null}

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -8,6 +9,7 @@ import {
   type SecretCodec,
 } from '../src/main/data/store';
 import { updateTaskStatus } from '../src/main/chat/tasks';
+import { snippetAround } from '../src/main/data/store';
 
 // Test-only codec; production injects Electron safeStorage.
 const codec: SecretCodec = {
@@ -58,12 +60,14 @@ describe('new application persistence', () => {
       url: 'https://example.test',
       control: 'full',
       loading: false,
+      progress: null,
       canGoBack: true,
       canGoForward: false,
     });
     expect(store.listConversations()[0].title).toBe('Renamed');
     expect(store.listMessages(conversation.id)[0].content).toBe('hello');
-    expect(store.listBrowserTabs()[0].control).toBe('off');
+    // The grant comes back with the page (user, 22.09).
+    expect(store.listBrowserTabs()[0]).toMatchObject({ control: 'full', loading: false, progress: null, canGoBack: false });
     store.deleteConversation(conversation.id);
     expect(store.listConversations()).toEqual([]);
     expect(store.listBrowserTabs()).toEqual([]);
@@ -326,5 +330,192 @@ describe('new application persistence', () => {
     expect(() => store.saveSettings({ temperature: Number.NaN })).toThrow(
       /Temperature/,
     );
+  });
+});
+
+// Plan is a switch in the composer, off until the human asks for it: absent
+// from the settings table means off, so every chat that exists is already off.
+describe('the Plan switch of a chat', () => {
+  it('is off for a new chat, survives being turned on, and goes with the chat', () => {
+    const chat = store.createConversation('Planned');
+    expect(chat.planning).toBe(false);
+    expect(store.getConversation(chat.id).planning).toBe(false);
+
+    expect(store.updateConversation(chat.id, { planning: true }).planning).toBe(true);
+    expect(store.getConversation(chat.id).planning).toBe(true);
+    expect(store.listConversations().find(row => row.id === chat.id)?.planning).toBe(true);
+    // A title change is not a planning change.
+    expect(store.updateConversation(chat.id, { title: 'Still planned' }).planning).toBe(true);
+
+    expect(store.updateConversation(chat.id, { planning: false }).planning).toBe(false);
+    store.updateConversation(chat.id, { planning: true });
+    store.deleteConversation(chat.id);
+    expect(store.createConversation('Fresh').planning).toBe(false);
+  });
+});
+
+// Runbook and Tasks are switches too, but the other way round: they exist
+// until the human takes one away, so only the departure is stored and every
+// chat that already existed keeps both pages (user, 20.09).
+describe('the shared pages of a chat', () => {
+  it('starts with both, keeps what is switched off, and gives it back', () => {
+    const chat = store.createConversation('Pages');
+    expect(chat).toMatchObject({ runbook: true, tasks: true });
+    expect(store.getConversation(chat.id)).toMatchObject({ runbook: true, tasks: true });
+
+    expect(store.updateConversation(chat.id, { tasks: false })).toMatchObject({ runbook: true, tasks: false });
+    expect(store.getConversation(chat.id).tasks).toBe(false);
+    expect(store.listConversations().find(row => row.id === chat.id)?.tasks).toBe(false);
+    // Another change does not disturb it.
+    expect(store.updateConversation(chat.id, { title: 'Still off' }).tasks).toBe(false);
+
+    expect(store.updateConversation(chat.id, { runbook: false, tasks: true }))
+      .toMatchObject({ runbook: false, tasks: true });
+    store.deleteConversation(chat.id);
+    expect(store.createConversation('Fresh')).toMatchObject({ runbook: true, tasks: true });
+  });
+});
+
+
+// The grant the human set on a page is kept between sessions (user, 22.09).
+describe('a browser tab’s grant between sessions', () => {
+  it('is saved with the tab, read back, and never anything but off, read or full', () => {
+    const chat = store.createConversation('Tabs');
+    const base = { conversationId: chat.id, title: 'Billing', url: 'https://platform.example/billing',
+      loading: false, progress: null, canGoBack: false, canGoForward: false } as const;
+    store.saveBrowserTab({ ...base, id: 'full', control: 'full' });
+    store.saveBrowserTab({ ...base, id: 'read', control: 'read' });
+    store.saveBrowserTab({ ...base, id: 'off', control: 'off' });
+    store.saveBrowserTab({ ...base, id: 'odd', control: 'admin' as never });
+    const byId = Object.fromEntries(store.listBrowserTabs().map(tab => [tab.id, tab.control]));
+    expect(byId).toMatchObject({ full: 'full', read: 'read', off: 'off', odd: 'off' });
+    // Changing it later changes what comes back.
+    store.saveBrowserTab({ ...base, id: 'full', control: 'off' });
+    expect(store.listBrowserTabs().find(tab => tab.id === 'full')?.control).toBe('off');
+  });
+
+  it('is added to a database the previous version wrote, with every old tab Off', () => {
+    const chat = store.createConversation('Old');
+    store.saveBrowserTab({ id: 'kept', conversationId: chat.id, title: 'Kept', url: 'https://example.test',
+      control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false });
+    store.close();
+    // Roll the file back to how version 4 left it: no control column at all.
+    const raw = new Database(store.databasePath);
+    raw.exec(`ALTER TABLE browser_tabs DROP COLUMN control; DROP TABLE browser_downloads; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version = 4;`);
+    raw.close();
+    store = createDataStore(directory, codec);
+    expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'off' }]);
+    store.saveBrowserTab({ id: 'kept', conversationId: chat.id, title: 'Kept', url: 'https://example.test',
+      control: 'full', loading: false, progress: null, canGoBack: false, canGoForward: false });
+    expect(store.listBrowserTabs()[0].control).toBe('full');
+  });
+});
+
+// A chat's downloads are kept between sessions, like a browser's list; one
+// still saving when the app closed was not saved (user, 24.09).
+describe('a chat’s downloads between sessions', () => {
+  it('are saved, listed, updated, deleted, gone with the chat, and marked failed when the app closed on them', () => {
+    const chat = store.createConversation('Invoices');
+    const base = { conversationId: chat.id, name: 'invoice.pdf', path: '/chat/invoice.pdf', url: 'https://billing.example/i/1/pdf',
+      mimeType: 'application/pdf', startedAt: 10 } as const;
+    store.saveBrowserDownload({ ...base, id: 'a', state: 'saved', bytes: 1234, total: 1234, finishedAt: 12, tabId: 'tab-1' });
+    store.saveBrowserDownload({ ...base, id: 'b', name: 'big.zip', path: '/chat/big.zip', state: 'saving', bytes: 300, total: 9000, startedAt: 20 });
+    expect(store.listBrowserDownloads()).toEqual([
+      { ...base, id: 'a', state: 'saved', bytes: 1234, total: 1234, finishedAt: 12, tabId: 'tab-1' },
+      { ...base, id: 'b', name: 'big.zip', path: '/chat/big.zip', state: 'saving', bytes: 300, total: 9000, startedAt: 20 },
+    ]);
+    store.saveBrowserDownload({ ...base, id: 'a', state: 'saved', bytes: 1234, total: 1234, finishedAt: 12, tabId: 'tab-1', reason: undefined });
+    store.deleteBrowserDownload('a');
+    expect(store.listBrowserDownloads().map(download => download.id)).toEqual(['b']);
+    expect(() => store.saveBrowserDownload({ ...base, id: 'c', conversationId: 'nowhere', state: 'saved' })).toThrow();
+    store.close();
+    store = createDataStore(directory, codec);
+    expect(store.listBrowserDownloads()).toMatchObject([{ id: 'b', state: 'failed', reason: 'interrupted when the application closed', finishedAt: expect.any(Number) }]);
+    store.deleteConversation(chat.id);
+    expect(store.listBrowserDownloads()).toEqual([]);
+  });
+});
+
+// A restart is remembered on the chat, and goes with it (user, 24.09).
+describe('a chat restarted', () => {
+  it('remembers from when the model starts fresh, keeps every message, and forgets it with the chat', () => {
+    const chat = store.createConversation('Invoices');
+    store.saveMessage({ id: 'before', conversationId: chat.id, role: 'user', content: 'before', status: 'complete', createdAt: 1 });
+    expect(store.getConversation(chat.id).freshFrom).toBeUndefined();
+    expect(store.restartConversation(chat.id, 12_345)).toMatchObject({ id: chat.id, freshFrom: 12_345 });
+    expect(store.listConversations().find(item => item.id === chat.id)?.freshFrom).toBe(12_345);
+    expect(store.listMessages(chat.id).map(message => message.content)).toEqual(['before']);
+    expect(store.restartConversation(chat.id, 20_000).freshFrom).toBe(20_000);
+    expect(() => store.restartConversation('nowhere')).toThrow();
+    store.deleteConversation(chat.id);
+    const again = store.createConversation('Fresh');
+    expect(again.freshFrom).toBeUndefined();
+  });
+});
+
+// Reset: the chat empty as new, its tools kept (user, 24.09: "Reset chat să-l
+// încarce fresh fără nici un context vechi" — without losing the tabs).
+describe('a chat reset', () => {
+  it('deletes messages, queue, restart mark and — with notes — Runbook and Tasks; keeps tabs, downloads, switches, folder and title', () => {
+    const chat = store.createConversation('Invoices');
+    store.updateConversation(chat.id, { chatMode: 'coder', planning: true, runbook: false });
+    const notes = vi.fn();
+    store.subscribeNotebooks(notes);
+    store.saveMessage({ id: 'm1', conversationId: chat.id, role: 'user', content: 'download them', status: 'complete', createdAt: 1 });
+    store.queueMessage(chat.id, 'and then X', 'next');
+    store.saveNotebook({ conversationId: chat.id, kind: 'tasks', title: 'Plan', body: '- [ ] Neon' });
+    store.saveNotebook({ conversationId: chat.id, kind: 'runbook', title: 'Logins', body: 'Use SSO' });
+    store.saveBrowserTab({ id: 'tab', conversationId: chat.id, title: 'Billing', url: 'https://console.neon.tech/billing',
+      control: 'full', loading: false, progress: null, canGoBack: false, canGoForward: false });
+    store.saveBrowserDownload({ id: 'd', conversationId: chat.id, name: 'inv.pdf', state: 'saved', startedAt: 1 });
+    store.restartConversation(chat.id, 5);
+    // Without notes first: the notebooks stay.
+    const kept = store.resetConversation(chat.id, { notes: false });
+    expect(kept).toMatchObject({ id: chat.id, title: 'Invoices', chatMode: 'coder', planning: true, runbook: false });
+    expect(kept.freshFrom).toBeUndefined();
+    expect(store.listMessages(chat.id)).toEqual([]);
+    expect(store.listQueued(chat.id)).toEqual([]);
+    expect(store.listNotebooks(chat.id, 'tasks')).toHaveLength(1);
+    notes.mockClear();
+    store.resetConversation(chat.id, { notes: true });
+    expect(store.listNotebooks(chat.id, 'tasks')).toEqual([]);
+    expect(store.listNotebooks(chat.id, 'runbook')).toEqual([]);
+    expect(notes).toHaveBeenCalledWith({ conversationId: chat.id, kind: 'runbook' });
+    expect(notes).toHaveBeenCalledWith({ conversationId: chat.id, kind: 'tasks' });
+    // The tools stay.
+    expect(store.listBrowserTabs().map(tab => tab.id)).toEqual(['tab']);
+    expect(store.listBrowserDownloads().map(download => download.id)).toEqual(['d']);
+    expect(() => store.resetConversation('nowhere', { notes: true })).toThrow();
+  });
+});
+
+// Search in what was said (user, 28.09 plan: "Full-text search în mesaje").
+describe('searching messages', () => {
+  it('finds the words in any chat, newest first, three per chat at most, with the words around them', () => {
+    const a = store.createConversation('Invoices');
+    const b = store.createConversation('Travel');
+    const say = (conversationId: string, id: string, content: string, createdAt: number, role: 'user' | 'assistant' = 'assistant') =>
+      store.saveMessage({ id, conversationId, role, content, status: 'complete', createdAt });
+    for (let index = 0; index < 5; index += 1) say(a.id, `a${index}`, `Neon invoice number ${index} was saved to Downloads.`, 10 + index);
+    say(b.id, 'b1', 'The flight from Genova leaves at 7; no invoice needed.', 100, 'user');
+    say(b.id, 'b2', 'Nothing to see here.', 101);
+    const found = store.searchMessages('INVOICE');
+    expect(found.map(match => match.messageId)).toEqual(['b1', 'a4', 'a3', 'a2']);
+    expect(found[0]).toMatchObject({ conversationId: b.id, role: 'user', snippet: 'The flight from Genova leaves at 7; no invoice needed.' });
+    expect(store.searchMessages('i')).toEqual([]);
+    // LIKE's own characters are words here, not wildcards.
+    say(b.id, 'b3', 'Progress is 100% done_now.', 102);
+    expect(store.searchMessages('0% done_').map(match => match.messageId)).toEqual(['b3']);
+    expect(store.searchMessages('%').length).toBe(0);
+    expect(store.searchMessages('_n').map(match => match.messageId)).toEqual(['b3']);
+  });
+
+  it('cuts the snippet around the first match, on one line', () => {
+    const long = `${'lorem '.repeat(30)}the Billing tab\nis on the left ${'ipsum '.repeat(30)}`;
+    const snippet = snippetAround(long, 'billing');
+    expect(snippet.startsWith('…')).toBe(true);
+    expect(snippet.endsWith('…')).toBe(true);
+    expect(snippet).toContain('the Billing tab is on the left');
+    expect(snippetAround('short text', 'absent')).toBe('short text');
   });
 });

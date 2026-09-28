@@ -13,7 +13,7 @@ function fixture() {
   const tab: BrowserTab = {
     id: 'html-preview', conversationId: 'chat', title: 'Preview',
     url: 'http://127.0.0.1:49152/preview', control: 'off', loading: false,
-    canGoBack: false, canGoForward: false,
+    progress: null, canGoBack: false, canGoForward: false,
   };
   const browser = {
     showHtml: vi.fn<NonNullable<BrowserHooks['showHtml']>>(async () => ({ tab, artifact })),

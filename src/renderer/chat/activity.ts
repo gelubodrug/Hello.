@@ -127,6 +127,10 @@ const NAMES: Record<string, Naming> = {
     one: part => { const name = leaf(field(part, 'path')); return name ? `Read ${name}` : 'Read file'; },
     many: count => `Read ${count} files`,
   },
+  file_edit: {
+    one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Edited ${name}` : `Edit ${name}`) : past(part) ? 'Edited file' : 'Edit file'; },
+    many: count => `Edited ${count} files`,
+  },
   file_write: {
     one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Wrote ${name}` : `Write ${name}`) : past(part) ? 'Wrote file' : 'Write file'; },
     many: count => `Wrote ${count} files`,
@@ -147,9 +151,18 @@ const NAMES: Record<string, Naming> = {
     one: part => { const where = site(field(part, 'url')); return where ? (past(part) ? `Went to ${where}` : `Go to ${where}`) : past(part) ? 'Went to page' : 'Go to page'; },
     many: count => `Went to ${count} pages`,
   },
-  browser_click: named('Click on page', 'Clicked on page', count => `Clicked ${count} times`),
+  browser_click: {
+    // The words the model clicked by are the words a person would use too.
+    one: part => { const what = field(part, 'label')?.slice(0, 40); return what ? (past(part) ? `Clicked “${what}”` : `Click “${what}”`) : past(part) ? 'Clicked on page' : 'Click on page'; },
+    many: count => `Clicked ${count} times`,
+  },
   browser_type: named('Type text', 'Typed text', count => `Typed ${count} times`),
   browser_scroll: named('Scroll page', 'Scrolled page', count => `Scrolled ${count} times`),
+  browser_wait: named('Wait for page', 'Waited for page', count => `Waited for pages ${count} times`),
+  browser_press: {
+    one: part => { const key = field(part, 'key'); return past(part) ? `Pressed ${key ?? 'a key'}` : `Press ${key ?? 'a key'}`; },
+    many: count => `Pressed ${count} keys`,
+  },
   browser_pointer: {
     one: part => {
       const action = field(part, 'action');
@@ -160,6 +173,24 @@ const NAMES: Record<string, Naming> = {
     many: count => `Used the pointer ${count} times`,
   },
   browser_screenshot: named('Look at page', 'Looked at page', count => `Looked at page ${count} times`),
+  browser_download: named('Save file from page', 'Saved file from page', count => `Saved ${count} files from pages`),
+  browser_downloads: named('Check downloads', 'Checked downloads', count => `Checked downloads ${count} times`),
+  worker_list: named('Check workers', 'Checked workers', count => `Checked workers ${count} times`),
+  worker_read: named('Read worker pane', 'Read worker pane', count => `Read worker panes ${count} times`),
+  worker_key: {
+    one: part => { const key = field(part, 'key'); return past(part) ? `Pressed ${key ?? 'a key'}` : `Press ${key ?? 'a key'}`; },
+    many: count => `Pressed ${count} keys`,
+  },
+  worker_wait: named('Wait for the worker', 'Waited for the worker', count => `Waited ${count} times`),
+  worker_start: {
+    one: part => { const which = field(part, 'worker'); return past(part) ? `Opened ${which ?? 'a terminal'}` : `Open ${which ?? 'a terminal'}`; },
+    many: count => `Opened ${count} panes`,
+  },
+  worker_answer: named('Answer the worker', 'Answered the worker', count => `Answered workers ${count} times`),
+  worker_say: {
+    one: part => { const said = field(part, 'text'); return said ? (past(part) ? `Said “${said.slice(0, 40)}” to a worker` : 'Talk to worker') : past(part) ? 'Talked to worker' : 'Talk to worker'; },
+    many: count => `Talked to workers ${count} times`,
+  },
   skill_load: {
     one: part => { const name = field(part, 'name'); return name ? `Read ${name} skill` : 'Read skill'; },
     many: count => `Read ${count} skills`,

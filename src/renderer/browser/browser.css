@@ -7,6 +7,8 @@
 .browser-address{height:var(--control-lg);border-radius:var(--r-pill);background:var(--surface-raised);display:flex;align-items:center;gap:var(--sp-8);flex:1;min-width:0;padding:0 var(--sp-4) 0 var(--sp-12);color:var(--ink-tertiary)}
 .browser-address > svg{flex:none}
 .browser-address input{font:inherit;font-size:var(--fs-12);color:var(--ink-primary);background:transparent;border:0;outline:none;flex:1;width:0;min-width:0}
+.browser-progress{position:absolute;bottom:0;left:0;height:2px;background:transparent;width:100%;overflow:hidden;border-radius:0 0 var(--r-pill) var(--r-pill)}
+.browser-progress-fill{height:100%;background:var(--color-accent);border-radius:0 0 var(--r-pill) var(--r-pill);transition:width var(--motion-fast) var(--ease-out)}
 .browser-address:has(input:focus-visible){outline:var(--focus-ring-width) solid var(--color-focus-ring);outline-offset:var(--focus-ring-offset)}
 .browser-control-anchor{position:relative;flex:none;width:104px;--browser-ai-fill:var(--browser-ai-off-fill);--browser-ai-ink:var(--browser-ai-off-ink)}
 .agent-control-pill{box-sizing:border-box;width:100%;height:var(--control-sm);display:flex;align-items:center;justify-content:center;gap:var(--sp-4);padding:0 var(--sp-8);border:0;border-radius:var(--r-pill);background:var(--browser-ai-fill);color:var(--browser-ai-ink);font:var(--fw-medium) var(--fs-13)/1 var(--font-ui);cursor:pointer;white-space:nowrap;transition:background-color var(--motion-base) var(--ease-out),color var(--motion-base) var(--ease-out)}
@@ -21,6 +23,13 @@
 .browser-start input{width:100%;min-width:0;border:0;background:transparent;color:var(--ink-primary,#e5e5e7);outline:none;font:inherit;font-size:13px}
 .browser-start button{border:0;border-radius:999px;background:#303238;color:#e5e5e7;padding:8px;display:flex;cursor:pointer}
 .browser-start small{font-size:11px;margin-top:18px}
+/* Downloads: the button's ring fills while a file saves, as a browser's does. */
+.browser-downloads-anchor{position:relative;flex:none;display:inline-flex}
+.browser-downloads-anchor[data-saving="true"]::after{content:"";position:absolute;inset:2px;border-radius:50%;pointer-events:none;background:conic-gradient(var(--color-focus-ring,#7aa2ff) calc(var(--download-progress,0)*360deg),transparent 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 2px))}
+.browser-downloads-anchor[data-saving="true"] .browser-downloads{color:var(--ink-primary,#e5e5e7)}
+.menu-popup.downloads-menu{width:min(360px,calc(100vw - 24px))}
+.menu-popup.downloads-menu .menu-item-copy{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.menu-popup.downloads-menu .menu-item-copy small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .browser-error{display:flex;align-items:center;justify-content:space-between;color:#f3b7a6;font-size:12px;padding:6px 16px}
 .browser-error button{background:transparent;border:0;color:inherit;cursor:pointer}
 .browser-spinner{animation:browser-spin 1s linear infinite}
@@ -39,6 +48,15 @@
   overflow: hidden;
   border-radius: var(--r-10);
   background: var(--surface-panel);
+}
+/* Full screen: the page over everything, the whole window, square corners. */
+.browser-guest-host.is-fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  transform: none !important;
+  z-index: 2147483000 !important;
+  pointer-events: auto !important;
+  border-radius: 0;
 }
 .browser-guest-host webview {
   width: 100%;

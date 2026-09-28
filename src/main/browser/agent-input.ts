@@ -1,4 +1,4 @@
-import type { MouseInputEvent, NativeImage } from "electron";
+import type { KeyboardInputEvent, MouseInputEvent, NativeImage } from "electron";
 import { cropBox } from "../../shared/page-mode-format";
 
 /**
@@ -12,9 +12,9 @@ export type PointerAction =
   | { action: "hover"; x: number; y: number }
   | { action: "drag"; from: PagePoint; to: PagePoint; steps: number; durationMs: number };
 export interface PageRegion { x: number; y: number; width: number; height: number }
-export interface ScreenshotRequest { region?: PageRegion; frames: number; intervalMs: number }
+export interface ScreenshotRequest { region?: PageRegion; frames: number; intervalMs: number; /** Write each control's ref on the page for the picture. */ refs?: boolean }
 export interface ScreenshotFrame { mimeType: "image/png" | "image/jpeg"; data: string; width: number; height: number }
-export interface Screenshot { frames: ScreenshotFrame[]; viewport: { width: number; height: number } }
+export interface Screenshot { frames: ScreenshotFrame[]; viewport: { width: number; height: number }; /** The refs drawn on the picture, one control per line. */ legend?: string }
 
 export const POINTER_STEPS = { min: 2, max: 60, default: 12 } as const;
 export const POINTER_MAX_DURATION_MS = 3000;
@@ -25,6 +25,21 @@ export const SCREENSHOT_LONGEST_SIDE = 1280;
 export const SCREENSHOT_FRAME_BYTES = 1024 * 1024;
 /** Not the page's world, where a script could redefine what the viewport says. */
 export const AGENT_INPUT_WORLD_ID = 1208;
+/** The keys a model may press in a page: what ends a form, closes a menu, moves a selection. */
+export const PRESS_KEYS = ["Enter", "Escape", "Tab", "Backspace", "Delete", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"] as const;
+export type PressKey = (typeof PRESS_KEYS)[number];
+const KEY_CODES: Record<PressKey, string> = {
+  Enter: "Return", Escape: "Escape", Tab: "Tab", Backspace: "Backspace", Delete: "Delete", Space: "Space",
+  ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+};
+/** The native events of one key press: down, the character it types when it types one, up. */
+export function keyEvents(key: string): KeyboardInputEvent[] {
+  if (!(PRESS_KEYS as readonly string[]).includes(key))
+    throw new Error(`Unknown key ${JSON.stringify(key)}; press one of ${PRESS_KEYS.join(", ")}.`);
+  const keyCode = KEY_CODES[key as PressKey];
+  const typed = key === "Enter" || key === "Space" ? [{ type: "char" as const, keyCode }] : [];
+  return [{ type: "keyDown", keyCode }, ...typed, { type: "keyUp", keyCode }];
+}
 export const VIEWPORT_SCRIPT = "({w:window.innerWidth,h:window.innerHeight})";
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -73,14 +88,16 @@ export function parseScreenshotRequest(input: Record<string, unknown>): Screensh
   const frames = integer(input.frames, "frames", SCREENSHOT_FRAMES.min, SCREENSHOT_FRAMES.max, 1);
   const intervalMs = integer(input.intervalMs, "intervalMs", SCREENSHOT_INTERVAL_MS.min,
     SCREENSHOT_INTERVAL_MS.max, SCREENSHOT_INTERVAL_MS.default);
-  if (input.region === undefined) return { frames, intervalMs };
+  if (input.refs !== undefined && typeof input.refs !== "boolean") throw new Error("refs must be true or false.");
+  const annotate = input.refs === true ? { refs: true } : {};
+  if (input.region === undefined) return { frames, intervalMs, ...annotate };
   if (!object(input.region)) throw new Error("region must be an object with x, y, width and height.");
   const region = {
     x: finite(input.region.x, "region.x"), y: finite(input.region.y, "region.y"),
     width: finite(input.region.width, "region.width"), height: finite(input.region.height, "region.height"),
   };
   if (region.width < 1 || region.height < 1) throw new Error("region width and height must be at least 1 CSS pixel.");
-  return { region, frames, intervalMs };
+  return { region, frames, intervalMs, ...annotate };
 }
 
 const inside = (p: PagePoint, viewport: Screenshot["viewport"]) =>
@@ -172,6 +189,11 @@ export function encodeFrame(image: NativeImage, viewport: Screenshot["viewport"]
   if (jpeg.length > SCREENSHOT_FRAME_BYTES) throw new Error("The picture could not be made small enough to return.");
   return done("image/jpeg", jpeg);
 }
+
+/** A download asked for by the model is given this long to start… */
+export const DOWNLOAD_START_MS = 10_000;
+/** …and this long to finish before the tool answers with what it knows. */
+export const DOWNLOAD_FINISH_MS = 60_000;
 
 /** A pause the run's Stop ends at once. */
 export function pause(ms: number, signal?: AbortSignal): Promise<void> {

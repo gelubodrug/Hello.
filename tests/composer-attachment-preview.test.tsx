@@ -88,7 +88,7 @@ const view = () =>
   createElement(ConversationView, {
     conversation, settings, messages: [], workers: [],
     onSettingsChange: vi.fn(), onFolderChange: vi.fn(), onTerminal: vi.fn(), onWorker: vi.fn(),
-    quote: null, onQuoteConsumed: vi.fn(), reportError: vi.fn(),
+    quote: null, onQuoteConsumed: vi.fn(), reportError: vi.fn(), onEditMessage: vi.fn(),
   });
 const chip = (name: string) => [...document.querySelectorAll<HTMLElement>(".composer-attachment")].find(item => item.title === name)!;
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');

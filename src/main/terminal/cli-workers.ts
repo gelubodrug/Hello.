@@ -97,6 +97,32 @@ export interface WorkerLaunch {
   notebookContext?: boolean;
 }
 
+/**
+ * The never-ask switch each client actually has, verified against the
+ * installed CLIs:
+ *
+ *   claude    --dangerously-skip-permissions
+ *   codex     --dangerously-bypass-approvals-and-sandbox
+ *   kimi      --auto            (`--yolo` is only "Ask When Needed" since 0.40)
+ *   opencode  --auto
+ *   aider     --yes-always
+ *   qwen      settings tools.approvalMode = "yolo" (the flag was removed in 0.20)
+ *   pi        nothing: Pi exposes no approval flag. `--approve` trusts a
+ *             project's own files for the run, which is a different decision
+ *             and not this one.
+ */
+export function autoMode(worker: WorkerId, launch: WorkerLaunch): void {
+  const flags: Partial<Record<WorkerId, string[]>> = {
+    claude: ["--dangerously-skip-permissions"],
+    codex: ["--dangerously-bypass-approvals-and-sandbox"],
+    kimi: ["--auto"],
+    opencode: ["--auto"],
+    aider: ["--yes-always"],
+  };
+  for (const flag of flags[worker] ?? [])
+    if (!launch.args.includes(flag)) launch.args.push(flag);
+}
+
 export function prepareCliWorkerLaunch(input: {
   worker: DetectedWorker;
   endpoint: EndpointCredentials | null;
@@ -118,7 +144,10 @@ export function prepareCliWorkerLaunch(input: {
   };
   const attachNotebookContext = (): WorkerLaunch => {
     const context = input.context;
-    if (!context || worker.id === "aider") return base;
+    if (!context || worker.id === "aider") {
+      autoMode(worker.id, base);
+      return base;
+    }
     switch (worker.id) {
       case "claude":
         base.args.push("--append-system-prompt-file", context.instructionsPath);
@@ -152,9 +181,20 @@ export function prepareCliWorkerLaunch(input: {
         break;
     }
     base.notebookContext = true;
+    // Last, so the never-ask flag reads at the end of the argv — and after the
+    // model-using clients have rebuilt their own argument list, which would
+    // otherwise throw it away.
+    autoMode(worker.id, base);
     return base;
   };
-  // Keep these clients' own auth and permission settings. No bypass/yolo flags.
+  // EVERY CLI STARTS IN ITS OWN NEVER-ASK MODE (user, 20.09: "lansează toate
+  // CLI-urile în auto mode, permission all, Never Ask… fiecare cu ce setare
+  // are în acest sens"). A pane opened from Hello exists to work, and the
+  // human gates the work in Hello — approvals here, the chat's own Tool
+  // approvals setting, and what they choose to launch — not in a prompt inside
+  // a pane nobody is watching. The flags differ per client, and each is the
+  // one that client actually honours; where a client has none, it has none and
+  // that is said rather than papered over.
   if (!worker.usesActiveModel) return attachNotebookContext();
   const selected = input.endpoint;
   if (!selected?.model.trim() || !selected.endpointUrl.trim()) {
@@ -206,6 +246,9 @@ export function prepareCliWorkerLaunch(input: {
           },
           security: { auth: { selectedType: "openai" } },
           model: { name: model },
+          // qwen-code 0.20 removed `--approval-mode` from the CLI and moved it
+          // here, where it holds for every launch.
+          tools: { approvalMode: "yolo" },
         });
         base.args = ["--model", model];
         Object.assign(base.env, {

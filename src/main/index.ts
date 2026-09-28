@@ -5,6 +5,7 @@ import { mkdirSync } from 'node:fs';
 import { createDataStore } from './data/store';
 import { ChatService } from './chat/service';
 import { MainTerminalService } from './terminal/service';
+import type { TerminalSession } from '../shared/types';
 import { createWorkerNotebookContext } from './terminal/notebook-context';
 import { BrowserManager } from './browser/manager';
 import { LocalPreviewServer } from './browser/local-preview';
@@ -13,6 +14,53 @@ import { PageModeController } from './browser/page-mode';
 import { registerIPC } from './ipc';
 import { disposeInOrder } from './lifecycle';
 
+/**
+ * The panes a chat may see and speak to: its own terminals and CLI workers,
+ * never another chat's. Ownership is checked here, in main, on every call —
+ * a pane id the model kept from an earlier chat reaches nothing.
+ */
+function workerPanes(service:()=>MainTerminalService|null,announce:(session:TerminalSession)=>void){
+  const own=(conversationId:string,paneId:string)=>{
+    const session=service()?.list().find(item=>item.id===paneId&&item.conversationId===conversationId);
+    if(!session)throw new Error('That pane is not open in this chat.');
+    return session;
+  };
+  const seen=(session:TerminalSession)=>({id:session.id,title:session.title,...(session.workerId?{worker:session.workerId}:{}),folder:session.cwd,running:session.status==='running',...(session.exitCode===undefined?{}:{exitCode:session.exitCode})});
+  return {
+    list:(conversationId:string)=>(service()?.list()??[]).filter(item=>item.conversationId===conversationId).map(seen),
+    installed:()=>(service()?.workers()??[]).filter(worker=>worker.installed).map(worker=>worker.id),
+    start:async(conversationId:string,worker?:string)=>{
+      const terminal=service();
+      if(!terminal)throw new Error('Terminals are unavailable in this running app.');
+      const session=await terminal.create(conversationId,worker as Parameters<MainTerminalService['create']>[1]);
+      // A pane the model opened must be a pane the person can see.
+      announce(session);
+      return seen(session);
+    },
+    read:(conversationId:string,paneId:string,limit?:number)=>{
+      const session=own(conversationId,paneId);
+      const read=service()!.transcript(session.id,limit);
+      return {...seen(read.session),text:read.text};
+    },
+    say:(conversationId:string,paneId:string,text:string)=>{
+      own(conversationId,paneId);
+      // Typing, Enter and then LOOKING: what comes back is what the screen shows.
+      return service()!.submit(paneId,text);
+    },
+    key:(conversationId:string,paneId:string,key:string)=>{
+      own(conversationId,paneId);
+      return service()!.press(paneId,key as Parameters<MainTerminalService['press']>[1]);
+    },
+    wait:(conversationId:string,paneId:string,seconds:number)=>{
+      own(conversationId,paneId);
+      return service()!.waitFor(paneId,{seconds});
+    },
+    answer:(conversationId:string,paneId:string,askId:string,text:string)=>{
+      own(conversationId,paneId);
+      service()!.answerWorker(paneId,askId,text);
+    },
+  };
+}
 const bundleDir=dirname(fileURLToPath(import.meta.url));
 const dataDir=process.env.HELLO_DATA_DIR||join(app.getPath('appData'),'Hello Workspace');
 if(!isAbsolute(dataDir))throw new Error('HELLO_DATA_DIR must be an absolute path.');
@@ -23,6 +71,9 @@ protocol.registerSchemesAsPrivileged([{scheme:'hello',privileges:{standard:true,
 let mainWindow:BrowserWindow|null=null;
 let cleanup:(()=>Promise<void>)|null=null;
 let terminalService:MainTerminalService|null=null;
+// A worker reports to the chat that opened it, and the chat is built after the
+// terminals it reports through — so the link is read when a report arrives.
+let chatService:ChatService|null=null;
 let quitConfirmed=false;
 let closing=false;
 
@@ -70,8 +121,12 @@ else {
     });
     window.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
     const emit=(channel:string,event:unknown)=>{if(!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(channel,event);};
+    // Whether the person is in the app at all, for the chats waiting on them: a focused
+    // page inside the window is still the window, and only the OS says otherwise.
+    window.on('focus',()=>emit('hello:window-focus',true));
+    window.on('blur',()=>emit('hello:window-focus',false));
     const unsubscribeNotebooks=store.subscribeNotebooks(event=>emit('hello:notebooks-changed',event));
-    const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source)});
+    const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},folderFor(id){try{return store.getConversation(id).folder;}catch{return null;}},downloadsFolder:()=>app.getPath('downloads'),initialDownloads:store.listBrowserDownloads(),saveDownload:download=>store.saveBrowserDownload(download),removeDownload:id=>store.deleteBrowserDownload(id),downloadEvent:event=>emit('hello:browser-download',event),save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source)});
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>browser.adoptGuest(guest));
     const pageModes=new PageModeController({pages:browser,dataDir,kinds:['design','annotate'],emit:event=>emit('hello:browser-mode',event)});
@@ -126,9 +181,9 @@ else {
         throw new Error(`HTML was saved as ${artifact}, but its preview could not be opened. Reopen this handle with browser_open; do not regenerate the document. ${error instanceof Error?error.message:'Preview unavailable.'}`);
       }
     };
-    const terminal=new MainTerminalService({lookupConversation(id){try{return store.getConversation(id);}catch{return undefined;}},endpoint:()=>({...store.getSettings(),apiKey:store.getApiKey()}),notebookPaths:id=>store.notebookPaths(id),openNotebookContext:(conversationId,cwd)=>createWorkerNotebookContext({store,conversationId,cwd,userDataDir:dataDir}),userDataDir:dataDir,emitData:event=>emit('hello:terminal-data',event),emitExit:event=>emit('hello:terminal-exit',event)});
+    const terminal=new MainTerminalService({lookupConversation(id){try{return store.getConversation(id);}catch{return undefined;}},endpoint:()=>({...store.getSettings(),apiKey:store.getApiKey()}),notebookPaths:id=>store.notebookPaths(id),openNotebookContext:(conversationId,cwd)=>createWorkerNotebookContext({store,conversationId,cwd,userDataDir:dataDir}),userDataDir:dataDir,emitData:event=>emit('hello:terminal-data',event),emitExit:event=>emit('hello:terminal-exit',event),onWorkerReport:event=>chatService?.workerReported(event)});
     terminalService=terminal;
-    const chat=new ChatService({store,emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),browser:{open:openInBrowser,showHtml:showHtmlInBrowser,getTabs:id=>browser.listForAgent(id),read:(conversationId,id,signal)=>browser.read(id,conversationId,signal),navigate:(conversationId,id,url,signal)=>browser.agentNavigate(conversationId,id,url,signal),click:(conversationId,id,selector,signal)=>browser.agentAction(conversationId,id,'click',selector,'',signal),type:(conversationId,id,selector,text,signal)=>browser.agentAction(conversationId,id,'type',selector,text,signal),scroll:(conversationId,id,deltaY,signal)=>browser.agentAction(conversationId,id,'scroll','',deltaY,signal),pointer:(conversationId,id,action,signal)=>browser.agentPointer(conversationId,id,action,signal),screenshot:(conversationId,id,request,signal)=>browser.agentScreenshot(conversationId,id,request,signal)}});
+    const chat=chatService=new ChatService({store,emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),browser:{open:openInBrowser,showHtml:showHtmlInBrowser,getTabs:id=>browser.listForAgent(id),read:(conversationId,id,signal)=>browser.read(id,conversationId,signal),navigate:(conversationId,id,url,signal)=>browser.agentNavigate(conversationId,id,url,signal),click:(conversationId,id,target,signal)=>browser.agentAction(conversationId,id,'click',target,'',signal),type:(conversationId,id,target,text,signal)=>browser.agentAction(conversationId,id,'type',target,text,signal),scroll:(conversationId,id,deltaY,signal)=>browser.agentAction(conversationId,id,'scroll',{},deltaY,signal),pointer:(conversationId,id,action,signal)=>browser.agentPointer(conversationId,id,action,signal),screenshot:(conversationId,id,request,signal)=>browser.agentScreenshot(conversationId,id,request,signal),download:(conversationId,id,url,signal)=>browser.agentDownload(conversationId,id,url,signal),downloads:conversationId=>browser.downloadsOf(conversationId),press:(conversationId,id,key,signal)=>browser.agentKey(conversationId,id,key,signal),wait:(conversationId,id,condition,signal)=>browser.agentWait(conversationId,id,condition,signal)},workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
     // Settle the selected model's published limits once at startup, so a
     // profile stored before this app knew how to ask still launches on the
     // model's real context window rather than the shipped default.

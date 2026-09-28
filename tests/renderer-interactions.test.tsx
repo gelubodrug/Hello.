@@ -37,6 +37,9 @@ const mocks = vi.hoisted(() => ({
   retry: vi.fn(),
   approve: vi.fn(),
   models: vi.fn(),
+  catalog: vi.fn(),
+  localServers: vi.fn(),
+  settingsGet: vi.fn(),
   settingsSave: vi.fn(),
   settingsRemember: vi.fn(),
   settingsUse: vi.fn(),
@@ -59,6 +62,9 @@ vi.mock("../src/renderer/api", () => ({
     },
     settings: {
       models: mocks.models,
+      catalog: mocks.catalog,
+      localServers: mocks.localServers,
+      get: mocks.settingsGet,
       save: mocks.settingsSave,
       rememberConnection: mocks.settingsRemember,
       useConnection: mocks.settingsUse,
@@ -114,6 +120,10 @@ async function render(node: ReactElement) {
   await act(async () => {
     root.render(node);
   });
+}
+/** Lets pending timers and promises land, the way a person waits a moment. */
+async function settle() {
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
 async function click(element: Element) {
   await act(async () => {
@@ -174,6 +184,7 @@ const view = (messages: Message[] = []) =>
     quote: null,
     onQuoteConsumed: vi.fn(),
     reportError: onError,
+    onEditMessage: vi.fn(),
   });
 
 beforeEach(() => {
@@ -210,6 +221,11 @@ beforeEach(() => {
   mocks.stop.mockResolvedValue(undefined);
   mocks.approve.mockResolvedValue(undefined);
   mocks.models.mockResolvedValue([{ id: "test-model" }, { id: "second-model" }]);
+  mocks.localServers.mockResolvedValue([]);
+  mocks.settingsGet.mockResolvedValue(settings);
+  mocks.catalog.mockResolvedValue([
+    { name: "Local", endpointUrl: settings.endpointUrl, active: true, models: [{ id: "test-model" }, { id: "second-model" }] },
+  ]);
   mocks.extensionsDiscover.mockResolvedValue({ mcp: [], skills: [] });
   mocks.settingsSave.mockImplementation(async (patch) => ({
     ...settings,
@@ -347,7 +363,7 @@ describe("real conversation controls", () => {
   it("loads real models and saves the explicitly selected model", async () => {
     await render(view());
     await click(button("Choose model"));
-    expect(mocks.models).toHaveBeenCalledOnce();
+    expect(mocks.catalog).toHaveBeenCalledOnce();
     await click(button("second-model"));
     expect(mocks.settingsSave).toHaveBeenCalledWith({ model: "second-model" });
     expect(onSettingsChange).toHaveBeenCalledWith(
@@ -664,8 +680,10 @@ describe("settings shared controls", () => {
     mocks.models.mockResolvedValue([{ id: "aion-labs/aion-2.0" }, { id: "vendor/fast:free" }, { id: "vendor/large:free" }]);
     const closeSettings = vi.fn();
     await render(createElement(SettingsDialog, { open: true, settings, onSaved: vi.fn(), onClose: closeSettings, dataPath: "/test/data", version: "0.1.0", extensionsCount: 0 }));
-    await click(button("Save connection & load models"));
-    mocks.settingsSave.mockClear();
+    await settle();
+    // The page asks the address on screen for its models; nothing is saved to do it.
+    expect(mocks.models).toHaveBeenCalledWith(settings.endpointUrl);
+    expect(mocks.settingsSave).not.toHaveBeenCalled();
     await click(button("Available models"));
     const menu = document.querySelector<HTMLElement>('[role="menu"]')!;
     expect(menu.style.zIndex).toBe("300");
@@ -721,6 +739,7 @@ describe("settings shared controls", () => {
   });
   it("never carries a typed key or model to a different provider", async () => {
     await render(createElement(SettingsDialog, {open:true, settings, onSaved:vi.fn(), onClose:vi.fn(), dataPath:"/test/data", version: "0.1.0", extensionsCount: 0}));
+    await click(button("Add API key"));
     const keyField = document.querySelector<HTMLInputElement>('input[type="password"]')!;
     await fill(keyField, "test-only-credential");
     await fill(field("Model"), "local-model");
@@ -735,7 +754,7 @@ describe("settings shared controls", () => {
     expect(JSON.stringify(patch)).not.toContain("test-only-credential");
     expect(JSON.stringify(patch)).not.toContain("local-model");
   });
-  it("switches between kept connections and keeps the one on screen under a name", async () => {
+  it("switches between kept connections and keeps the one on screen", async () => {
     const kept = {
       ...settings,
       connections: [
@@ -754,13 +773,13 @@ describe("settings shared controls", () => {
     expect(field("Endpoint URL").value).toBe("https://openrouter.ai/api/v1");
     expect(field("Model").value).toBe("free-model");
     expect(document.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("•".repeat(24));
-    await fill(field("Name this connection"), "Work account");
-    await click(button("Update"));
+    await click(button("Saved connections"));
+    await click(menuItem("Update “OpenRouter”"));
     expect(mocks.settingsSave).toHaveBeenCalledWith(
       expect.objectContaining({ endpointUrl: "https://openrouter.ai/api/v1", model: "free-model" }),
     );
     expect(mocks.settingsSave.mock.calls.at(-1)![0]).not.toHaveProperty("apiKey");
-    expect(mocks.settingsRemember).toHaveBeenCalledWith("Work account");
+    expect(mocks.settingsRemember).toHaveBeenCalledWith("OpenRouter");
   });
   it("uses the shared keyboard menu for reasoning effort and saves only the selected value", async () => {
     const saved = vi.fn();
@@ -776,6 +795,7 @@ describe("settings shared controls", () => {
       }),
     );
     expect(document.querySelector("select")).toBeNull();
+    await click(button("Advanced"));
     await click(button("Reasoning effort"));
     expect(
       document.querySelector('[role="menu"]')?.classList.contains("menu-popup"),
@@ -1015,5 +1035,154 @@ describe("menus and notebook persistence", () => {
     expect(field.value).toBe('Updated by CLI');
     expect(localStorage.getItem(`hello.notebook.${original.id}`)).toBeNull();
     expect(mocks.notebookList).toHaveBeenCalledTimes(3);
+  });
+});
+
+// Presets are additive (user, 14.09): the picker shows every kept connection's
+// models side by side, and picking one on another connection switches to it.
+describe("the model picker across kept connections", () => {
+  it("lists them all, names a connection that could not answer, and switches to the one picked", async () => {
+    mocks.catalog.mockResolvedValue([
+      { name: "OpenRouter", endpointUrl: "https://openrouter.ai/api/v1", active: true, models: [{ id: "vendor/large:free" }],
+        // A refresh that failed on a connection whose models are known: the
+        // models stand, and the reason is not shown over them (user, 17.09).
+        error: "Could not reach https://openrouter.ai/api/v1: Connect Timeout Error" },
+      { name: "llama.cpp · 8081", endpointUrl: "http://localhost:8081/v1", active: false, models: [{ id: "/Users/q/Models/Nex-N2.5-mini-Q8_0.gguf", contextWindow: 262144 }] },
+      { name: "LM Studio", endpointUrl: "http://localhost:1234/v1", active: false, models: [],
+        error: "Could not reach http://localhost:1234/v1: nothing is listening there." },
+    ]);
+    await render(view());
+    await click(button("Choose model"));
+    expect(document.body.textContent).toContain("Could not reach http://localhost:1234/v1");
+    expect(document.body.textContent).toContain("vendor/large:free");
+    expect(document.body.textContent).not.toContain("Connect Timeout Error");
+    // Shown by its file name; sent to the server by its whole id.
+    await click(menuItem("Nex-N2.5-mini-Q8_0.gguf"));
+    expect(mocks.settingsSave).toHaveBeenCalledWith({ endpointUrl: "http://localhost:8081/v1", model: "/Users/q/Models/Nex-N2.5-mini-Q8_0.gguf" });
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ endpointUrl: "http://localhost:8081/v1", model: "/Users/q/Models/Nex-N2.5-mini-Q8_0.gguf" }),
+    );
+  });
+});
+
+// "fă să citească serverul" (user, 14.09): Settings finds the server running on
+// this Mac, says under the address whether it answers, and keeps the numbers
+// and the rest out of the way under Advanced.
+describe("settings read the server", () => {
+  const llama = {
+    name: "llama.cpp · 8081",
+    endpointUrl: "http://localhost:8081/v1",
+    models: [{ id: "/Users/q/Models/Nex-N2.5-mini-GGUF/Nex-N2.5-mini-Q8_0.gguf", contextWindow: 262144 }],
+  };
+  const dead = { ...settings, endpointUrl: "http://localhost:8080/v1", model: "", contextWindow: 512000, maxOutputTokens: 32768 };
+  const open = (value: AppSettings = dead) =>
+    render(createElement(SettingsDialog, { open: true, settings: value, onSaved: vi.fn(), onClose: vi.fn(), dataPath: "/test/data", version: "0.1.0", extensionsCount: 0 }));
+
+  it("shows the running server, says the address on screen does not answer, and uses the server in one click", async () => {
+    mocks.localServers.mockResolvedValue([llama]);
+    mocks.models.mockRejectedValue(new Error("Could not reach http://localhost:8080/v1: nothing is listening there."));
+    await open();
+    await settle();
+    const row = document.querySelector<HTMLButtonElement>(".settings-server")!;
+    expect(row.textContent).toContain("llama.cpp · 8081");
+    expect(row.textContent).toContain("Nex-N2.5-mini-Q8_0.gguf · 262K tokens");
+    const status = document.querySelector(".settings-status")!;
+    expect(status.getAttribute("data-state")).toBe("error");
+    expect(status.textContent).toContain("Could not reach http://localhost:8080/v1");
+    await click(button("Use llama.cpp · 8081"));
+    const patch = mocks.settingsSave.mock.calls.at(-1)![0];
+    expect(patch).toMatchObject({ endpointUrl: "http://localhost:8081/v1", model: llama.models[0].id });
+    // Nothing meant for another address travels: no key, no limits claimed.
+    expect(patch).not.toHaveProperty("apiKey");
+    expect(patch).not.toHaveProperty("contextWindow");
+    expect(patch).not.toHaveProperty("maxOutputTokens");
+  });
+
+  it("says a server answers, and takes its only model without being told", async () => {
+    mocks.models.mockResolvedValue(llama.models);
+    await open({ ...dead, endpointUrl: llama.endpointUrl });
+    await settle();
+    expect(document.querySelector(".settings-status")!.textContent).toBe("Connected · Nex-N2.5-mini-Q8_0.gguf · 262K tokens");
+    expect(field("Model").value).toBe(llama.models[0].id);
+  });
+
+  it("keeps a local server's key field out of the way until it is asked for", async () => {
+    await open();
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    await click(button("Add API key"));
+    expect(document.querySelector('input[type="password"]')).not.toBeNull();
+  });
+
+  it("puts the numbers and the choices under Advanced, and shows the limits main now holds", async () => {
+    mocks.settingsGet.mockResolvedValue({ ...dead, contextWindow: 262144, maxOutputTokens: 32768 });
+    await open();
+    expect(document.body.textContent).not.toContain("Temperature");
+    expect(document.body.textContent).not.toContain("Tool approvals");
+    await click(button("Advanced"));
+    await settle();
+    expect(document.querySelectorAll(".settings-numbers input")).toHaveLength(3);
+    expect(field("Context (tokens)").value).toBe("262144");
+    expect(document.body.textContent).toContain("Tool approvals");
+    expect(document.body.textContent).not.toContain("Endpoint URL");
+  });
+});
+
+// Settings already found the models; the picker must not rediscover them on
+// every open, and progress is a spinner rather than a sentence (user, 17.09).
+describe("the model picker keeps what it read", () => {
+  it("reads once for the chat, shows the list again without asking, and spins while it has nothing", async () => {
+    let settleCatalog: (value: unknown) => void = () => {};
+    mocks.catalog.mockReturnValueOnce(new Promise(resolve => { settleCatalog = resolve; }));
+    await render(view());
+    await click(button("Choose model"));
+    expect(document.querySelector(".menu-item .spin")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Loading models");
+    await act(async () => { settleCatalog([{ name: "Local", endpointUrl: settings.endpointUrl, active: true, models: [{ id: "test-model" }] }]); });
+    expect(menuItem("test-model")).toBeDefined();
+    expect(mocks.catalog).toHaveBeenCalledOnce();
+    // Closing, reopening and picking a model never asks the network again.
+    await click(button("Choose model"));
+    await click(button("Choose model"));
+    await click(menuItem("test-model"));
+    expect(mocks.catalog).toHaveBeenCalledOnce();
+  });
+});
+
+// A restart keeps the transcript for the person and draws where the model's
+// memory begins (user, 24.09: "reload, reset, fără să pierd taburile").
+describe("a restarted chat", () => {
+  const said = (id: string, createdAt: number, role: "user" | "assistant" = "user"): Message =>
+    ({ id, conversationId: conversation.id, role, content: `said ${id}`, status: "complete", createdAt });
+  const line = () => document.querySelector('[role="separator"][aria-label="Chat restarted"]');
+
+  it("draws the line before the first message since the restart, and after the last when nothing came since", async () => {
+    await render(createElement(ConversationView, { ...view().props, conversation: { ...conversation, freshFrom: 100 },
+      messages: [said("a", 10), said("b", 20, "assistant"), said("c", 150)], onEditMessage: vi.fn() }));
+    const marker = line();
+    expect(marker?.textContent).toBe("Restarted — the model starts fresh from here");
+    expect(marker?.previousElementSibling?.textContent).toContain("said b");
+    expect(marker?.nextElementSibling?.textContent).toContain("said c");
+    await render(createElement(ConversationView, { ...view().props, conversation: { ...conversation, freshFrom: 100 },
+      messages: [said("a", 10), said("b", 20, "assistant")], onEditMessage: vi.fn() }));
+    expect(line()?.previousElementSibling?.textContent).toContain("said b");
+    expect(line()?.nextElementSibling).toBeNull();
+    // The answer above the line cannot be retried: the model has forgotten it.
+    expect(document.querySelector('[aria-label="Retry response"]')).toBeNull();
+    await render(view([said("a", 10), said("b", 20, "assistant")]));
+    expect(line()).toBeNull();
+    expect(document.querySelector('[aria-label="Retry response"]')).not.toBeNull();
+  });
+});
+
+// Which model wrote a reply, on the reply; how full the window is, under the composer.
+describe("the model per reply and the context meter", () => {
+  it("names the model beside a reply's usage and shows the meter under the composer", async () => {
+    await render(createElement(ConversationView, { ...view().props, settings: { ...settings, contextWindow: 32_000 },
+      messages: [{ id: "r1", conversationId: conversation.id, role: "assistant", content: "Done.", status: "complete", createdAt: 1,
+        model: "/models/qwen3.6-27b.gguf", usage: { input: 84_863, output: 717, context: 9_600, cost: 0.004 } }] }));
+    const usage = document.querySelector(".message-usage");
+    expect(usage?.textContent).toBe("qwen3.6-27b.gguf · 84,863 in · 717 out · $0.0040");
+    const meter = document.querySelector(".composer-wrap .context-meter");
+    expect(meter?.textContent).toContain("30% of 32k");
   });
 });

@@ -26,10 +26,32 @@ export function taskLines(body: string) {
   });
 }
 
-export function updateTaskStatus(body: string, line: number, expectedLine: string, status: TaskStatus): string {
-  const task = taskLines(body).find(item => item.line === line);
-  if (!task) throw new Error('That line is not a task. Read notebook_list again for current task line numbers.');
-  if (task.source !== expectedLine) throw new Error('This task changed since you read it. Read notebook_list again before updating.');
+/**
+ * The task an update means. The line given, when it still reads as expected;
+ * otherwise the one task whose source is exactly the expected one, wherever it
+ * is. The exact source is the proof; the line is only where to look first. A
+ * model that counted lines from the wrong place, with the right words, was
+ * refused "That line is not a task" twice before it guessed the number (user,
+ * 28.09: "cred că avem un pseudo error"). A source that no longer matches any
+ * task is still refused: someone changed it since it was read.
+ */
+export function findTask(body: string, line: number | undefined, expectedLine: string) {
+  const tasks = taskLines(body);
+  const atLine = line === undefined ? undefined : tasks.find(item => item.line === line);
+  if (atLine && atLine.source === expectedLine) return atLine;
+  const exact = tasks.filter(item => item.source === expectedLine);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1)
+    throw new Error(`${exact.length} tasks read exactly ${JSON.stringify(expectedLine)}, on lines ${exact.map(item => item.line).join(', ')}: give the line of the one you mean.`);
+  if (atLine)
+    throw new Error(`This task changed since you read it: line ${atLine.line} now reads ${JSON.stringify(atLine.source)}. Update it with that source if it is still the task you mean.`);
+  const listed = tasks.slice(0, 20).map(item => `${item.line}: ${item.source}`).join(' | ');
+  throw new Error(`No task in this entry reads ${JSON.stringify(expectedLine)}. Its tasks now: ${listed || 'none'}.`);
+}
+
+export function updateTaskStatus(body: string, line: number | undefined, expectedLine: string, status: TaskStatus): string {
+  const task = findTask(body, line, expectedLine);
+  line = task.line;
   const rows = body.split(/\r?\n/);
   const prefix = checklist.exec(task.source)![1];
   rows[line - 1] = `${prefix}[${status === 'done' ? 'x' : ' '}] ${labels[status] ? `**${labels[status]}** — ` : ''}${task.text}`;

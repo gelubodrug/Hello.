@@ -307,7 +307,7 @@ describe("browser invariant: an armed page mode never changes the browser", () =
     expect(f.manager.pageFor(tab.id)?.contents).toBe(guest);
     expect(names.map((name) => guest.listenerCount(name))).toEqual(before);
     // And the parked page is still readable by the existing flow.
-    await expect(f.manager.read(tab.id, "chat")).resolves.toMatchObject({ text: "Page text" });
+    await expect(f.manager.read(tab.id, "chat")).resolves.toMatchObject({ text: expect.stringContaining("Page text") });
   });
 
   it("an arming does not outlive its page: unmount closes the guest exactly as before and ends the mode", async () => {

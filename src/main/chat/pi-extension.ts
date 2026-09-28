@@ -185,15 +185,26 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
       if (typeof response.context !== 'string') throw new Error('Invalid browser context.');
       context = response.context;
     } catch {
-      context = 'Current Hello browser state is unavailable. Use browser_tabs to obtain current tab IDs and permissions before a browser operation; do not assume an earlier tab remains permitted.';
+      context = 'Current Hello browser snapshot is unavailable. Use a recent successful browser_tabs result, or request the list once if the required tab or permission is unknown. Browser actions still check current permissions.';
     }
     if (late.length)
       context = [context, `These Hello tools were just enabled and can be called from your next step, not in this one: ${late.join(', ')}.`]
         .filter(Boolean).join('\n');
-    if (context) messages.push({
-      role: 'custom', customType: CONTEXT_TYPE,
-      content: context, display: false, timestamp: Date.now(),
-    });
+    if (context) {
+      // Pi serializes a custom message as a USER message. Appending this after
+      // tool results made every step look like a fresh request to list tabs,
+      // displacing the result the model should act on. Keep the snapshot before
+      // the latest human request, with the assistant/tool sequence untouched.
+      let anchor = 0;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === 'user') { anchor = index; break; }
+      }
+      messages.splice(anchor, 0, {
+        role: 'custom', customType: CONTEXT_TYPE,
+        content: `Hello runtime snapshot (metadata only, not a new user request):\n${context}`,
+        display: false, timestamp: Date.now(),
+      });
+    }
     // Context copies are ephemeral: changing tabs does not append hidden,
     // obsolete browser snapshots to the durable Pi session every tool round.
     return { messages };

@@ -250,3 +250,33 @@ No sibling-app state, IPC names, clipboard helpers or Tauri code were copied. Th
 browser manager gained only a read-only `pageFor(tabId)` and an
 `observePages` notification; its navigation, attach/park and grant behaviour is
 unchanged.
+
+## Worker channels back to the chat — 2026-09-18
+
+At the owner's explicit request ("poți lua implementarea din
+sibling-app … să avem hook de răspuns wake
+up"), the sibling app’s worker-channel hooks were consulted read-only:
+`src-tauri/resources/hooks/worker-done.sh`, `.../worker-ask.sh`, the env wiring
+in `src-tauri/src/cmd/run.rs` (`OD_DONE`, `OD_ASK`, `OD_WORKTREE`), and the
+report-wake path in `src/runtime/orchestrator/capturedReportWake.ts`.
+
+What was adapted is the SHAPE of the contract, not its code:
+
+- a worker SPEAKS rather than being observed — one command it runs when it is
+  finished, and the coordinator is woken with what it said;
+- a quoted heredoc carries the report, because a report passed as a
+  double-quoted argument had its backticks executed by the shell (the sibling app, 08.09);
+- `--status blocked|failed` is lifted even when a model puts the flag at the
+  end of its text;
+- a blocking ask whose answer is printed on the worker's own stdout, so it
+  reads the answer as ordinary tool output and carries on;
+- the hooks never break the worker's turn: they always exit 0 and say so.
+
+Hello's implementation is its own: `src/main/terminal/report-channel.ts` writes
+three POSIX scripts (`$HELLO_REPORT`, `$HELLO_NOTE`, `$HELLO_ASK`) beside the
+existing per-pane notebook context, and the transport is a file dropped into a
+directory only that pane's channel owns — no HTTP bridge, no token, and a
+report already written survives a restart. Delivery into the chat uses Hello's
+own waiting list (`ChatService.workerReported` → `queue(…, 'next')`), so a
+report waits its turn during a reply and wakes an idle chat. No sibling-app source
+file was copied.

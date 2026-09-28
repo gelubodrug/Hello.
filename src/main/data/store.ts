@@ -17,9 +17,11 @@ import type {
   SavedConnection,
   LibraryResource,
   ResourceKind,
+  BrowserDownload,
   BrowserTab,
   Conversation,
   Message,
+  MessageMatch,
   NotebookEntry,
   NotebookChange,
   NotebookKind,
@@ -84,10 +86,40 @@ export function normalizeEndpoint(value: string): string {
   return url.toString().replace(/\/+$/, '');
 }
 
+/** The words around the first place the term occurs, on one line. */
+export function snippetAround(content: string, term: string, before = 40, after = 90): string {
+  const flat = content.replace(/\s+/g, ' ').trim();
+  const at = flat.toLocaleLowerCase().indexOf(term.toLocaleLowerCase());
+  if (at < 0) return flat.slice(0, before + after) + (flat.length > before + after ? '…' : '');
+  const start = Math.max(0, at - before);
+  const end = Math.min(flat.length, at + term.length + after);
+  return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
+}
 function title(value: string, fallback: string): string {
   const result = value.trim().slice(0, 250);
   return result || fallback;
 }
+/** A chat's switches live in `settings`, keyed by chat: the mode, whether the
+ *  model plans, and whether each shared page exists at all. Absent means the
+ *  default — chat, no planning, and both pages there. Only the departure from
+ *  the default is stored, so every chat that already exists keeps its pages. */
+const CONVERSATION_COLUMNS = `SELECT c.*,
+    CASE WHEN m.value = 'coder' THEN 'coder' ELSE 'chat' END AS chatMode,
+    CASE WHEN p.value = 'on' THEN 1 ELSE 0 END AS planning,
+    CASE WHEN r.value = 'off' THEN 0 ELSE 1 END AS runbook,
+    CASE WHEN t.value = 'off' THEN 0 ELSE 1 END AS tasks,
+    CAST(f.value AS INTEGER) AS freshFrom
+  FROM conversations c
+  LEFT JOIN settings m ON m.key = 'chat-mode:' || c.id
+  LEFT JOIN settings p ON p.key = 'chat-plan:' || c.id
+  LEFT JOIN settings r ON r.key = 'chat-runbook:' || c.id
+  LEFT JOIN settings t ON t.key = 'chat-tasks:' || c.id
+  LEFT JOIN settings f ON f.key = 'chat-fresh:' || c.id`;
+type StoredConversation = Omit<Conversation, 'planning' | 'runbook' | 'tasks' | 'freshFrom'>
+  & { planning: number; runbook: number; tasks: number; freshFrom: number | null };
+const hydrateConversation = ({ freshFrom, ...row }: StoredConversation): Conversation =>
+  ({ ...row, planning: row.planning === 1, runbook: row.runbook === 1, tasks: row.tasks === 1,
+    ...(typeof freshFrom === 'number' && freshFrom > 0 ? { freshFrom } : {}) });
 function validKind(kind: string): asserts kind is NotebookKind {
   if (kind !== 'runbook' && kind !== 'tasks')
     throw new Error('Unknown notebook kind.');
@@ -151,6 +183,11 @@ export class DataStore {
           .run(JSON.stringify(parts), row.id);
       }
     })();
+    // A file still saving when the app closed was not saved: the process that
+    // wrote it is gone, and the list must not say "saving" forever.
+    this.db
+      .prepare("UPDATE browser_downloads SET state = 'failed', reason = 'interrupted when the application closed', finishedAt = ? WHERE state = 'saving'")
+      .run(Date.now());
     for (const suffix of ['', '-wal', '-shm']) {
       if (existsSync(this.databasePath + suffix))
         chmodSync(this.databasePath + suffix, 0o600);
@@ -159,7 +196,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 4)
+    if (version > 7)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -232,6 +269,34 @@ export class DataStore {
       );
       CREATE INDEX queued_conversation ON queued_messages(conversationId, position);
       PRAGMA user_version = 4;`);
+      })();
+    if (version < 5)
+      this.db.transaction(() => {
+        // The grant the human set on a page comes back with the page (user,
+        // 22.09). Every tab saved before this column existed reads as Off.
+        this.db.exec(`ALTER TABLE browser_tabs ADD COLUMN control TEXT NOT NULL DEFAULT 'off';
+      PRAGMA user_version = 5;`);
+      })();
+    if (version < 6)
+      this.db.transaction(() => {
+        // A chat's downloads, kept between sessions like a browser keeps its
+        // list (user, 24.09): what was saved, where, from which page.
+        this.db.exec(`CREATE TABLE browser_downloads (
+        id TEXT PRIMARY KEY,
+        conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        tabId TEXT, name TEXT NOT NULL, path TEXT, url TEXT, mimeType TEXT,
+        state TEXT NOT NULL CHECK(state IN ('saving','saved','failed','cancelled','refused')),
+        reason TEXT, bytes INTEGER, total INTEGER,
+        startedAt INTEGER NOT NULL, finishedAt INTEGER
+      );
+      CREATE INDEX downloads_conversation ON browser_downloads(conversationId, startedAt);
+      PRAGMA user_version = 6;`);
+      })();
+    if (version < 7)
+      this.db.transaction(() => {
+        // Which model wrote each reply, now that a chat can change model mid-way.
+        this.db.exec(`ALTER TABLE messages ADD COLUMN model TEXT;
+      PRAGMA user_version = 7;`);
       })();
   }
 
@@ -318,19 +383,16 @@ export class DataStore {
   }
 
   listConversations(): Conversation[] {
-    return this.db
-      .prepare(`SELECT c.*, CASE WHEN s.value = 'coder' THEN 'coder' ELSE 'chat' END AS chatMode
-        FROM conversations c LEFT JOIN settings s ON s.key = ? || c.id
-        ORDER BY c.updatedAt DESC, c.id`)
-      .all('chat-mode:') as Conversation[];
+    return (this.db
+      .prepare(`${CONVERSATION_COLUMNS} ORDER BY c.updatedAt DESC, c.id`)
+      .all() as StoredConversation[]).map(hydrateConversation);
   }
   getConversation(id: string): Conversation {
     const row = this.db
-      .prepare(`SELECT c.*, CASE WHEN s.value = 'coder' THEN 'coder' ELSE 'chat' END AS chatMode
-        FROM conversations c LEFT JOIN settings s ON s.key = ? || c.id WHERE c.id = ?`)
-      .get('chat-mode:', id) as Conversation | undefined;
+      .prepare(`${CONVERSATION_COLUMNS} WHERE c.id = ?`)
+      .get(id) as StoredConversation | undefined;
     if (!row) throw new Error('Conversation not found.');
-    return row;
+    return hydrateConversation(row);
   }
   createConversation(value = 'New chat'): Conversation {
     const now = Date.now();
@@ -346,11 +408,11 @@ export class DataStore {
         'INSERT INTO conversations (id,title,folder,createdAt,updatedAt) VALUES (@id,@title,@folder,@createdAt,@updatedAt)',
       )
       .run(row);
-    return { ...row, chatMode: 'chat' };
+    return { ...row, chatMode: 'chat', planning: false, runbook: true, tasks: true };
   }
   updateConversation(
     id: string,
-    patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder' },
+    patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean },
   ): Conversation {
     const row = this.getConversation(id);
     if (patch.title !== undefined) row.title = title(patch.title, 'New chat');
@@ -364,6 +426,15 @@ export class DataStore {
         throw new Error('Unknown chat mode.');
       row.chatMode = patch.chatMode;
     }
+    if (patch.planning !== undefined) {
+      if (typeof patch.planning !== 'boolean') throw new Error('Planning is on or off.');
+      row.planning = patch.planning;
+    }
+    for (const page of ['runbook', 'tasks'] as const) {
+      if (patch[page] === undefined) continue;
+      if (typeof patch[page] !== 'boolean') throw new Error(`${page} is on or off.`);
+      row[page] = patch[page];
+    }
     row.updatedAt = Date.now();
     this.db.transaction(() => {
       this.db
@@ -374,13 +445,75 @@ export class DataStore {
       if (patch.chatMode !== undefined)
         this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
           .run(`chat-mode:${id}`, patch.chatMode);
+      // Only a departure from the default is written: planning off, or a page
+      // the person took away, is stored as nothing at all.
+      const switchRow = (key: string, store: boolean, value: string) => {
+        if (store)
+          this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(key, value);
+        else this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+      };
+      if (patch.planning !== undefined) switchRow(`chat-plan:${id}`, patch.planning, 'on');
+      if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, !patch.runbook, 'off');
+      if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, !patch.tasks, 'off');
     })();
     return row;
+  }
+  /**
+   * Messages of every chat that have the words, newest first and at most
+   * three per chat, each with the words around the first place they occur.
+   * Case is folded as SQLite folds it (Latin letters); the snippet is cut
+   * around the first match, found again here with every letter folded.
+   */
+  searchMessages(query: string, limit = 60): MessageMatch[] {
+    const term = query.trim().slice(0, 200);
+    if (term.length < 2) return [];
+    const pattern = `%${term.replace(/[\\%_]/g, char => `\\${char}`)}%`;
+    const rows = this.db
+      .prepare("SELECT id, conversationId, role, content, createdAt FROM messages WHERE content LIKE ? ESCAPE '\\' ORDER BY createdAt DESC LIMIT ?")
+      .all(pattern, limit * 4) as Array<{ id: string; conversationId: string; role: 'user' | 'assistant'; content: string; createdAt: number }>;
+    const perChat = new Map<string, number>();
+    const matches: MessageMatch[] = [];
+    for (const row of rows) {
+      const seen = perChat.get(row.conversationId) ?? 0;
+      if (seen >= 3) continue;
+      perChat.set(row.conversationId, seen + 1);
+      matches.push({ conversationId: row.conversationId, messageId: row.id, role: row.role, createdAt: row.createdAt, snippet: snippetAround(row.content, term) });
+      if (matches.length >= limit) break;
+    }
+    return matches;
+  }
+  /** The model's memory begins now: only messages from this moment on reach it. */
+  restartConversation(id: string, at = Date.now()): Conversation {
+    this.getConversation(id);
+    this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run(`chat-fresh:${id}`, String(at));
+    return this.getConversation(id);
+  }
+  /**
+   * The chat as new: its messages, queued messages and restart mark go and,
+   * with notes, its Runbook and Tasks. Its browser tabs, downloads, switches,
+   * folder and title stay: the tools are the reason to keep the chat at all.
+   */
+  resetConversation(id: string, options: { notes: boolean }): Conversation {
+    this.getConversation(id);
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM messages WHERE conversationId = ?').run(id);
+      this.db.prepare('DELETE FROM queued_messages WHERE conversationId = ?').run(id);
+      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`chat-fresh:${id}`);
+      if (options.notes) this.db.prepare('DELETE FROM notebooks WHERE conversationId = ?').run(id);
+    })();
+    if (options.notes) {
+      this.refreshNotebookExports(id);
+      for (const kind of ['runbook', 'tasks'] as const) this.notifyNotebooks({ conversationId: id, kind });
+    }
+    return this.getConversation(id);
   }
   deleteConversation(id: string): void {
     const row = this.getConversation(id);
     this.db.transaction(() => {
-      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`chat-mode:${id}`);
+      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?)')
+        .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     })();
     // Remove only our two known generated exports, never a user repository.
@@ -456,7 +589,7 @@ export class DataStore {
     const rows = this.db
       .prepare('SELECT * FROM messages WHERE conversationId = ? ORDER BY seq')
       .all(conversationId) as Array<
-      Message & { parts: string; usage: string | null }
+      Message & { parts: string; usage: string | null; model: string | null }
     >;
     return rows.map((row) => ({
       id: row.id,
@@ -468,6 +601,7 @@ export class DataStore {
       createdAt: row.createdAt,
       error: row.error,
       usage: parse(row.usage, undefined),
+      ...(row.model ? { model: row.model } : {}),
     }));
   }
   saveMessage(message: Message): Message {
@@ -480,16 +614,17 @@ export class DataStore {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage)
-        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage)
+          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model)
+        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model)
         ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts,
-          status=excluded.status, error=excluded.error, usage=excluded.usage`,
+          status=excluded.status, error=excluded.error, usage=excluded.usage, model=COALESCE(excluded.model, messages.model)`,
         )
         .run({
           ...message,
           parts: JSON.stringify(message.parts ?? []),
           error: message.error ?? null,
           usage: message.usage ? JSON.stringify(message.usage) : null,
+          model: message.model ?? null,
         });
       this.db
         .prepare('UPDATE conversations SET updatedAt = ? WHERE id = ?')
@@ -809,12 +944,14 @@ export class DataStore {
     const rows = this.db
       .prepare('SELECT * FROM browser_tabs ORDER BY rowid')
       .all() as Array<
-      Pick<BrowserTab, 'id' | 'conversationId' | 'title' | 'url'>
+      Pick<BrowserTab, 'id' | 'conversationId' | 'title' | 'url'> & { control?: string }
     >;
-    return rows.map((row) => ({
+    return rows.map(({ control, ...row }) => ({
       ...row,
-      control: 'off',
+      // What the human chose for this page, kept between sessions.
+      control: control === 'read' || control === 'full' ? control : 'off',
       loading: false,
+      progress: null,
       canGoBack: false,
       canGoForward: false,
     }));
@@ -828,18 +965,55 @@ export class DataStore {
       throw new Error('Browser tab belongs to another conversation.');
     this.db
       .prepare(
-        `INSERT INTO browser_tabs(id,conversationId,title,url) VALUES (@id,@conversationId,@title,@url)
-      ON CONFLICT(id) DO UPDATE SET title=excluded.title,url=excluded.url`,
+        `INSERT INTO browser_tabs(id,conversationId,title,url,control) VALUES (@id,@conversationId,@title,@url,@control)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title,url=excluded.url,control=excluded.control`,
       )
       .run({
         id: tab.id,
         conversationId: tab.conversationId,
         title: tab.title,
         url: tab.url,
+        control: tab.control === 'read' || tab.control === 'full' ? tab.control : 'off',
       });
   }
   deleteBrowserTab(id: string): void {
     this.db.prepare('DELETE FROM browser_tabs WHERE id = ?').run(id);
+  }
+  /** Every chat's downloads, oldest first. */
+  listBrowserDownloads(): BrowserDownload[] {
+    const rows = this.db
+      .prepare('SELECT * FROM browser_downloads ORDER BY startedAt, rowid')
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => {
+      const download: BrowserDownload = {
+        id: row.id as string, conversationId: row.conversationId as string, name: row.name as string,
+        state: row.state as BrowserDownload['state'], startedAt: row.startedAt as number,
+      };
+      for (const key of ['tabId', 'path', 'url', 'mimeType', 'reason'] as const)
+        if (typeof row[key] === 'string') download[key] = row[key] as string;
+      for (const key of ['bytes', 'total', 'finishedAt'] as const)
+        if (typeof row[key] === 'number') download[key] = row[key] as number;
+      return download;
+    });
+  }
+  saveBrowserDownload(download: BrowserDownload): void {
+    this.getConversation(download.conversationId);
+    this.db
+      .prepare(
+        `INSERT INTO browser_downloads(id,conversationId,tabId,name,path,url,mimeType,state,reason,bytes,total,startedAt,finishedAt)
+      VALUES (@id,@conversationId,@tabId,@name,@path,@url,@mimeType,@state,@reason,@bytes,@total,@startedAt,@finishedAt)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name,path=excluded.path,url=excluded.url,mimeType=excluded.mimeType,
+        state=excluded.state,reason=excluded.reason,bytes=excluded.bytes,total=excluded.total,finishedAt=excluded.finishedAt`,
+      )
+      .run({
+        id: download.id, conversationId: download.conversationId, tabId: download.tabId ?? null, name: download.name,
+        path: download.path ?? null, url: download.url ?? null, mimeType: download.mimeType ?? null, state: download.state,
+        reason: download.reason ?? null, bytes: download.bytes ?? null, total: download.total ?? null,
+        startedAt: download.startedAt, finishedAt: download.finishedAt ?? null,
+      });
+  }
+  deleteBrowserDownload(id: string): void {
+    this.db.prepare('DELETE FROM browser_downloads WHERE id = ?').run(id);
   }
   close(): void {
     if (this.db.open) this.db.close();

@@ -16,8 +16,17 @@ function fixture(existing: NotebookEntry[] = []) {
 const body = (save: ReturnType<typeof fixture>['saveNotebook']) => save.mock.calls.at(-1)![0].body;
 
 describe('the plan a chat works from', () => {
+  it('is offered only when the human turns Plan on', () => {
+    // A model that can see a plan tool reaches for it, and a two-line request
+    // answered with a written plan costs a turn (user, 17.09). Off is default.
+    expect(toolDefinitions(false, false).some(item => item.function.name === 'plan_write')).toBe(false);
+    expect(toolDefinitions(false, true, { skills: [], mcp: [] }, true)
+      .some(item => item.function.name === 'plan_write')).toBe(true);
+  });
+
   it('carries its own policy, including when not to make one', () => {
-    const plan = toolDefinitions(false, false).find(item => item.function.name === 'plan_write');
+    const plan = toolDefinitions(false, false, { skills: [], mcp: [] }, true)
+      .find(item => item.function.name === 'plan_write');
     // opencode's planning is entirely prompt-driven and works; what carries it
     // is a tool whose description is the policy, not a line in a system prompt.
     expect(plan?.function.description).toContain('Do NOT use it when');

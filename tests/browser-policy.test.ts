@@ -1,7 +1,7 @@
 import { describe,it,expect } from 'vitest';
 import {browserURL,checkAgentAccess,checkAgentOwnership,safeBounds} from '../src/main/browser/policy';
 import type { BrowserTab } from '../src/shared/types';
-const tab:BrowserTab={id:'one',conversationId:'chat',title:'Page',url:'https://example.com',control:'off',loading:false,canGoBack:false,canGoForward:false};
+const tab:BrowserTab={id:'one',conversationId:'chat',title:'Page',url:'https://example.com',control:'off',loading:false,progress:null,canGoBack:false,canGoForward:false};
 describe('browser safety boundary',()=>{
   it('normalizes addresses and search without executable schemes',()=>{
     expect(browserURL('example.com')).toBe('https://example.com/');

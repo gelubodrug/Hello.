@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { convertToLlm, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import helloTools from '../src/main/chat/pi-extension';
 import type { ToolDefinition } from '../src/main/chat/tools';
 import { createPiToolBridge } from '../src/main/chat/pi-tool-bridge';
@@ -88,6 +88,60 @@ describe('Hello tools inside a running Pi reply', () => {
     // Activated now, so the step after this one really has it.
     expect(pi.active).toContain('command_run');
     expect(await text()).not.toMatch(/just enabled/);
+  });
+});
+
+describe('live browser metadata is not a new user turn', () => {
+  type Messages = Parameters<typeof convertToLlm>[0];
+  const history = () => [
+    { role: 'user', content: 'Read the two current tabs.', timestamp: 1 },
+    { role: 'assistant', content: [
+      { type: 'toolCall', id: 'read-a', name: 'browser_read', arguments: { tabId: 'a' } },
+      { type: 'toolCall', id: 'read-b', name: 'browser_read', arguments: { tabId: 'b' } },
+    ], timestamp: 2 },
+    { role: 'toolResult', toolCallId: 'read-a', toolName: 'browser_read',
+      content: [{ type: 'text', text: 'First page.' }], isError: false, timestamp: 3 },
+    { role: 'toolResult', toolCallId: 'read-b', toolName: 'browser_read',
+      content: [{ type: 'text', text: 'Second page.' }], isError: false, timestamp: 4 },
+  ];
+  const snapshot = (messages: unknown[]) => pi.handlers.get('context')!({
+    type: 'context', messages,
+  }) as Promise<{ messages: Messages }>;
+
+  it('leaves both tool results last after Pi converts custom metadata to a user message', async () => {
+    await started();
+    const original = history();
+    const result = await snapshot(original);
+    const wire = convertToLlm(result.messages);
+    expect(wire.map(message => message.role)).toEqual([
+      'user', 'user', 'assistant', 'toolResult', 'toolResult',
+    ]);
+    expect(wire.slice(-2)).toEqual(original.slice(-2));
+    expect(result.messages.slice(1)).toEqual(original);
+    expect(original).toHaveLength(4);
+  });
+
+  it('replaces its ephemeral snapshot before the newest human steer without editing history', async () => {
+    await started();
+    const original = history();
+    const first = await snapshot(original);
+    const steer = { role: 'user', content: 'Continue with the second page.', timestamp: 5 };
+    const next = await snapshot([...first.messages, steer]);
+    const metadata = next.messages.filter(message => message.role === 'custom');
+    expect(metadata).toHaveLength(1);
+    expect(next.messages.slice(0, original.length)).toEqual(original);
+    expect(next.messages.at(-2)).toBe(metadata[0]);
+    expect(next.messages.at(-1)).toEqual(steer);
+  });
+
+  it('keeps an assistant and its tool results together after compaction removed the user turn', async () => {
+    await started();
+    const remaining = history().slice(1);
+    const result = await snapshot(remaining);
+    expect(convertToLlm(result.messages).map(message => message.role)).toEqual([
+      'user', 'assistant', 'toolResult', 'toolResult',
+    ]);
+    expect(result.messages.slice(1)).toEqual(remaining);
   });
 });
 

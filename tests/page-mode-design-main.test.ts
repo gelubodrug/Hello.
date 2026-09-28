@@ -113,7 +113,7 @@ describe('Design mode — controller gating', () => {
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'hello-design-'));
-    tab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, canGoBack: false, canGoForward: false };
+    tab = { id: 'tab-1', conversationId: 'chat-1', title: 'App', url: 'https://example.test/app', control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false };
     guest = native.makeGuest(native.partition) as Guest;
     guest.url = tab.url;
     guest.capturePage = vi.fn(async () => new Image(1600, 1200));

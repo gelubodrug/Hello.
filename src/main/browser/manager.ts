@@ -1,8 +1,12 @@
 import { BrowserWindow, session } from "electron";
-import type { HandlerDetails, Session, WebContents, WebPreferences } from "electron";
+import type { DownloadItem, HandlerDetails, Session, WebContents, WebFrameMain, WebPreferences } from "electron";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { basename, extname, join } from "node:path";
 import type {
   AgentControl,
+  BrowserDownload,
+  BrowserDownloadEvent,
   BrowserTab,
   BrowserLifecycleEvent,
   BrowserContent,
@@ -17,16 +21,23 @@ import {
 } from "./policy";
 import {
   AGENT_INPUT_WORLD_ID,
+  DOWNLOAD_FINISH_MS,
+  DOWNLOAD_START_MS,
   VIEWPORT_SCRIPT,
   checkPointerInViewport,
   checkRegionInViewport,
   encodeFrame,
+  keyEvents,
   pause,
   pointerEvents,
   type PointerAction,
   type Screenshot,
   type ScreenshotRequest,
 } from "./agent-input";
+import {
+  ERASE_SCRIPT, FRAME_BOXES_SCRIPT, READ_HEADER, hitScript, locateScript, matchesUrl, scanScript, typeScript, waitScript,
+  type ElementTarget, type ScanResult, type WaitCondition,
+} from "./agent-target";
 
 interface PendingOperation {
   cancel(error: Error): void;
@@ -54,7 +65,25 @@ interface RecordTab {
   servedUrl?: string;
   pending: Set<PendingOperation>;
   navigation: number;
+  /** The frames the latest read numbered, each with its range of refs and where it sits on the page. */
+  refs?: FrameRefs[];
 }
+interface FrameRefs {
+  frame: WebFrameMain;
+  /** Where the frame sits in the page, in page CSS px; (0, 0) for the main frame. */
+  offset: { x: number; y: number };
+  /** What browser_read calls it: "" for the main frame. */
+  label: string;
+  start: number;
+  end: number;
+}
+/** How many frames one read looks into, and how deep. */
+const FRAME_LIMIT = 12;
+const FRAME_DEPTH = 3;
+/** How much of a child frame's text a read takes. */
+const FRAME_TEXT_LIMIT = 6_000;
+/** How often a wait looks again. */
+const WAIT_POLL_MS = 250;
 /**
  * What happened to a tab's page, for main-process observers that must stop
  * using it (page modes). Observers see; they never decide anything here.
@@ -64,9 +93,65 @@ export type BrowserPageEvent =
   | { type: "active"; id: string | null }
   | { type: "detached"; id: string }
   | { type: "closed"; id: string };
+/** A file name a page proposed, made safe for the chat's folder: no path in
+ *  it, nothing hidden, nothing unprintable, and never empty. */
+export function safeFileName(proposed: string): string {
+  const name = basename(proposed.replace(/[\\/]+/g, "/"))
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 120);
+  return name || "download";
+}
+/** The path that name gets in the folder, numbered rather than overwriting. */
+export function uniquePath(folder: string, name: string): string {
+  const extension = extname(name);
+  const stem = name.slice(0, name.length - extension.length) || name;
+  let candidate = join(folder, name);
+  for (let index = 2; existsSync(candidate) && index < 1_000; index += 1)
+    candidate = join(folder, `${stem}-${index}${extension}`);
+  return candidate;
+}
 /** How long a main-process operation waits for the window to host a page. */
 export const BROWSER_ATTACH_TIMEOUT_MS = 10_000;
 export const BROWSER_OPERATION_TIMEOUT_MS = 15_000;
+/** A click on something that speaks of a download waits this long for it to appear… */
+export const DOWNLOAD_NOTICE_MS = 3_000;
+/** …and any other click only glances, so an ordinary click is not three seconds slower. */
+export const DOWNLOAD_GLANCE_MS = 400;
+/** The words on a control that make a download likely, so the click's result waits for it. */
+const SPEAKS_OF_DOWNLOAD = /download|export|save|pdf|csv|zip|xlsx|descarc|invoice|factur|receipt/i;
+/** …and this long more for it to finish, so a small file is reported saved. */
+export const DOWNLOAD_SETTLE_MS = 1_500;
+/** Progress is told to the window at most this often. */
+const DOWNLOAD_PROGRESS_MS = 250;
+/**
+ * What a pointer action's point was on, for its result: a click on a control
+ * says the control and its ref, and that a ref finds it wherever the page has
+ * scrolled while a point does not.
+ */
+function landing(hit: unknown, action: PointerAction["action"]): string {
+  if (!hit || typeof hit !== "object") return "";
+  const { what, ref, control } = hit as { what?: unknown; ref?: unknown; control?: unknown };
+  if (typeof what !== "string" || !what) return "";
+  const verb = action === "drag" ? "It started on" : action === "hover" ? "It is over" : "It landed on";
+  const handle = typeof ref === "string" && /^e\d{1,4}$/.test(ref) ? ref : "";
+  const on = `${verb} ${what.slice(0, 160)}${handle ? ` (${handle})` : ""}`;
+  if (action !== "click" || control !== true) return ` ${on}.`;
+  return ` ${on} — a control. Click controls with browser_click ${handle ? `ref "${handle}"` : "label"}: it finds the control wherever the page has scrolled, and a point does not.`;
+}
+/** Where a file came from, for the list: origin and path, never a query string or credentials. */
+export function sourceOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return undefined;
+    return `${parsed.origin}${parsed.pathname}`.slice(0, 2000);
+  } catch {
+    return undefined;
+  }
+}
 const browserPreferences: WebPreferences = {
   partition: "persist:hello-web",
   sandbox: true,
@@ -78,11 +163,25 @@ const browserPreferences: WebPreferences = {
   webSecurity: true,
   allowRunningInsecureContent: false,
   backgroundThrottling: true,
+  // The built-in PDF viewer: an invoice, a statement, a paper open in the
+  // tab like any page. Without it a PDF is a download, and downloads are
+  // refused here.
+  plugins: true,
 };
 interface BrowserOptions {
   window: BrowserWindow;
   initial: BrowserTab[];
   conversationExists(id: string): boolean;
+  /** The folder attached to a chat, where a page's download lands first. */
+  folderFor?(id: string): string | null;
+  /** Where a download lands when the chat has no folder: the system's Downloads. */
+  downloadsFolder?(): string | null;
+  /** This chat's downloads from earlier sessions, oldest first. */
+  initialDownloads?: BrowserDownload[];
+  saveDownload?(download: BrowserDownload): void;
+  removeDownload?(id: string): void;
+  /** A download changed, or left the list — for the window's downloads panel. */
+  downloadEvent?(event: BrowserDownloadEvent): void;
   save(tab: BrowserTab): void;
   remove(id: string): void;
   emit(tab: BrowserTab): void;
@@ -102,11 +201,146 @@ export class BrowserManager {
   private attachNonces = new Map<string, string>();
   /** The record whose guest Electron is attaching right now. */
   private pendingGuest?: { record: RecordTab; nonce: string };
-  private blockDownload = (event: { preventDefault(): void }) =>
-    event.preventDefault();
+  /** This chat's downloads, by id, oldest first — every session's. */
+  private downloads = new Map<string, BrowserDownload>();
+  /** The ones still saving, so one can be cancelled. */
+  private items = new Map<string, DownloadItem>();
+  /**
+   * A download lands in the chat's attached folder, or — like any browser's —
+   * in the system Downloads folder, and it lands on the CHAT's list, not on a
+   * tab: a "Download invoice" that opens a popup for the file put it on a tab
+   * the person never saw and the model never checked, so the click came back
+   * with nothing and the model reported "0 downloads confirmed" over files
+   * that were on disk (user, 24.09: "ca în Chrome, profesional"). The popup
+   * that only carried a file is closed again, as a browser closes it, and the
+   * download is the opener's. Only a download from no page of ours is refused.
+   */
+  private onDownload = (event: { preventDefault(): void }, item?: DownloadItem, contents?: WebContents) => {
+    const record = contents
+      ? [...this.records.values()].find(candidate => candidate.contents === contents)
+      : undefined;
+    if (!record || !item) { event.preventDefault(); return; }
+    const name = safeFileName(item.getFilename?.() ?? "");
+    // A popup that turned into a download never showed a page: it goes, the
+    // way a browser closes the tab a download link opened, and the file is
+    // the opener's.
+    const carrier = record.tab.openerId && (contents?.getURL?.() ?? "about:blank") === "about:blank"
+      ? record : undefined;
+    const tabId = carrier?.tab.openerId && this.records.has(carrier.tab.openerId) ? carrier.tab.openerId : record.tab.id;
+    const download: BrowserDownload = {
+      id: randomUUID(), conversationId: record.tab.conversationId, tabId, name,
+      url: sourceOf(item.getURL?.()), mimeType: item.getMimeType?.() || undefined,
+      state: "saving", startedAt: Date.now(), bytes: 0,
+      ...(item.getTotalBytes?.() > 0 ? { total: item.getTotalBytes() } : {}),
+    };
+    const folder = this.options.folderFor?.(record.tab.conversationId) ?? this.options.downloadsFolder?.() ?? null;
+    if (!folder) {
+      event.preventDefault();
+      this.noteDownload({ ...download, state: "refused", reason: "there is no folder to save into", finishedAt: Date.now() });
+      return;
+    }
+    download.path = uniquePath(folder, name);
+    download.name = basename(download.path);
+    item.setSavePath(download.path);
+    this.items.set(download.id, item);
+    this.noteDownload(download);
+    let published = Date.now();
+    item.on("updated", () => {
+      const now = Date.now();
+      if (now - published < DOWNLOAD_PROGRESS_MS) return;
+      published = now;
+      const total = item.getTotalBytes();
+      this.noteDownload({ ...download, bytes: item.getReceivedBytes(), ...(total > 0 ? { total } : {}) }, false);
+    });
+    item.once("done", (_event, state) => {
+      this.items.delete(download.id);
+      const total = item.getTotalBytes();
+      const done: BrowserDownload = {
+        ...this.downloads.get(download.id) ?? download,
+        state: state === "completed" ? "saved" : state === "cancelled" ? "cancelled" : "failed",
+        ...(state === "completed" ? {} : { reason: state === "cancelled" ? "cancelled" : "interrupted" }),
+        bytes: item.getReceivedBytes(), ...(total > 0 ? { total } : {}), finishedAt: Date.now(),
+      };
+      if (!this.downloads.has(download.id)) return; // Removed from the list while saving.
+      this.noteDownload(done);
+      if (!this.disposed) this.options.lifecycle?.({ type: "downloaded", id: done.tabId ?? record.tab.id, conversationId: done.conversationId, download: { ...done } });
+    });
+    if (carrier) setImmediate(() => { if (this.records.get(carrier.tab.id) === carrier) this.close(carrier.tab.id, true); });
+  };
+  /** Keep, tell the window, and — unless it is a progress tick — keep on disk. */
+  private noteDownload(download: BrowserDownload, persist = true): void {
+    if (this.disposed) return;
+    this.downloads.set(download.id, download);
+    if (persist) this.options.saveDownload?.({ ...download });
+    this.options.downloadEvent?.({ type: "updated", download: { ...download } });
+  }
+  /** This chat's downloads, newest first. */
+  downloadsOf(conversationId: string): BrowserDownload[] {
+    return [...this.downloads.values()].filter(download => download.conversationId === conversationId)
+      .sort((a, b) => b.startedAt - a.startedAt).map(download => ({ ...download }));
+  }
+  private download(id: string): BrowserDownload {
+    const download = this.downloads.get(id);
+    if (!download) throw new Error("This download is no longer listed.");
+    return download;
+  }
+  /** Where this chat's downloads land: its folder, else the system's Downloads. */
+  downloadFolder(conversationId: string): string {
+    const folder = this.options.folderFor?.(conversationId) ?? this.options.downloadsFolder?.() ?? null;
+    if (!folder) throw new Error("There is no folder to save into.");
+    return folder;
+  }
+  /** The saved file's path, for opening or revealing it. */
+  downloadPath(id: string): string {
+    const download = this.download(id);
+    if (download.state !== "saved" || !download.path) throw new Error(download.state === "saving" ? "This file is still being saved." : "This file was not saved.");
+    if (!existsSync(download.path)) throw new Error("This file is no longer where it was saved.");
+    return download.path;
+  }
+  cancelDownload(id: string): void {
+    const download = this.download(id);
+    if (download.state !== "saving") return;
+    this.items.get(id)?.cancel();
+  }
+  /** Off the list; a file being saved is cancelled first. The file stays. */
+  removeDownload(id: string): void {
+    const download = this.download(id);
+    this.items.get(id)?.cancel();
+    this.items.delete(id);
+    this.downloads.delete(id);
+    this.options.removeDownload?.(id);
+    this.options.downloadEvent?.({ type: "removed", id, conversationId: download.conversationId });
+  }
+  /** Every finished download of this chat off the list. */
+  clearDownloads(conversationId: string): void {
+    for (const download of this.downloadsOf(conversationId))
+      if (download.state !== "saving") this.removeDownload(download.id);
+  }
+  /**
+   * What this chat saved, or could not, since a moment — for the result of
+   * the click that caused it. A page takes a moment to ask, and a generated
+   * invoice a few more: the wait is for the first download to appear, then a
+   * short one for it to finish.
+   */
+  private async downloadsSince(conversationId: string, since: number, signal?: AbortSignal, patienceMs = DOWNLOAD_GLANCE_MS): Promise<string> {
+    const fresh = () => this.downloadsOf(conversationId).filter(download => download.startedAt >= since);
+    for (let waited = 0; !fresh().length && waited < patienceMs; waited += 100) await pause(100, signal);
+    for (let waited = 0; fresh().some(download => download.state === "saving") && waited < DOWNLOAD_SETTLE_MS; waited += 200) await pause(200, signal);
+    const downloads = fresh();
+    if (!downloads.length) return "";
+    return " " + downloads.map(download => download.state === "refused"
+      ? `The page offered a download (${download.name || "a file"}) and it was refused: ${download.reason}.`
+      : download.state === "saved"
+        ? `Saved ${download.name} → ${download.path}${download.bytes ? ` (${download.bytes} bytes)` : ""}. It is on disk now; do not look for another way to fetch it.`
+        : download.state === "saving"
+          ? `Download started: ${download.name} → ${download.path}${download.total ? ` (${download.bytes ?? 0} of ${download.total} bytes)` : ""}; still saving. It will be on disk in a moment — browser_downloads shows when; do not look for another way to fetch it.`
+          : `The download of ${download.name} ${download.state === "cancelled" ? "was cancelled" : `failed (${download.reason ?? "interrupted"})`}.`,
+    ).join(" ");
+  }
   private hideForShellLoad = () => this.setActive(null);
   private pageObservers = new Set<(event: BrowserPageEvent) => void>();
   constructor(private options: BrowserOptions) {
+    for (const download of options.initialDownloads ?? []) this.downloads.set(download.id, { ...download });
     for (const saved of options.initial) {
       let url = "about:blank";
       try {
@@ -119,7 +353,11 @@ export class BrowserManager {
           tab: {
             ...saved,
             url,
-            control: "off",
+            // The grant the human set on this page comes back with it (user,
+            // 22.09: "să se rețină setările paginilor AI permission între
+            // sesiuni"). A generated document is the exception: its Full is
+            // granted again when it is served again, never restored blind.
+            control: !saved.source && isAgentControl(saved.control) ? saved.control : "off",
             loading: false,
             canGoBack: false,
             canGoForward: false,
@@ -136,10 +374,23 @@ export class BrowserManager {
     this.securePartition(this.partition);
     options.window.webContents.on("did-start-loading", this.hideForShellLoad);
   }
+  /**
+   * Every permission a page asks for is refused — but one: filling the
+   * screen, as a video does in any browser. Chromium asks the session for
+   * `fullscreen` before requestFullscreen() does anything, and the flat
+   * refusal left every video's full-screen button dead (user, 26.09: "de ce
+   * full screen la video nu face nimic?"). Only the page of the tab on screen
+   * gets it: a tab out of sight never takes over the window.
+   */
   private securePartition(partition: Session): void {
-    partition.setPermissionCheckHandler(() => false);
-    partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    partition.on("will-download", this.blockDownload);
+    partition.setPermissionCheckHandler((contents, permission) => permission === "fullscreen" && this.isShown(contents));
+    partition.setPermissionRequestHandler((contents, permission, callback) => callback(permission === "fullscreen" && this.isShown(contents)));
+    partition.on("will-download", this.onDownload);
+  }
+  /** Whether a page is the one the window is showing now. */
+  private isShown(contents: WebContents | null | undefined): boolean {
+    if (!contents || this.disposed || !this.activeId) return false;
+    return this.records.get(this.activeId)?.contents === contents;
   }
   private preferences(record: RecordTab, native?: WebPreferences): WebPreferences {
     let selected = this.partition;
@@ -285,7 +536,7 @@ export class BrowserManager {
     const selected = this.previewPartitions.get(partition);
     if (!selected) return;
     this.previewPartitions.delete(partition);
-    selected.removeListener("will-download", this.blockDownload);
+    selected.removeListener("will-download", this.onDownload);
     // These uniquely named memory partitions are never reused or persisted.
     void selected.clearStorageData().catch(() => {});
     void selected.clearCache().catch(() => {});
@@ -333,7 +584,8 @@ export class BrowserManager {
     if (record.tab.source)
       this.options.save({ ...record.tab, control: "off", url: "about:blank", loading: false });
     else if (!record.tab.pageOwned && !record.tab.sessionOnly)
-      this.options.save({ ...record.tab, control: "off" });
+      // With its grant: what the human chose for this page is kept for it.
+      this.options.save({ ...record.tab });
     this.options.emit({ ...record.tab });
     this.notifyPage({ type: "updated", tab: { ...record.tab } });
   }
@@ -363,6 +615,7 @@ export class BrowserManager {
     if (error) {
       record.tab.error = `${error.message} Reload this page to continue.`;
       record.tab.loading = false;
+      record.tab.progress = null;
       this.publish(record);
     }
   }
@@ -436,26 +689,34 @@ export class BrowserManager {
     });
     contents.setWindowOpenHandler((details) => {
       if (record.contents !== contents || this.disposed) return { action: "deny" };
+      let url: string;
       try {
-        browserURL(details.url);
+        url = browserURL(details.url);
       } catch {
         return { action: "deny" };
       }
-      // A <webview> cannot adopt an existing WebContents, so a popup becomes a
-      // real child window instead of a tab. That keeps what a tab could not:
-      // its opener, postMessage and the POST body Chromium already prepared.
-      return {
-        action: "allow",
-        outlivesOpener: true,
-        overrideBrowserWindowOptions: {
-          width: 900,
-          height: 700,
-          title: "Hello.",
-          backgroundColor: "#171819",
-          autoHideMenuBar: true,
-          webPreferences: this.preferences(record),
-        },
-      };
+      // A page that opens a window gets a TAB beside the one it came from,
+      // never a window of its own outside the app: an invoice's "View" opened
+      // a native window the human had to hunt for and the agent could not see
+      // at all (user, 22.09). What a child window would have kept — its
+      // opener, postMessage, a POST body Chromium had already prepared — is
+      // given up for that; a blank popup has nothing to show and is refused.
+      if (!/^https?:/i.test(url)) return { action: "deny" };
+      const popup = this.newRecord(record.tab.conversationId, url, record.tab.id, record.partition);
+      // It is the opener's page carrying on in another tab, so the human's
+      // grant on that page goes with it: a "View" the agent clicked opens
+      // something the agent can read.
+      popup.tab.control = record.tab.control;
+      this.publish(popup);
+      this.options.lifecycle?.({
+        type: "opened",
+        tab: { ...popup.tab },
+        foreground: details.disposition !== "background-tab",
+      });
+      void this.navigate(popup.tab.id, url).catch(() => {
+        /* A failed load is shown on the tab itself. */
+      });
+      return { action: "deny" };
     });
     // window.close() destroys the native contents, not just its pixels. Remove
     // the corresponding pill and let the renderer return to the opener.
@@ -499,6 +760,7 @@ export class BrowserManager {
           (this.nonceOf(contents.getTitle()) ? "" : contents.getTitle()) ||
           (url === "about:blank" ? "New tab" : record.tab.title),
         loading: contents.isLoading(),
+        progress: contents.isLoading() ? (record.tab.progress ?? 0) : null,
         canGoBack: contents.navigationHistory.canGoBack(),
         canGoForward: contents.navigationHistory.canGoForward(),
       };
@@ -509,9 +771,19 @@ export class BrowserManager {
       // getURL can still be the previous page (or about:blank) at load start.
       // Keep the requested address until a navigation actually commits.
       record.tab.loading = true;
+      record.tab.progress = 0;
       record.tab.error = null;
       this.publish(record);
     });
+    // Electron's WebContents typing omits this event in some versions.
+    (contents.on as (event: string, fn: (...a: unknown[]) => void) => void)(
+      "did-change-loading-progress",
+      (_event, progress) => {
+        if (contents.isDestroyed() || record.contents !== contents) return;
+        record.tab.progress = Math.round((progress as number) * 100);
+        this.publish(record);
+      },
+    );
     contents.on("did-stop-loading", refresh);
     contents.on("did-navigate", refresh);
     contents.on("did-navigate-in-page", refresh);
@@ -523,6 +795,7 @@ export class BrowserManager {
         try { if (failedURL) record.tab.url = browserURL(failedURL); } catch { /* Keep the last allowed address. */ }
         record.tab.error = description || "The page could not be loaded.";
         record.tab.loading = false;
+        record.tab.progress = null;
         this.publish(record);
       },
     );
@@ -531,6 +804,7 @@ export class BrowserManager {
       this.cancelPending(record, new Error("The page stopped responding."));
       record.tab.error = "The page stopped responding. Reload to try again.";
       record.tab.loading = false;
+      record.tab.progress = null;
       this.publish(record);
     });
     // The page a record already carries is loaded by adoptGuest, once.
@@ -622,6 +896,7 @@ export class BrowserManager {
       url: browserURL(url),
       control: "off",
       loading: false,
+      progress: null,
       canGoBack: false,
       canGoForward: false,
       ...(openerId ? { pageOwned: true, openerId } : {}),
@@ -654,6 +929,7 @@ export class BrowserManager {
     record.tab.url = url;
     record.tab.error = null;
     record.tab.loading = url !== "about:blank";
+    record.tab.progress = url !== "about:blank" ? 0 : null;
     this.publish(record);
     try {
       await this.operation(record, () => contents.loadURL(url), {
@@ -668,6 +944,7 @@ export class BrowserManager {
         throw error;
       if (String(error).includes("ERR_ABORTED")) return;
       record.tab.loading = false;
+      record.tab.progress = null;
       record.tab.error = `Could not load ${new URL(url === "about:blank" ? previous : url).hostname || "this page"}.`;
       this.publish(record);
       throw new Error(record.tab.error);
@@ -766,21 +1043,7 @@ export class BrowserManager {
       return { title: "New tab", url: "about:blank", text: "" };
     const contents = await this.whenAttached(record, signal);
     const frame = contents.mainFrame;
-    const text = await this.operation(
-      record,
-      () =>
-        frame.executeJavaScript(`(() => {
-      const text = document.body?.innerText?.slice(0, 28000) || '';
-      const controls = [...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"]')]
-        .filter(el => el.getBoundingClientRect().width && el.getBoundingClientRect().height).slice(0,80)
-        .map(el => { const id = el.id ? '#' + CSS.escape(el.id) : null;
-          const selector = id || (el.tagName.toLowerCase() + (el.getAttribute('name') ? '[name=' + JSON.stringify(el.getAttribute('name')) + ']' : ''));
-          return selector + ': ' + (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || '').slice(0,140);
-        });
-      return text + '\\n\\nVisible controls (selectors may match more than one element):\\n' + controls.join('\\n');
-    })()`),
-      { signal },
-    );
+    const scanned = await this.scan(record, contents, signal, false);
     // Revocation during a pending read must not deliver the page to the agent.
     checkAgentAccess(
       this.record(id).tab,
@@ -788,13 +1051,86 @@ export class BrowserManager {
     );
     if (frame.isDestroyed() || contents.mainFrame !== frame)
       throw new Error("The page changed during this read.");
-    if (typeof text !== "string")
-      throw new Error("The page did not return text.");
     return {
       title: record.tab.title,
       url: record.tab.url,
-      text: text.slice(0, 45_000),
+      text: `${scanned.text}\n\n${scanned.lines.length ? `${READ_HEADER}\n${scanned.lines.join("\n")}` : "(No controls on this page yet.)"}${scanned.notes.length ? `\n${scanned.notes.join("\n")}` : ""}`.slice(0, 45_000),
     };
+  }
+  /**
+   * The page and the frames inside it, each frame scanned in its own world:
+   * a payment field or an embedded widget lives in an iframe, and a read
+   * that stops at the main frame never sees it (user, 24.09). Refs run on
+   * across frames, and a frame's centres are moved to page coordinates by
+   * where its <iframe> sits, so a click by ref lands on the page as it is.
+   * A frame that is blank, hidden, gone or off the page is left out.
+   */
+  private async scan(record: RecordTab, contents: WebContents, signal: AbortSignal | undefined, draw: boolean): Promise<{ text: string; lines: string[]; notes: string[]; frames: FrameRefs[] }> {
+    const placed: Array<{ frame: WebFrameMain; offset: { x: number; y: number }; label: string; depth: number }> =
+      [{ frame: contents.mainFrame, offset: { x: 0, y: 0 }, label: "", depth: 0 }];
+    for (let at = 0; at < placed.length && placed.length < FRAME_LIMIT; at += 1) {
+      const parent = placed[at];
+      const kids = parent.frame.frames ?? []; // A page of the window's own has no frames to speak of.
+      if (parent.depth >= FRAME_DEPTH || parent.frame.isDestroyed() || !kids.length) continue;
+      let boxes: Array<{ name: string; src: string; x: number; y: number; width: number; height: number }> = [];
+      try {
+        const listed = await this.operation(record, () => parent.frame.executeJavaScript(FRAME_BOXES_SCRIPT), { signal });
+        if (Array.isArray(listed)) boxes = listed.filter(box => box && typeof box === "object" && typeof box.x === "number" && typeof box.y === "number");
+      } catch { continue; }
+      const taken = new Set<number>();
+      for (const child of kids) {
+        if (placed.length >= FRAME_LIMIT) break;
+        if (child.isDestroyed() || !child.url || child.url === "about:blank") continue;
+        // Its <iframe>: by name, else by address, else the next one not yet taken.
+        const index = boxes.findIndex((box, i) => !taken.has(i) && child.name && box.name === child.name);
+        const byUrl = index < 0 ? boxes.findIndex((box, i) => !taken.has(i) && box.src && (box.src === child.url || child.url.startsWith(box.src))) : index;
+        const box = byUrl >= 0 ? byUrl : boxes.findIndex((_, i) => !taken.has(i));
+        if (box < 0) continue;
+        taken.add(box);
+        placed.push({ frame: child, offset: { x: parent.offset.x + boxes[box].x, y: parent.offset.y + boxes[box].y },
+          label: `frame "${child.name || sourceOf(child.url) || child.url}"`, depth: parent.depth + 1 });
+      }
+    }
+    let start = 1;
+    let text = "";
+    const lines: string[] = [];
+    const notes: string[] = [];
+    const frames: FrameRefs[] = [];
+    for (const entry of placed) {
+      let result: ScanResult;
+      try {
+        const answered = await this.operation(record, () => entry.frame.executeJavaScript(
+          scanScript({ start, offset: entry.offset, draw, textLimit: entry.label ? FRAME_TEXT_LIMIT : 28_000 })), { signal });
+        // A page answering with its words alone has no controls to list.
+        const scanned = typeof answered === "string" ? { text: answered, lines: [], count: 0 } : answered;
+        if (!scanned || typeof scanned !== "object" || typeof (scanned as ScanResult).text !== "string" || !Array.isArray((scanned as ScanResult).lines)) {
+          if (!entry.label) throw new Error("The page did not return text.");
+          continue;
+        }
+        result = scanned as ScanResult;
+      } catch (error) {
+        if (!entry.label) throw error;
+        continue; // A frame that navigated away or refused is not the page.
+      }
+      const count = Math.max(0, Math.min(result.lines.length, Number(result.count) || 0));
+      frames.push({ frame: entry.frame, offset: entry.offset, label: entry.label, start, end: start + count - 1 });
+      start += count;
+      lines.push(...result.lines.slice(0, count).map(line => (entry.label ? `${line} [in ${entry.label}]` : line)));
+      if (typeof result.note === "string" && result.note.trim())
+        notes.push(entry.label ? `${result.note.trim()} [in ${entry.label}]` : result.note.trim());
+      text += entry.label ? (result.text.trim() ? `\n\n--- ${entry.label} ---\n${result.text}` : "") : result.text;
+    }
+    record.refs = frames;
+    return { text, lines, notes, frames };
+  }
+  /** The frame a ref belongs to, from the latest read of this tab. */
+  private frameOf(record: RecordTab, target: ElementTarget, contents: WebContents): { frame: WebFrameMain; offset: { x: number; y: number } } {
+    if (!target.ref) return { frame: contents.mainFrame, offset: { x: 0, y: 0 } };
+    const number = Number(/^e(\d{1,4})$/i.exec(target.ref.trim())?.[1]);
+    const owner = record.refs?.find(entry => number >= entry.start && number <= entry.end);
+    if (!owner) throw new Error(`Ref ${target.ref} is not from the latest browser_read of this page. Read the page again and use a current ref.`);
+    if (owner.frame.isDestroyed()) throw new Error(`Ref ${target.ref} was in a frame that is gone now. Read the page again.`);
+    return { frame: owner.frame, offset: owner.offset };
   }
   async agentNavigate(
     conversationId: string,
@@ -810,7 +1146,7 @@ export class BrowserManager {
     conversationId: string,
     id: string,
     action: "click" | "type" | "scroll",
-    selector = "",
+    target: ElementTarget = {},
     value: string | number = "",
     signal?: AbortSignal,
   ): Promise<string> {
@@ -819,14 +1155,14 @@ export class BrowserManager {
     checkAgentAccess(record.tab, conversationId, true);
     if (!["click", "type", "scroll"].includes(action))
       throw new Error("Unknown browser action.");
-    if (selector.length > 1000 || String(value).length > 16000)
+    if ((target.selector?.length ?? 0) > 1000 || (target.label?.length ?? 0) > 500 || String(value).length > 16000)
       throw new Error("Browser action is too large.");
     const script =
       action === "scroll"
         ? `window.scrollBy({top:${Math.max(-5000, Math.min(5000, Number(value) || 0))},behavior:'instant'}); 'Scrolled page.'`
-        : `(() => {const elements = document.querySelectorAll(${JSON.stringify(selector)}); if(elements.length !== 1) throw new Error('Selector must match exactly one element.'); const el=elements[0]; if(!el.getBoundingClientRect().width) throw new Error('Element is not visible.');
-        ${action === "click" ? `el.click(); return 'Clicked element.';` : `if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) throw new Error('Element is not a text field.'); if(el.type === 'password' || el.type === 'file') throw new Error('Sensitive fields cannot be filled by this tool.'); const setter=Object.getOwnPropertyDescriptor(el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,'value').set; setter.call(el,${JSON.stringify(String(value))}); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return 'Entered text.';`}
-      })()`;
+        : action === "click"
+          ? locateScript(target)
+          : typeScript(target, String(value));
     const contents = await this.whenAttached(record, signal);
     // WebContents.executeJavaScript queues until load completion. Never enqueue a
     // mutation that could run after Off/Read was selected during a slow load.
@@ -834,7 +1170,9 @@ export class BrowserManager {
       throw new Error(
         "Wait for this page to finish loading before controlling it.",
       );
-    const frame = contents.mainFrame;
+    const since = Date.now();
+    // A ref names its frame too; words and selectors are looked for in the main frame.
+    const { frame, offset } = action === "scroll" ? { frame: contents.mainFrame, offset: { x: 0, y: 0 } } : this.frameOf(record, target, contents);
     checkAgentAccess(this.record(id).tab, conversationId, true);
     const result = await this.operation(
       record,
@@ -856,9 +1194,50 @@ export class BrowserManager {
         },
       },
     );
-    if (typeof result !== "string")
-      throw new Error("The page did not return an action result.");
-    return result.slice(0, 1000);
+    if (action !== "click") {
+      if (typeof result !== "string") throw new Error("The page did not return an action result.");
+      return result.slice(0, 1000);
+    }
+    // The page said where the control is; the click is real mouse input from
+    // here, the way a person's is — a DOM click left a menu that opens on
+    // pointerdown shut. Covered, it was clicked directly, and that is said.
+    const spot = result as { what?: unknown; x?: unknown; y?: unknown; covered?: unknown } | null;
+    if (!spot || typeof spot !== "object" || typeof spot.what !== "string" || typeof spot.x !== "number" || typeof spot.y !== "number")
+      throw new Error("The page did not say where the element is.");
+    const what = spot.what.slice(0, 200);
+    // The frame said where in itself; the page is where the mouse goes.
+    const x = Math.round(spot.x + offset.x);
+    const y = Math.round(spot.y + offset.y);
+    let said: string;
+    if (typeof spot.covered === "string")
+      said = `Clicked ${what} directly: its centre (${x}, ${y}) is covered by ${spot.covered.slice(0, 120)}. If nothing happened, close what covers it and click again.`;
+    else {
+      const click: PointerAction = { action: "click", x, y, button: "left", clickCount: 1 };
+      checkPointerInViewport(click, await this.viewport(record, contents, signal));
+      await this.sendPointer(record, contents, conversationId, click, signal);
+      said = `Clicked ${what} at (${x}, ${y}).`;
+    }
+    return said + await this.downloadsSince(record.tab.conversationId, since, signal, SPEAKS_OF_DOWNLOAD.test(what) ? DOWNLOAD_NOTICE_MS : DOWNLOAD_GLANCE_MS);
+  }
+  /**
+   * One key, as from the keyboard: Enter to send what was typed, Escape to
+   * close what opened, arrows to move. Re-checked like every event main sends.
+   */
+  async agentKey(conversationId: string, id: string, key: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    const events = keyEvents(key);
+    const record = this.record(id);
+    const contents = await this.agentPage(record, conversationId, true, signal);
+    const navigation = record.navigation;
+    await this.operation(record, async () => {
+      for (const event of events) {
+        checkAgentAccess(this.record(id).tab, conversationId, true);
+        if (record.contents !== contents || contents.isDestroyed() || record.navigation !== navigation)
+          throw new Error("The page changed during this key press.");
+        contents.sendInputEvent(event);
+      }
+    }, { signal, mutation: true });
+    return `Pressed ${key}.`;
   }
   /**
    * The page's viewport in CSS pixels, read in a world of its own: a page
@@ -888,12 +1267,25 @@ export class BrowserManager {
    * against the grant and the page first: revoked, stopped, navigated or
    * unmounted, and nothing more reaches the page.
    */
-  async agentPointer(conversationId: string, id: string, action: PointerAction, signal?: AbortSignal): Promise<void> {
+  async agentPointer(conversationId: string, id: string, action: PointerAction, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     const record = this.record(id);
     const contents = await this.agentPage(record, conversationId, true, signal);
-    const navigation = record.navigation;
+    const since = Date.now();
     checkPointerInViewport(action, await this.viewport(record, contents, signal));
+    // What is at the point, asked before the input goes: after it, the page may be another.
+    const at = action.action === "drag" ? action.from : action;
+    let landed = "";
+    try {
+      landed = landing(await this.operation(record, () => contents.mainFrame.executeJavaScript(hitScript(at.x, at.y)), { signal }), action.action);
+    } catch { /* The page would not say; the input still goes, as asked. */ }
+    await this.sendPointer(record, contents, conversationId, action, signal);
+    return landed + (action.action === "click" ? await this.downloadsSince(record.tab.conversationId, since, signal) : "");
+  }
+  /** The events of one pointer action, each re-checked before it is sent. */
+  private async sendPointer(record: RecordTab, contents: WebContents, conversationId: string, action: PointerAction, signal?: AbortSignal): Promise<void> {
+    const id = record.tab.id;
+    const navigation = record.navigation;
     const events = pointerEvents(action, contents.getZoomFactor());
     let stopped = false;
     await this.operation(record, async () => {
@@ -908,6 +1300,41 @@ export class BrowserManager {
     }, { signal, mutation: true, onCancel: () => { stopped = true; } });
   }
   /**
+   * Save what a page can reach into the chat's folder: the document open in
+   * the tab (an invoice PDF shown in it), or the file behind one of its links,
+   * fetched with the page's own session. A shell has no such session, and a
+   * model told the browser "cannot download" goes looking for one (user,
+   * 23.09: curl after curl at a Stripe invoice, the same paragraph each time).
+   * Needs Full, like the click on a Download link that ends the same way; the
+   * file lands where onDownload puts every download, or is refused there.
+   */
+  async agentDownload(conversationId: string, id: string, url: string | undefined, signal?: AbortSignal): Promise<BrowserDownload> {
+    signal?.throwIfAborted();
+    const record = this.record(id);
+    const contents = await this.agentPage(record, conversationId, true, signal);
+    const target = browserURL(url ?? record.tab.url);
+    if (target === "about:blank") throw new Error("This tab shows no page to download from.");
+    // What this tab started since the request, as long as the tab is still there.
+    const since = Date.now();
+    const noted = (): BrowserDownload | undefined => {
+      if (this.records.get(id) !== record) throw new Error("The tab was closed while its download was starting.");
+      return this.downloadsOf(record.tab.conversationId).find(download => download.tabId === id && download.startedAt >= since);
+    };
+    contents.downloadURL(target);
+    let download = noted();
+    for (let waited = 0; !download && waited < DOWNLOAD_START_MS; waited += 100) {
+      await pause(100, signal);
+      download = noted();
+    }
+    if (!download)
+      throw new Error(`Nothing started downloading from ${target} within ${DOWNLOAD_START_MS / 1000} s: that address is not a file the page can fetch. Read the page for the file's own link and use that address.`);
+    for (let waited = 0; download.state === "saving" && waited < DOWNLOAD_FINISH_MS; waited += 250) {
+      await pause(250, signal);
+      download = this.downloads.get(download.id) ?? download;
+    }
+    return { ...download };
+  }
+  /**
    * Pictures of what the tab is painting, taken by main. Reading pixels is
    * reading the page, so it needs Read like any read, checked again after
    * every picture: Off chosen while one was taken means no picture.
@@ -919,19 +1346,67 @@ export class BrowserManager {
     const navigation = record.navigation;
     const viewport = await this.viewport(record, contents, signal);
     if (request.region) checkRegionInViewport(request.region, viewport);
+    // Annotated: each control's ref is written on the page before the
+    // picture and taken off after, and the picture comes with the list — so
+    // what the model sees is what browser_click takes (agent-browser's
+    // --annotate; user, 24.09).
+    const drawn = request.refs ? await this.scan(record, contents, signal, true) : undefined;
     const frames: Screenshot["frames"] = [];
-    for (let index = 0; index < request.frames; index++) {
-      if (index) await pause(request.intervalMs, signal);
-      checkAgentAccess(this.record(id).tab, conversationId);
-      if (record.contents !== contents || contents.isDestroyed() || record.navigation !== navigation)
-        throw new Error("The page changed during this screenshot.");
-      const image = await this.operation(record, () => contents.capturePage(), { signal });
-      checkAgentAccess(this.record(id).tab, conversationId);
-      if (image.isEmpty())
-        throw new Error("The page returned no picture. A tab whose pane is not on screen may have nothing painted; say so rather than retrying.");
-      frames.push(encodeFrame(image, viewport, request.region));
+    try {
+      for (let index = 0; index < request.frames; index++) {
+        if (index) await pause(request.intervalMs, signal);
+        checkAgentAccess(this.record(id).tab, conversationId);
+        if (record.contents !== contents || contents.isDestroyed() || record.navigation !== navigation)
+          throw new Error("The page changed during this screenshot.");
+        const image = await this.operation(record, () => contents.capturePage(), { signal });
+        checkAgentAccess(this.record(id).tab, conversationId);
+        if (image.isEmpty())
+          throw new Error("The page returned no picture. A tab whose pane is not on screen may have nothing painted; say so rather than retrying.");
+        frames.push(encodeFrame(image, viewport, request.region));
+      }
+    } finally {
+      for (const entry of drawn?.frames ?? [])
+        if (!entry.frame.isDestroyed()) void entry.frame.executeJavaScript(ERASE_SCRIPT).catch(() => { /* the page went */ });
     }
-    return { frames, viewport };
+    return { frames, viewport, ...(drawn ? { legend: drawn.lines.join("\n") } : {}) };
+  }
+  /**
+   * Wait for the page to be somewhere — words on it, a control, an address,
+   * the load done, or simply a while — instead of reading a page still
+   * arriving (agent-browser's wait; user, 24.09). Words and controls are
+   * read, so they need Read; an address, the load and time are the tab's.
+   */
+  async agentWait(conversationId: string, id: string, condition: WaitCondition, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    const record = this.record(id);
+    const inspects = condition.text !== undefined || condition.target !== undefined;
+    if (inspects) checkAgentAccess(record.tab, conversationId); else checkAgentOwnership(record.tab, conversationId);
+    const began = Date.now();
+    const elapsed = () => `${((Date.now() - began) / 1000).toFixed(1)} s`;
+    if (condition.ms !== undefined) {
+      await pause(condition.ms, signal);
+      return `Waited ${condition.ms} ms.`;
+    }
+    const wanted = condition.text !== undefined ? `the words ${JSON.stringify(condition.text)}`
+      : condition.target ? `a control ${JSON.stringify(condition.target)}`
+        : condition.url !== undefined ? `an address matching ${JSON.stringify(condition.url)}` : "the page to finish loading";
+    const contents = await this.whenAttached(record, signal);
+    for (;;) {
+      if (inspects) checkAgentAccess(this.record(id).tab, conversationId);
+      const tab = this.record(id).tab;
+      let holds = false;
+      if (condition.url !== undefined) holds = matchesUrl(tab.url, condition.url);
+      else if (!inspects) holds = !tab.loading && !contents.isLoading();
+      else if (!contents.isLoading()) {
+        try {
+          holds = (await this.operation(record, () => contents.mainFrame.executeJavaScript(waitScript(condition)), { signal })) === true;
+        } catch { holds = false; } // Mid-navigation: not yet.
+      }
+      if (holds) return `Waited ${elapsed()}: ${wanted} — there now. Read the page again before acting on it.`;
+      if (Date.now() - began >= condition.timeoutMs)
+        throw new Error(`Waited ${elapsed()} and ${wanted} did not come. browser_read shows what the page has now; do not wait again for the same thing.`);
+      await pause(WAIT_POLL_MS, signal);
+    }
   }
   close(id: string, notify = false): void {
     const record = this.records.get(id);
@@ -950,11 +1425,17 @@ export class BrowserManager {
   }
   closeConversation(conversationId: string): void {
     for (const tab of this.list(conversationId)) this.close(tab.id);
+    // The chat is gone: its downloads leave the list (the store drops its rows).
+    for (const download of this.downloadsOf(conversationId)) {
+      this.items.get(download.id)?.cancel();
+      this.items.delete(download.id);
+      this.downloads.delete(download.id);
+    }
   }
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.partition.removeListener("will-download", this.blockDownload);
+    this.partition.removeListener("will-download", this.onDownload);
     this.options.window.webContents.removeListener(
       "did-start-loading",
       this.hideForShellLoad,

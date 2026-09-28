@@ -1,6 +1,9 @@
-/* The user-requested local width-reveal exception is recorded in LOOK.md.
+/* The width-reveal switch: collapsed it shows the side you are on, and opens
+   to show both. Chat/Coder was the first; Plan on/off is the same control,
+   because it is the same kind of choice — one that stays (user, 17.09).
+   The user-requested local width-reveal exception is recorded in LOOK.md.
    Shared material, spacing, focus, and motion roles remain authoritative. */
-.chat-mode-switch {
+.pill-switch {
   display: inline-flex;
   flex: none;
   position: relative;
@@ -19,13 +22,13 @@
   transition: inline-size var(--motion-fast) var(--ease-in);
 }
 
-.chat-mode-switch[data-expanded='true'] {
+.pill-switch[data-expanded='true'] {
   inline-size: calc(var(--control-md) * 2 + var(--mode-switch-inset) * 2);
   transition-duration: var(--motion-base);
   transition-timing-function: var(--ease-out);
 }
 
-.chat-mode-switch__options {
+.pill-switch__options {
   display: flex;
   flex: none;
   inline-size: calc(var(--control-md) * 2);
@@ -34,16 +37,16 @@
   transition: transform var(--motion-fast) var(--ease-in);
 }
 
-.chat-mode-switch[data-value='coder']:not([data-expanded='true']) .chat-mode-switch__options {
+.pill-switch[data-second='true']:not([data-expanded='true']) .pill-switch__options {
   transform: translateX(calc(-1 * var(--control-md)));
 }
 
-.chat-mode-switch[data-expanded='true'] .chat-mode-switch__options {
+.pill-switch[data-expanded='true'] .pill-switch__options {
   transition-duration: var(--motion-base);
   transition-timing-function: var(--ease-out);
 }
 
-.chat-mode-switch__option {
+.pill-switch__option {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -66,48 +69,48 @@
     visibility 0s;
 }
 
-.chat-mode-switch__option[aria-checked='true'] {
+.pill-switch__option[aria-checked='true'] {
   background: var(--mode-switch-glass-sheen), var(--mode-switch-selected-fill);
   color: var(--ink-primary);
 }
 
-.chat-mode-switch__option:hover:not(:disabled) {
+.pill-switch__option:hover:not(:disabled) {
   background-color: var(--mode-switch-selected-fill);
   color: var(--ink-primary);
 }
 
-.chat-mode-switch__option:active:not(:disabled) {
+.pill-switch__option:active:not(:disabled) {
   background-color: var(--mode-switch-selected-fill);
 }
 
-.chat-mode-switch__option:focus-visible:not(:disabled) {
+.pill-switch__option:focus-visible:not(:disabled) {
   outline: none;
   background-color: var(--mode-switch-focus-fill);
   color: var(--ink-primary);
 }
 
-.chat-mode-switch:not([data-expanded='true']) .chat-mode-switch__option[aria-checked='false'] {
+.pill-switch:not([data-expanded='true']) .pill-switch__option[aria-checked='false'] {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition-delay: 0s, 0s, 0s, var(--motion-fast);
 }
 
-.chat-mode-switch[aria-disabled='true'] .chat-mode-switch__option {
+.pill-switch[aria-disabled='true'] .pill-switch__option {
   color: var(--ink-disabled);
   opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-mode-switch,
-  .chat-mode-switch__options,
-  .chat-mode-switch__option {
+  .pill-switch,
+  .pill-switch__options,
+  .pill-switch__option {
     transition: none;
   }
 }
 
-[data-reduced-motion='true'] .chat-mode-switch,
-[data-reduced-motion='true'] .chat-mode-switch__options,
-[data-reduced-motion='true'] .chat-mode-switch__option {
+[data-reduced-motion='true'] .pill-switch,
+[data-reduced-motion='true'] .pill-switch__options,
+[data-reduced-motion='true'] .pill-switch__option {
   transition: none;
 }
