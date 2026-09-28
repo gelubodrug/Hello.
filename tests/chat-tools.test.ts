@@ -749,11 +749,12 @@ describe('changing a file without losing it', () => {
   });
 });
 
-// Memory per site, with revalidation: what a visit learned is kept for the next
-// one, handed to the first read of that site in a thread, marked as possibly out
-// of date — the live page is the truth. Writing it needs the same permission
-// reading the page needs, and no memory failure may cost a read.
-describe('what earlier visits learned about a site', () => {
+// Memory per site, per chat, with revalidation: what a chat's visit learned is
+// kept for its next one, handed to the first read of that site in a thread,
+// marked as possibly out of date — the live page is the truth. Writing it needs
+// the same permission reading the page needs, another chat never reads it, and
+// no memory failure may cost a read.
+describe('what a chat’s earlier visits learned about a site', () => {
   const codec: SecretCodec = {
     encrypt: (value) => Buffer.from(value),
     decrypt: (value) => value.toString(),
@@ -762,31 +763,39 @@ describe('what earlier visits learned about a site', () => {
   function noteFixture(control: BrowserTab['control'], url = 'https://docs.example/guide') {
     const dataDir = path.join(directory, `notes-${++notes}`);
     const store = createDataStore(dataDir, codec);
-    const conversationId = store.createConversation('Site').id;
-    const tab: BrowserTab = {
-      id: 'tab', conversationId, title: 'Docs', url, control,
-      loading: false, progress: null, canGoBack: false, canGoForward: false,
+    /** One chat with one tab on that site, and the tool context of that chat. */
+    const chatOn = (title: string) => {
+      const conversationId = store.createConversation(title).id;
+      const tab: BrowserTab = {
+        id: 'tab', conversationId, title: 'Docs', url, control,
+        loading: false, progress: null, canGoBack: false, canGoForward: false,
+      };
+      const browser = {
+        getTabs: vi.fn(() => [tab]),
+        read: vi.fn(async () => ({ title: 'Docs', url, text: 'Page text as it is now.' })),
+        navigate: vi.fn(), click: vi.fn(), type: vi.fn(), scroll: vi.fn(),
+      } satisfies BrowserHooks;
+      return {
+        conversationId, tab, browser,
+        context: {
+          store, conversationId, browser, signal: new AbortController().signal,
+          approve: async () => false, notedDomains: new Set<string>(),
+        },
+      };
     };
-    const browser = {
-      getTabs: vi.fn(() => [tab]),
-      read: vi.fn(async () => ({ title: 'Docs', url, text: 'Page text as it is now.' })),
-      navigate: vi.fn(), click: vi.fn(), type: vi.fn(), scroll: vi.fn(),
-    } satisfies BrowserHooks;
-    return {
-      store, browser, tab, dataDir,
-      context: {
-        store, conversationId, browser, signal: new AbortController().signal,
-        approve: async () => false, notedDomains: new Set<string>(),
-      },
-    };
+    return { store, dataDir, chatOn, ...chatOn('Site') };
   }
 
-  it('is offered with its gate, its site rule and the revalidation stated', () => {
+  it('is offered with its gate, its site rule, whose it is and the revalidation stated', () => {
     const tools = Object.fromEntries(toolDefinitions(false, true).map(item => [item.function.name, item.function]));
     expect(tools.browser_note.description).toMatch(/Read or Full/);
     expect(tools.browser_note.description).toMatch(/taken from the tab itself/);
     expect(tools.browser_note.description).toMatch(/marked as possibly out of date/);
     expect(tools.browser_note.description).toMatch(/Never put a credential/);
+    // The truth about whose the notes are, and no trace of the old claim.
+    expect(tools.browser_note.description).toMatch(/belongs to THIS chat/);
+    expect(tools.browser_note.description).toMatch(/never shared with another chat/);
+    expect(tools.browser_note.description).not.toMatch(/shared across this person’s chats/);
     expect(toolDefinitions(false, false).some(item => item.function.name === 'browser_note')).toBe(false);
   });
 
@@ -794,21 +803,43 @@ describe('what earlier visits learned about a site', () => {
     const off = noteFixture('off');
     await expect(executeTool('browser_note', { tabId: 'tab', notes: 'Search is behind the menu.' }, off.context))
       .rejects.toThrow(/has Agent control off, but browser_note requires Read or Full/);
-    expect(off.store.getDomainNote('docs.example')).toBeUndefined();
+    expect(off.store.getDomainNote(off.conversationId, 'docs.example')).toBeUndefined();
     off.store.close();
   });
 
   it('is written from a tab at Read, under the site of that tab, and survives the app closing', async () => {
     const reader = noteFixture('read');
     const said = await executeTool('browser_note', { tabId: 'tab', notes: 'Search is behind the menu, not the header.' }, reader.context);
-    expect(said).toContain('Kept about docs.example');
+    expect(said).toContain('Kept for this chat about docs.example');
     // The site is taken from the tab, so a note is never about somewhere else.
-    expect(reader.store.getDomainNote('docs.example')?.notes).toBe('Search is behind the menu, not the header.');
+    expect(reader.store.getDomainNote(reader.conversationId, 'docs.example')?.notes).toBe('Search is behind the menu, not the header.');
     reader.store.close();
     // The app opening again reads the same note back.
     const again = createDataStore(reader.dataDir, codec);
-    expect(again.getDomainNote('docs.example')?.notes).toBe('Search is behind the menu, not the header.');
+    expect(again.getDomainNote(reader.conversationId, 'docs.example')?.notes).toBe('Search is behind the menu, not the header.');
     again.close();
+  });
+
+  it('is not handed to another chat on the same site, and goes when its own chat goes', async () => {
+    const mine = noteFixture('full');
+    const other = mine.chatOn('Another chat');
+    await executeTool('browser_note', { tabId: 'tab', notes: 'The admin list is under /people, not /users.' }, mine.context);
+    // The other chat is on the same site and reads the page alone: a note is
+    // what the model wrote about a page it was let into IN THAT chat.
+    const elsewhere = JSON.parse(await executeTool('browser_read', { tabId: 'tab' }, other.context)) as { text: string; notes?: string };
+    expect(elsewhere.text).toBe('Page text as it is now.');
+    expect(elsewhere.notes).toBeUndefined();
+    // Its own note does not disturb the first chat's.
+    await executeTool('browser_note', { tabId: 'tab', notes: 'Reports need the year picker set first.' }, other.context);
+    const ours = JSON.parse(await executeTool('browser_read', { tabId: 'tab' }, mine.context)) as { notes?: string };
+    expect(ours.notes).toContain('The admin list is under /people, not /users.');
+    expect(ours.notes).not.toContain('year picker');
+    // Deleting the chat is the person's own way of forgetting what it learned.
+    mine.store.deleteConversation(other.conversationId);
+    expect(mine.store.getDomainNote(other.conversationId, 'docs.example')).toBeUndefined();
+    expect(mine.store.getDomainNote(mine.conversationId, 'docs.example')?.notes)
+      .toBe('The admin list is under /people, not /users.');
+    mine.store.close();
   });
 
   it('is handed to the first read of that site and not repeated to the second', async () => {
@@ -818,8 +849,8 @@ describe('what earlier visits learned about a site', () => {
     const read = JSON.parse(first) as { text: string; notes?: string };
     expect(read.text).toBe('Page text as it is now.');
     expect(read.notes).toContain('Prices need the currency picker set first.');
-    // The marker: memory, not the page, and what to do when they disagree.
-    expect(read.notes).toContain('What you kept about docs.example');
+    // The marker: memory, not the page, whose it is, and what to do when they disagree.
+    expect(read.notes).toContain('What you kept about docs.example in this chat');
     expect(read.notes).toContain('The page above is the truth');
     expect(read.notes).toContain('browser_note');
     // Already in the thread: the next read is the page alone.
@@ -830,7 +861,7 @@ describe('what earlier visits learned about a site', () => {
 
   it('leaves the read exactly as it was when the store cannot answer', async () => {
     const full = noteFixture('full');
-    full.store.saveDomainNote('docs.example', 'Kept, but unreachable this time.');
+    full.store.saveDomainNote(full.conversationId, 'docs.example', 'Kept, but unreachable this time.');
     vi.spyOn(full.store, 'getDomainNote').mockImplementation(() => { throw new Error('database is locked'); });
     const said = JSON.parse(await executeTool('browser_read', { tabId: 'tab' }, full.context)) as { text: string; notes?: string };
     expect(said.text).toBe('Page text as it is now.');
@@ -843,10 +874,10 @@ describe('what earlier visits learned about a site', () => {
     const full = noteFixture('full');
     await expect(executeTool('browser_note', { tabId: 'tab', notes: 'Sign in with api_key=9f3ac1bd77e4' }, full.context))
       .rejects.toThrow(/reads like a credential/);
-    expect(full.store.getDomainNote('docs.example')).toBeUndefined();
+    expect(full.store.getDomainNote(full.conversationId, 'docs.example')).toBeUndefined();
     await executeTool('browser_note', { tabId: 'tab', notes: 'The guide’s search is in the sidebar.' }, full.context);
-    expect(await executeTool('browser_note', { tabId: 'tab', notes: '' }, full.context)).toBe('Cleared what was kept about docs.example.');
-    expect(full.store.getDomainNote('docs.example')).toBeUndefined();
+    expect(await executeTool('browser_note', { tabId: 'tab', notes: '' }, full.context)).toBe('Cleared what this chat kept about docs.example.');
+    expect(full.store.getDomainNote(full.conversationId, 'docs.example')).toBeUndefined();
     full.store.close();
     // A document this app served, on a port that dies with the app, is no site.
     const local = noteFixture('full', 'http://127.0.0.1:52341/artifact/index.html');

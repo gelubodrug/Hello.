@@ -313,16 +313,38 @@ export class DataStore {
       this.db.transaction(() => {
         // What was learned about a site on an earlier visit, in the model's own
         // words: the route that works, the control that is not where it looks,
-        // the trap. One note per site, kept for the application rather than for
-        // one chat, because the site is the same site in the next chat. The live
-        // page stays the truth — a read hands the note over marked as possibly
-        // out of date, and the model corrects or clears it when they disagree.
+        // the trap. The live page stays the truth — a read hands the note over
+        // marked as possibly out of date, and the model corrects or clears it
+        // when they disagree. Version 10 gives the note its chat.
         this.db.exec(`CREATE TABLE browser_domain_notes (
         domain TEXT PRIMARY KEY,
         notes TEXT NOT NULL,
         updatedAt INTEGER NOT NULL
       );
       PRAGMA user_version = 9;`);
+      })();
+    if (version < 10)
+      this.db.transaction(() => {
+        // A note belongs to the chat it was written in. Everything in Hello does:
+        // the tabs are the conversation's, the grant on each of them is decided
+        // for that tab, and the note is what the model wrote about a page it was
+        // let into IN THAT CHAT. Kept for the application, it was a channel
+        // between chats that no one had asked for — a note written in a chat on
+        // an intranet turned up at the first read of that host anywhere else.
+        //
+        // A row written under the old shape has no chat, and there is none to
+        // infer: attributing it to a conversation would be inventing the one
+        // fact that matters. Those rows go, while the table is all but empty,
+        // rather than leaving the question to a later version.
+        this.db.exec(`DROP TABLE IF EXISTS browser_domain_notes;
+      CREATE TABLE browser_domain_notes (
+        conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        domain TEXT NOT NULL,
+        notes TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (conversationId, domain)
+      );
+      PRAGMA user_version = 10;`);
       })();
   }
 
@@ -1012,25 +1034,34 @@ export class DataStore {
   deleteBrowserTab(id: string): void {
     this.db.prepare('DELETE FROM browser_tabs WHERE id = ?').run(id);
   }
-  /** What earlier visits learned about one site, and when, or nothing at all. */
-  getDomainNote(domain: string): { notes: string; updatedAt: number } | undefined {
+  /**
+   * What this chat's earlier visits learned about one site, and when, or nothing
+   * at all. Another chat's note about the same site is not this chat's to read.
+   */
+  getDomainNote(conversationId: string, domain: string): { notes: string; updatedAt: number } | undefined {
     const row = this.db
-      .prepare('SELECT notes, updatedAt FROM browser_domain_notes WHERE domain = ?')
-      .get(domain) as { notes?: unknown; updatedAt?: unknown } | undefined;
+      .prepare('SELECT notes, updatedAt FROM browser_domain_notes WHERE conversationId = ? AND domain = ?')
+      .get(conversationId, domain) as { notes?: unknown; updatedAt?: unknown } | undefined;
     if (typeof row?.notes !== 'string' || !row.notes) return undefined;
     return { notes: row.notes, updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : 0 };
   }
-  /** One note per site: writing again replaces it, which is how a wrong one is corrected. */
-  saveDomainNote(domain: string, notes: string): void {
+  /**
+   * One note per site per chat: writing again replaces it, which is how a wrong
+   * one is corrected. The note goes with the chat when the chat goes.
+   */
+  saveDomainNote(conversationId: string, domain: string, notes: string): void {
+    this.getConversation(conversationId);
     this.db
       .prepare(
-        `INSERT INTO browser_domain_notes(domain,notes,updatedAt) VALUES (?,?,?)
-      ON CONFLICT(domain) DO UPDATE SET notes=excluded.notes,updatedAt=excluded.updatedAt`,
+        `INSERT INTO browser_domain_notes(conversationId,domain,notes,updatedAt) VALUES (?,?,?,?)
+      ON CONFLICT(conversationId,domain) DO UPDATE SET notes=excluded.notes,updatedAt=excluded.updatedAt`,
       )
-      .run(domain, notes, Date.now());
+      .run(conversationId, domain, notes, Date.now());
   }
-  deleteDomainNote(domain: string): void {
-    this.db.prepare('DELETE FROM browser_domain_notes WHERE domain = ?').run(domain);
+  deleteDomainNote(conversationId: string, domain: string): void {
+    this.db
+      .prepare('DELETE FROM browser_domain_notes WHERE conversationId = ? AND domain = ?')
+      .run(conversationId, domain);
   }
   /** Every chat's downloads, oldest first. */
   listBrowserDownloads(): BrowserDownload[] {

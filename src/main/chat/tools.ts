@@ -502,7 +502,7 @@ export function toolDefinitions(
       ),
       tool(
         'browser_note',
-        `Keep what you learned about the site a tab is on, so the next visit does not start from nothing: the route that works, where a control really is, a trap to avoid, a page worth going straight to. One note per site, replaced by the next call, at most ${DOMAIN_NOTE_LIMIT} characters; send notes empty to clear it. Requires that tab’s Agent control Read or Full, and the site is taken from the tab itself — you cannot write a note about another site. The first browser_read of that site in a later thread hands the note back, marked as possibly out of date; when it disagrees with the page, correct it here rather than working around it. Keep only what generalises across visits, never page content to save re-reading it. Never put a credential, a token, a personal detail or anything private in a note: notes are the application’s, shared across this person’s chats, and a secret is refused here. A site this app serves for you — a generated document or a local preview — has no site to remember.`,
+        `Keep what you learned about the site a tab is on, so the next visit does not start from nothing: the route that works, where a control really is, a trap to avoid, a page worth going straight to. The note belongs to THIS chat — not to the application, and never shared with another chat — and it goes when this chat is deleted. One note per site, replaced by the next call, at most ${DOMAIN_NOTE_LIMIT} characters; send notes empty to clear it. Requires that tab’s Agent control Read or Full, and the site is taken from the tab itself — you cannot write a note about another site. The first browser_read of that site in a later thread of this chat hands the note back, marked as possibly out of date; when it disagrees with the page, correct it here rather than working around it. Keep only what generalises across visits, never page content to save re-reading it. Never put a credential, a token or a personal detail in a note; a secret is refused here. A site this app serves for you — a generated document or a local preview — has no site to remember.`,
         {
           tabId: property('Tab ID of a tab on the site the note is about, at Read or Full.'),
           notes: property('What to keep about this site, in your own words. Empty clears what is kept.'),
@@ -868,24 +868,25 @@ export function noteDomain(url: string | undefined): string | undefined {
 const SECRET_IN_NOTE =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bbearer\s+[A-Za-z0-9._~+/=-]{16,}|\bauthorization\b\s*[:=]\s*\S{12,}|\b(?:password|passwd|passphrase|api[_-]?key|secret|token)\b\s*[:=]\s*\S{6,}|\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}/i;
 /**
- * The first read of a site in a thread carries what earlier visits learned,
- * marked as memory rather than as the page: the note is a head start, the page
- * above it is the truth. A second read of the same site does not repeat it —
- * it is already in the thread, and repeating it is what made history expensive.
- * Nothing here can stop a read: a store that cannot answer leaves the page
- * exactly as it was.
+ * The first read of a site in a thread carries what this chat's earlier visits
+ * learned, marked as memory rather than as the page: the note is a head start,
+ * the page above it is the truth. Only this chat's note — another chat on the
+ * same site reads nothing until it has written its own. A second read of the
+ * same site does not repeat it: it is already in the thread, and repeating it is
+ * what made history expensive. Nothing here can stop a read — a store that
+ * cannot answer leaves the page exactly as it was.
  */
 function withEarlierNotes(context: ToolContext, content: BrowserContent): BrowserContent & { notes?: string } {
   try {
     const domain = noteDomain(content.url);
     if (!domain || context.notedDomains?.has(domain)) return content;
-    const kept = context.store.getDomainNote(domain);
+    const kept = context.store.getDomainNote(context.conversationId, domain);
     if (!kept) return content;
     context.notedDomains?.add(domain);
     const when = kept.updatedAt ? ` on ${new Date(kept.updatedAt).toISOString().slice(0, 10)}` : ' earlier';
     return {
       ...content,
-      notes: `What you kept about ${domain}${when}, not what the page says now. The page above is the truth: check the note against it before acting on it, and where they disagree correct it or clear it with browser_note. Given once per thread.\n\n${kept.notes}`,
+      notes: `What you kept about ${domain} in this chat${when}, not what the page says now. The page above is the truth: check the note against it before acting on it, and where they disagree correct it or clear it with browser_note. Given once per thread.\n\n${kept.notes}`,
     };
   } catch {
     // Memory is a convenience; a read is the work. A failure here is silent.
@@ -1362,15 +1363,15 @@ export async function executeToolOutput(
             );
           const notes = input.notes === undefined || input.notes === null ? '' : text(input, 'notes', DOMAIN_NOTE_LIMIT).trim();
           if (!notes) {
-            store.deleteDomainNote(domain);
-            return `Cleared what was kept about ${domain}.`;
+            store.deleteDomainNote(conversationId, domain);
+            return `Cleared what this chat kept about ${domain}.`;
           }
           if (SECRET_IN_NOTE.test(notes))
             throw new Error(
-              'That note reads like a credential, and a site note is shared across this person’s chats, so it was refused. Keep how the site works — routes, controls, traps — and never a password, token, key or personal detail.',
+              'That note reads like a credential, so it was refused. A note is for how the site works — routes, controls, traps — and never a password, token, key or personal detail.',
             );
-          store.saveDomainNote(domain, notes);
-          return `Kept about ${domain}: ${notes.length} characters, replacing whatever was there. The first browser_read of ${domain} in a later thread hands it back, marked as possibly out of date.`;
+          store.saveDomainNote(conversationId, domain, notes);
+          return `Kept for this chat about ${domain}: ${notes.length} characters, replacing whatever was there. The first browser_read of ${domain} in a later thread of this chat hands it back, marked as possibly out of date.`;
         }
         if (name === 'browser_read')
           return withEarlierNotes(context, await browserOperation(signal, () =>

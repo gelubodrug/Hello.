@@ -411,44 +411,72 @@ describe('a browser tab’s grant between sessions', () => {
   });
 });
 
-// What was learned about a site, kept for the next visit. The live page stays
-// the truth; the note is a head start, and it outlives the app run.
-describe('what earlier visits learned about a site', () => {
-  it('is kept per site, replaced when corrected, cleared on request, and still there after a restart', () => {
-    expect(store.getDomainNote('docs.example')).toBeUndefined();
-    store.saveDomainNote('docs.example', 'Search is behind the menu, not the header.');
-    store.saveDomainNote('shop.example', 'Prices need the currency picker set first.');
-    expect(store.getDomainNote('docs.example')?.notes).toBe('Search is behind the menu, not the header.');
-    expect(store.getDomainNote('docs.example')?.updatedAt).toBeGreaterThan(0);
-    // One note per site: writing again is how a wrong one is corrected.
-    store.saveDomainNote('docs.example', 'Search moved into the header.');
-    expect(store.getDomainNote('docs.example')?.notes).toBe('Search moved into the header.');
+// What a chat learned about a site, kept for its next visit. The live page stays
+// the truth; the note is a head start, it outlives the app run, and it belongs to
+// the chat that wrote it — never to the application, and never to another chat.
+describe('what a chat’s earlier visits learned about a site', () => {
+  it('is kept per chat and site, replaced when corrected, cleared on request, and still there after a restart', () => {
+    const chat = store.createConversation('Research').id;
+    expect(store.getDomainNote(chat, 'docs.example')).toBeUndefined();
+    store.saveDomainNote(chat, 'docs.example', 'Search is behind the menu, not the header.');
+    store.saveDomainNote(chat, 'shop.example', 'Prices need the currency picker set first.');
+    expect(store.getDomainNote(chat, 'docs.example')?.notes).toBe('Search is behind the menu, not the header.');
+    expect(store.getDomainNote(chat, 'docs.example')?.updatedAt).toBeGreaterThan(0);
+    // One note per site in a chat: writing again is how a wrong one is corrected.
+    store.saveDomainNote(chat, 'docs.example', 'Search moved into the header.');
+    expect(store.getDomainNote(chat, 'docs.example')?.notes).toBe('Search moved into the header.');
     // The app closing and opening again is not a reason to forget a site.
     store.close();
     store = createDataStore(directory, codec);
-    expect(store.getDomainNote('docs.example')?.notes).toBe('Search moved into the header.');
-    expect(store.getDomainNote('shop.example')?.notes).toBe('Prices need the currency picker set first.');
-    store.deleteDomainNote('docs.example');
-    expect(store.getDomainNote('docs.example')).toBeUndefined();
-    expect(store.getDomainNote('shop.example')?.notes).toBe('Prices need the currency picker set first.');
+    expect(store.getDomainNote(chat, 'docs.example')?.notes).toBe('Search moved into the header.');
+    expect(store.getDomainNote(chat, 'shop.example')?.notes).toBe('Prices need the currency picker set first.');
+    store.deleteDomainNote(chat, 'docs.example');
+    expect(store.getDomainNote(chat, 'docs.example')).toBeUndefined();
+    expect(store.getDomainNote(chat, 'shop.example')?.notes).toBe('Prices need the currency picker set first.');
   });
 
-  it('arrives as an additive migration on a database the previous version wrote', () => {
-    store.saveBrowserTab({ id: 'kept', conversationId: store.createConversation('Old').id, title: 'Kept',
+  it('is not another chat’s to read, and goes when its own chat goes', () => {
+    const mine = store.createConversation('Mine').id;
+    const other = store.createConversation('Other').id;
+    store.saveDomainNote(mine, 'intranet.example', 'The admin list is under /people, not /users.');
+    // The same site, another chat: nothing, until that chat writes its own.
+    expect(store.getDomainNote(other, 'intranet.example')).toBeUndefined();
+    store.saveDomainNote(other, 'intranet.example', 'Reports need the year picker set first.');
+    expect(store.getDomainNote(mine, 'intranet.example')?.notes).toBe('The admin list is under /people, not /users.');
+    expect(store.getDomainNote(other, 'intranet.example')?.notes).toBe('Reports need the year picker set first.');
+    // Deleting a chat takes its notes with it, and leaves the other chat's alone.
+    store.deleteConversation(mine);
+    expect(store.getDomainNote(mine, 'intranet.example')).toBeUndefined();
+    expect(store.getDomainNote(other, 'intranet.example')?.notes).toBe('Reports need the year picker set first.');
+    // A note cannot be written for a chat that does not exist.
+    expect(() => store.saveDomainNote(mine, 'intranet.example', 'Anything.')).toThrow();
+  });
+
+  it('gives the note its chat on a database the previous version wrote, keeping no row that has none', () => {
+    const chat = store.createConversation('Old').id;
+    store.saveBrowserTab({ id: 'kept', conversationId: chat, title: 'Kept',
       url: 'https://example.test', control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false });
     store.close();
-    // Roll the file back to how version 8 left it: the table did not exist yet.
+    // Roll the file back to how version 9 left it: one note per site, for the
+    // whole application, with a row already written under that shape.
     const raw = new Database(store.databasePath);
-    raw.exec('DROP TABLE browser_domain_notes; PRAGMA user_version = 8;');
+    raw.exec(`DROP TABLE browser_domain_notes;
+      CREATE TABLE browser_domain_notes (domain TEXT PRIMARY KEY, notes TEXT NOT NULL, updatedAt INTEGER NOT NULL);
+      INSERT INTO browser_domain_notes(domain,notes,updatedAt) VALUES ('shared.example','Written when notes were the application''s.',1);
+      PRAGMA user_version = 9;`);
     raw.close();
     store = createDataStore(directory, codec);
-    // The tab that was there is still there, and the site notes now have a home.
+    // The tab is untouched, and the row that had no chat is gone rather than
+    // handed to one: which chat wrote it is the one thing that cannot be guessed.
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'read' }]);
-    store.saveDomainNote('example.test', 'The login is on /account, not /login.');
-    expect(store.getDomainNote('example.test')?.notes).toBe('The login is on /account, not /login.');
+    expect(store.getDomainNote(chat, 'shared.example')).toBeUndefined();
     const check = new Database(store.databasePath, { readonly: true });
-    expect((check.pragma('user_version', { simple: true }) as number)).toBe(9);
+    expect(check.pragma('user_version', { simple: true }) as number).toBe(10);
+    expect((check.prepare('SELECT COUNT(*) AS rows FROM browser_domain_notes').get() as { rows: number }).rows).toBe(0);
     check.close();
+    // And the new shape works on that same file.
+    store.saveDomainNote(chat, 'example.test', 'The login is on /account, not /login.');
+    expect(store.getDomainNote(chat, 'example.test')?.notes).toBe('The login is on /account, not /login.');
   });
 });
 
