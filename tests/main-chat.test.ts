@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions } from '../src/main/chat/pi-rpc';
 import type { PiToolBridgeOptions } from '../src/main/chat/pi-tool-bridge';
-import type { BrowserTab, ChatEvent, ChatQueueEvent, MessagePart } from '../src/shared/types';
+import type { BrowserTab, ChatEvent, ChatQueueEvent, Message, MessagePart } from '../src/shared/types';
 
 // This suite exercises Hello's lifecycle/tool policy, never a real Pi child,
 // loopback listener, model server or CLI. Keep the transport mocks unconditional.
@@ -93,7 +93,7 @@ vi.mock('../src/main/chat/pi-tool-bridge', () => ({
 vi.mock('node:child_process', () => ({ spawn: harness.forbiddenSpawn }));
 
 import { createDataStore, type DataStore } from '../src/main/data/store';
-import { ChatService, LOOP_RESUME_PROMPT, completionURL, modelsURL, wireHistory, type ChatServiceOptions } from '../src/main/chat/service';
+import { ChatService, LOOP_RESUME_PROMPT, REPLAYED_READ_CHARS, completionURL, modelsURL, wireHistory, type ChatServiceOptions } from '../src/main/chat/service';
 import { piConversationDir } from '../src/main/chat/pi-session';
 import { toolOutputText } from '../src/main/chat/tool-output';
 
@@ -854,6 +854,68 @@ describe('endpoint discovery and legacy-history import helpers', () => {
     expect(history[1]).toMatchObject({ tool_call_id: 'read', content: 'observed text' });
     expect(history[3]).toMatchObject({ tool_call_id: 'pending', content: 'Approval was not granted; action did not run.' });
     expect(JSON.stringify(history)).not.toContain('private thinking');
+    expect(harness.instances).toHaveLength(0);
+  });
+
+  // A page read is up to 45,000 characters of somebody else's page, and a thread
+  // that visited a few pages replayed all of them whole on every round trip that
+  // followed. The one in hand stays whole; the ones before it become the page's
+  // name, its address, its opening — and an instruction to read it again.
+  it('replays the latest page read whole and shortens the earlier ones with a way on', () => {
+    const page = (which: string) => JSON.stringify({
+      title: `Docs ${which}`, url: `https://docs.example/${which}`, text: `${which} page text. `.repeat(3_000),
+    });
+    const messages: Message[] = [
+      { id: 'first', conversationId, role: 'assistant', content: '', createdAt: 1, status: 'complete', parts: [
+        { type: 'tool', id: 'read-old', name: 'browser_read', input: JSON.stringify({ tabId: 'tab-a' }),
+          output: page('old'), status: 'complete' },
+      ] },
+      { id: 'asked', conversationId, role: 'user', content: 'and now?', createdAt: 2, status: 'complete' },
+      { id: 'second', conversationId, role: 'assistant', content: '', createdAt: 3, status: 'complete', parts: [
+        { type: 'tool', id: 'clicked', name: 'browser_click', input: JSON.stringify({ tabId: 'tab-a' }),
+          output: 'Clicked Buy at (10, 20).', status: 'complete' },
+        { type: 'tool', id: 'read-new', name: 'browser_read', input: JSON.stringify({ tabId: 'tab-a' }),
+          output: page('new'), status: 'complete' },
+      ] },
+    ];
+    const stored = JSON.stringify(messages);
+    const history = wireHistory(messages);
+    const older = history.find(item => item.tool_call_id === 'read-old')!;
+    const latest = history.find(item => item.tool_call_id === 'read-new')!;
+    // The earlier read: the page's name and address whole, its text cut to the
+    // opening, and a marker that says what to do rather than that text is gone.
+    const shortened = JSON.parse(older.content!) as { title: string; url: string; text: string };
+    const whole = JSON.parse(page('old')) as { text: string };
+    expect(shortened.title).toBe('Docs old');
+    expect(shortened.url).toBe('https://docs.example/old');
+    expect(shortened.text.startsWith(whole.text.slice(0, REPLAYED_READ_CHARS))).toBe(true);
+    expect(shortened.text).toContain(`the first ${REPLAYED_READ_CHARS.toLocaleString('en')} of ${whole.text.length.toLocaleString('en')} characters`);
+    expect(shortened.text).toContain('Call browser_read on tab tab-a again');
+    expect(older.content!.length).toBeLessThan(page('old').length / 10);
+    // The read in hand is the material the model is working on: untouched.
+    expect(latest.content).toBe(page('new'));
+    // Nothing else is touched — another browser tool's result is not a page read.
+    expect(history.find(item => item.tool_call_id === 'clicked')?.content).toBe('Clicked Buy at (10, 20).');
+    // And nothing is written back: SQLite keeps every read whole, so turning the
+    // shortening off restores the old thread exactly.
+    expect(JSON.stringify(messages)).toBe(stored);
+    expect(harness.instances).toHaveLength(0);
+  });
+
+  it('leaves a lone page read whole, and a read that never completed alone', () => {
+    const long = JSON.stringify({ title: 'Only', url: 'https://only.example/', text: 'x'.repeat(REPLAYED_READ_CHARS * 3) });
+    const history = wireHistory([
+      { id: 'one', conversationId, role: 'assistant', content: '', createdAt: 1, status: 'complete', parts: [
+        { type: 'tool', id: 'failed', name: 'browser_read', input: '{}', status: 'error',
+          output: 'The requested tab has Agent control off.' },
+        { type: 'tool', id: 'only', name: 'browser_read', input: '{}', output: long, status: 'complete' },
+      ] },
+    ]);
+    // The only complete read is the latest read: there is nothing stale to cut.
+    expect(history.find(item => item.tool_call_id === 'only')?.content).toBe(long);
+    expect(history.find(item => item.tool_call_id === 'failed')).toMatchObject({
+      isError: true, content: 'The requested tab has Agent control off.',
+    });
     expect(harness.instances).toHaveLength(0);
   });
 });

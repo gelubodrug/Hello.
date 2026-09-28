@@ -276,8 +276,78 @@ async function responseText(
   }
 }
 
-/** Reconstruct completed tool exchanges, preserving real outputs across turns. */
+/**
+ * The tools whose result carries the text of a page. Only browser_read does:
+ * every other browser tool answers in a bounded sentence or two — a click says
+ * what it clicked and where (browser/manager.ts agentAction), a type or scroll
+ * is cut at 1,000 characters, a wait and a key press name what happened, and a
+ * screenshot's words are measurements this app made, with the picture kept out
+ * of the transcript. A read is the one that hands over up to 45,000 characters
+ * of somebody else's page (browser/manager.ts read()).
+ */
+const PAGE_READ_TOOLS = new Set(['browser_read']);
+/**
+ * How much of an earlier turn's page read is replayed to the model.
+ *
+ * A read is capped at 45,000 characters — about 11,000 tokens of somebody
+ * else's page — and a thread that visited a handful of pages carries all of
+ * them in every round trip that follows, paid again each time for text the
+ * model has already used. Two thousand characters is about 500 tokens: enough
+ * for the opening of the page under its title and address, which is what makes
+ * a read recognisable ("this is the pricing page I already looked at"), and
+ * small enough that ten past reads cost about 5,000 tokens where they could
+ * have cost over 100,000. It is deliberately too little to answer from, so the
+ * marker's instruction — read the page again — is the only way on.
+ */
+export const REPLAYED_READ_CHARS = 2_000;
+/**
+ * An earlier read, cut down for the replay. The stored message keeps its full
+ * output: this is the thread being built, nothing is written back, and removing
+ * the call below restores the old behaviour exactly.
+ */
+function shortenPageRead(output: string, input: string): string {
+  const marker = (length: number): string => {
+    let tab = '';
+    try {
+      const asked = JSON.parse(input) as { tabId?: unknown };
+      if (typeof asked.tabId === 'string' && asked.tabId) tab = ` on tab ${asked.tabId}`;
+    } catch { /* The arguments are not this app's to trust; the marker works without them. */ }
+    return `\n\n[Earlier turn's page read, shortened here: the first ${REPLAYED_READ_CHARS.toLocaleString('en')} of ${length.toLocaleString('en')} characters. The rest is not in this thread, and the page may have changed since it was read. Call browser_read${tab} again for what the page says now; do not answer from the part that is missing.]`;
+  };
+  // A read's result is the JSON of { title, url, text }: keep the title and the
+  // address whole — they are what the model recognises the page by — and cut
+  // only the page's own text.
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof parsed.text === 'string') {
+      if (parsed.text.length <= REPLAYED_READ_CHARS) return output;
+      return JSON.stringify({
+        ...parsed,
+        text: parsed.text.slice(0, REPLAYED_READ_CHARS) + marker(parsed.text.length),
+      });
+    }
+  } catch { /* Not the shape a read produces — cut the characters themselves. */ }
+  if (output.length <= REPLAYED_READ_CHARS) return output;
+  return output.slice(0, REPLAYED_READ_CHARS) + marker(output.length);
+}
+/**
+ * Reconstruct completed tool exchanges, preserving real outputs across turns.
+ *
+ * This is the thread handed to the model, and the only place a page read is
+ * shortened: the stored messages keep every read whole. Note where it reaches —
+ * seedPiSession imports this once, when a chat has no Pi session file yet; from
+ * then on Pi owns its session and its own compaction, so a read Pi appended
+ * itself is not reached from here.
+ */
 export function wireHistory(messages: Message[]): WireMessage[] {
+  // The latest page read is the material the model is working on now and is
+  // replayed whole; every earlier one is replayed as title, address and opening.
+  let latestRead: string | undefined;
+  for (const message of messages)
+    for (const part of message.parts ?? [])
+      if (part.type === 'tool' && PAGE_READ_TOOLS.has(part.name) && part.status === 'complete' &&
+          typeof part.output === 'string')
+        latestRead = part.id;
   const history: WireMessage[] = [];
   for (const message of messages) {
     if (message.role === 'user') {
@@ -304,7 +374,10 @@ export function wireHistory(messages: Message[]): WireMessage[] {
           tool_call_id: part.id,
           isError: part.status !== 'complete',
           content:
-            part.output ??
+            (PAGE_READ_TOOLS.has(part.name) && part.status === 'complete' &&
+             typeof part.output === 'string' && part.id !== latestRead
+              ? shortenPageRead(part.output, part.input)
+              : part.output) ??
             (part.status === 'approval'
               ? 'Approval was not granted; action did not run.'
               : 'Tool did not complete.'),
