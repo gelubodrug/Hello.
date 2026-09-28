@@ -10,7 +10,7 @@ import {
   toolDefinitions,
   type BrowserHooks,
 } from '../src/main/chat/tools';
-import type { DataStore } from '../src/main/data/store';
+import { createDataStore, type DataStore, type SecretCodec } from '../src/main/data/store';
 import type { BrowserTab } from '../src/shared/types';
 
 let directory: string;
@@ -746,5 +746,114 @@ describe('changing a file without losing it', () => {
     const tools = Object.fromEntries(toolDefinitions(true, false).map(item => [item.function.name, item.function]));
     expect(tools.file_edit.description).toMatch(/never rewrite a whole file with file_write/);
     expect(tools.file_write.description).toMatch(/To change part of an existing file use file_edit/);
+  });
+});
+
+// Memory per site, with revalidation: what a visit learned is kept for the next
+// one, handed to the first read of that site in a thread, marked as possibly out
+// of date — the live page is the truth. Writing it needs the same permission
+// reading the page needs, and no memory failure may cost a read.
+describe('what earlier visits learned about a site', () => {
+  const codec: SecretCodec = {
+    encrypt: (value) => Buffer.from(value),
+    decrypt: (value) => value.toString(),
+  };
+  let notes = 0;
+  function noteFixture(control: BrowserTab['control'], url = 'https://docs.example/guide') {
+    const dataDir = path.join(directory, `notes-${++notes}`);
+    const store = createDataStore(dataDir, codec);
+    const conversationId = store.createConversation('Site').id;
+    const tab: BrowserTab = {
+      id: 'tab', conversationId, title: 'Docs', url, control,
+      loading: false, progress: null, canGoBack: false, canGoForward: false,
+    };
+    const browser = {
+      getTabs: vi.fn(() => [tab]),
+      read: vi.fn(async () => ({ title: 'Docs', url, text: 'Page text as it is now.' })),
+      navigate: vi.fn(), click: vi.fn(), type: vi.fn(), scroll: vi.fn(),
+    } satisfies BrowserHooks;
+    return {
+      store, browser, tab, dataDir,
+      context: {
+        store, conversationId, browser, signal: new AbortController().signal,
+        approve: async () => false, notedDomains: new Set<string>(),
+      },
+    };
+  }
+
+  it('is offered with its gate, its site rule and the revalidation stated', () => {
+    const tools = Object.fromEntries(toolDefinitions(false, true).map(item => [item.function.name, item.function]));
+    expect(tools.browser_note.description).toMatch(/Read or Full/);
+    expect(tools.browser_note.description).toMatch(/taken from the tab itself/);
+    expect(tools.browser_note.description).toMatch(/marked as possibly out of date/);
+    expect(tools.browser_note.description).toMatch(/Never put a credential/);
+    expect(toolDefinitions(false, false).some(item => item.function.name === 'browser_note')).toBe(false);
+  });
+
+  it('cannot be written from a tab the person left Off', async () => {
+    const off = noteFixture('off');
+    await expect(executeTool('browser_note', { tabId: 'tab', notes: 'Search is behind the menu.' }, off.context))
+      .rejects.toThrow(/has Agent control off, but browser_note requires Read or Full/);
+    expect(off.store.getDomainNote('docs.example')).toBeUndefined();
+    off.store.close();
+  });
+
+  it('is written from a tab at Read, under the site of that tab, and survives the app closing', async () => {
+    const reader = noteFixture('read');
+    const said = await executeTool('browser_note', { tabId: 'tab', notes: 'Search is behind the menu, not the header.' }, reader.context);
+    expect(said).toContain('Kept about docs.example');
+    // The site is taken from the tab, so a note is never about somewhere else.
+    expect(reader.store.getDomainNote('docs.example')?.notes).toBe('Search is behind the menu, not the header.');
+    reader.store.close();
+    // The app opening again reads the same note back.
+    const again = createDataStore(reader.dataDir, codec);
+    expect(again.getDomainNote('docs.example')?.notes).toBe('Search is behind the menu, not the header.');
+    again.close();
+  });
+
+  it('is handed to the first read of that site and not repeated to the second', async () => {
+    const full = noteFixture('full');
+    await executeTool('browser_note', { tabId: 'tab', notes: 'Prices need the currency picker set first.' }, full.context);
+    const first = await executeTool('browser_read', { tabId: 'tab' }, full.context);
+    const read = JSON.parse(first) as { text: string; notes?: string };
+    expect(read.text).toBe('Page text as it is now.');
+    expect(read.notes).toContain('Prices need the currency picker set first.');
+    // The marker: memory, not the page, and what to do when they disagree.
+    expect(read.notes).toContain('What you kept about docs.example');
+    expect(read.notes).toContain('The page above is the truth');
+    expect(read.notes).toContain('browser_note');
+    // Already in the thread: the next read is the page alone.
+    const second = JSON.parse(await executeTool('browser_read', { tabId: 'tab' }, full.context)) as { notes?: string };
+    expect(second.notes).toBeUndefined();
+    full.store.close();
+  });
+
+  it('leaves the read exactly as it was when the store cannot answer', async () => {
+    const full = noteFixture('full');
+    full.store.saveDomainNote('docs.example', 'Kept, but unreachable this time.');
+    vi.spyOn(full.store, 'getDomainNote').mockImplementation(() => { throw new Error('database is locked'); });
+    const said = JSON.parse(await executeTool('browser_read', { tabId: 'tab' }, full.context)) as { text: string; notes?: string };
+    expect(said.text).toBe('Page text as it is now.');
+    expect(said.notes).toBeUndefined();
+    expect(full.browser.read).toHaveBeenCalledOnce();
+    full.store.close();
+  });
+
+  it('refuses a credential, clears on an empty note, and has no site to remember for a local page', async () => {
+    const full = noteFixture('full');
+    await expect(executeTool('browser_note', { tabId: 'tab', notes: 'Sign in with api_key=9f3ac1bd77e4' }, full.context))
+      .rejects.toThrow(/reads like a credential/);
+    expect(full.store.getDomainNote('docs.example')).toBeUndefined();
+    await executeTool('browser_note', { tabId: 'tab', notes: 'The guide’s search is in the sidebar.' }, full.context);
+    expect(await executeTool('browser_note', { tabId: 'tab', notes: '' }, full.context)).toBe('Cleared what was kept about docs.example.');
+    expect(full.store.getDomainNote('docs.example')).toBeUndefined();
+    full.store.close();
+    // A document this app served, on a port that dies with the app, is no site.
+    const local = noteFixture('full', 'http://127.0.0.1:52341/artifact/index.html');
+    await expect(executeTool('browser_note', { tabId: 'tab', notes: 'Anything.' }, local.context))
+      .rejects.toThrow(/is not one: a page this app serves for you/);
+    const plain = JSON.parse(await executeTool('browser_read', { tabId: 'tab' }, local.context)) as { notes?: string };
+    expect(plain.notes).toBeUndefined();
+    local.store.close();
   });
 });

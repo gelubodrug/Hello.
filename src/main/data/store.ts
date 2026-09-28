@@ -309,6 +309,21 @@ export class DataStore {
         this.db.exec(`ALTER TABLE browser_tabs ADD COLUMN source TEXT;
       PRAGMA user_version = 8;`);
       })();
+    if (version < 9)
+      this.db.transaction(() => {
+        // What was learned about a site on an earlier visit, in the model's own
+        // words: the route that works, the control that is not where it looks,
+        // the trap. One note per site, kept for the application rather than for
+        // one chat, because the site is the same site in the next chat. The live
+        // page stays the truth — a read hands the note over marked as possibly
+        // out of date, and the model corrects or clears it when they disagree.
+        this.db.exec(`CREATE TABLE browser_domain_notes (
+        domain TEXT PRIMARY KEY,
+        notes TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+      PRAGMA user_version = 9;`);
+      })();
   }
 
   // ── Library of skills, plugins and MCP servers ────────────────────────────
@@ -996,6 +1011,26 @@ export class DataStore {
   }
   deleteBrowserTab(id: string): void {
     this.db.prepare('DELETE FROM browser_tabs WHERE id = ?').run(id);
+  }
+  /** What earlier visits learned about one site, and when, or nothing at all. */
+  getDomainNote(domain: string): { notes: string; updatedAt: number } | undefined {
+    const row = this.db
+      .prepare('SELECT notes, updatedAt FROM browser_domain_notes WHERE domain = ?')
+      .get(domain) as { notes?: unknown; updatedAt?: unknown } | undefined;
+    if (typeof row?.notes !== 'string' || !row.notes) return undefined;
+    return { notes: row.notes, updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : 0 };
+  }
+  /** One note per site: writing again replaces it, which is how a wrong one is corrected. */
+  saveDomainNote(domain: string, notes: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO browser_domain_notes(domain,notes,updatedAt) VALUES (?,?,?)
+      ON CONFLICT(domain) DO UPDATE SET notes=excluded.notes,updatedAt=excluded.updatedAt`,
+      )
+      .run(domain, notes, Date.now());
+  }
+  deleteDomainNote(domain: string): void {
+    this.db.prepare('DELETE FROM browser_domain_notes WHERE domain = ?').run(domain);
   }
   /** Every chat's downloads, oldest first. */
   listBrowserDownloads(): BrowserDownload[] {

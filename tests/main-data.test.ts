@@ -401,13 +401,54 @@ describe('a browser tab’s grant between sessions', () => {
     store.close();
     // Roll the file back to how version 4 left it: no control column at all.
     const raw = new Database(store.databasePath);
-    raw.exec(`ALTER TABLE browser_tabs DROP COLUMN control; ALTER TABLE browser_tabs DROP COLUMN source; DROP TABLE browser_downloads; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version = 4;`);
+    raw.exec(`ALTER TABLE browser_tabs DROP COLUMN control; ALTER TABLE browser_tabs DROP COLUMN source; DROP TABLE browser_downloads; DROP TABLE browser_domain_notes; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version = 4;`);
     raw.close();
     store = createDataStore(directory, codec);
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'off' }]);
     store.saveBrowserTab({ id: 'kept', conversationId: chat.id, title: 'Kept', url: 'https://example.test',
       control: 'full', loading: false, progress: null, canGoBack: false, canGoForward: false });
     expect(store.listBrowserTabs()[0].control).toBe('full');
+  });
+});
+
+// What was learned about a site, kept for the next visit. The live page stays
+// the truth; the note is a head start, and it outlives the app run.
+describe('what earlier visits learned about a site', () => {
+  it('is kept per site, replaced when corrected, cleared on request, and still there after a restart', () => {
+    expect(store.getDomainNote('docs.example')).toBeUndefined();
+    store.saveDomainNote('docs.example', 'Search is behind the menu, not the header.');
+    store.saveDomainNote('shop.example', 'Prices need the currency picker set first.');
+    expect(store.getDomainNote('docs.example')?.notes).toBe('Search is behind the menu, not the header.');
+    expect(store.getDomainNote('docs.example')?.updatedAt).toBeGreaterThan(0);
+    // One note per site: writing again is how a wrong one is corrected.
+    store.saveDomainNote('docs.example', 'Search moved into the header.');
+    expect(store.getDomainNote('docs.example')?.notes).toBe('Search moved into the header.');
+    // The app closing and opening again is not a reason to forget a site.
+    store.close();
+    store = createDataStore(directory, codec);
+    expect(store.getDomainNote('docs.example')?.notes).toBe('Search moved into the header.');
+    expect(store.getDomainNote('shop.example')?.notes).toBe('Prices need the currency picker set first.');
+    store.deleteDomainNote('docs.example');
+    expect(store.getDomainNote('docs.example')).toBeUndefined();
+    expect(store.getDomainNote('shop.example')?.notes).toBe('Prices need the currency picker set first.');
+  });
+
+  it('arrives as an additive migration on a database the previous version wrote', () => {
+    store.saveBrowserTab({ id: 'kept', conversationId: store.createConversation('Old').id, title: 'Kept',
+      url: 'https://example.test', control: 'read', loading: false, progress: null, canGoBack: false, canGoForward: false });
+    store.close();
+    // Roll the file back to how version 8 left it: the table did not exist yet.
+    const raw = new Database(store.databasePath);
+    raw.exec('DROP TABLE browser_domain_notes; PRAGMA user_version = 8;');
+    raw.close();
+    store = createDataStore(directory, codec);
+    // The tab that was there is still there, and the site notes now have a home.
+    expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'read' }]);
+    store.saveDomainNote('example.test', 'The login is on /account, not /login.');
+    expect(store.getDomainNote('example.test')?.notes).toBe('The login is on /account, not /login.');
+    const check = new Database(store.databasePath, { readonly: true });
+    expect((check.pragma('user_version', { simple: true }) as number)).toBe(9);
+    check.close();
   });
 });
 

@@ -431,6 +431,14 @@ export class ChatService {
   private readonly refreshing = new Map<string, Promise<void>>();
   /** Chats whose send is still preparing, before its reply is registered. */
   private readonly starting = new Set<string>();
+  /**
+   * Per chat, the sites whose earlier-visit notes this thread has already been
+   * given. A note belongs in the thread once: the first read of the site carries
+   * it, the reads after it do not repeat what is already there. The thread
+   * beginning again — a restart, a reset — hands it over again, because the
+   * model's memory of it began again too.
+   */
+  private readonly notedDomains = new Map<string, Set<string>>();
   private disposed = false;
 
   constructor(options: ChatServiceOptions) {
@@ -836,6 +844,8 @@ export class ChatService {
       await this.stop(conversationId, reason);
       await this.closeSession(conversationId);
       await rm(piConversationDir(this.store.dataDir, conversationId), { recursive: true, force: true });
+      // A thread that begins again is told again what earlier visits learned.
+      this.notedDomains.delete(conversationId);
       return await then();
     } finally {
       this.refreshing.delete(conversationId);
@@ -848,6 +858,7 @@ export class ChatService {
     await this.stop(conversationId);
     await this.closeSession(conversationId);
     await this.attachments.removeConversation(conversationId);
+    this.notedDomains.delete(conversationId);
     await rm(piConversationDir(this.store.dataDir, conversationId), { recursive: true, force: true });
   }
 
@@ -1399,8 +1410,10 @@ export class ChatService {
       this.publish(run, true);
       const started = Date.now();
       try {
+        let notedDomains = this.notedDomains.get(conversationId);
+        if (!notedDomains) this.notedDomains.set(conversationId, (notedDomains = new Set<string>()));
         const output = await executeToolOutput(name, args, {
-          store: this.store, conversationId, signal, browser: this.browser, workers: this.workers, web: run.web,
+          store: this.store, conversationId, signal, browser: this.browser, workers: this.workers, web: run.web, notedDomains,
           approve: () => this.approvalFor(name, run, part!, signal),
           skills: { read: (id, skill, file) => this.library.readSkillFile(
             this.sessions.get(id)?.resources.skillDirectories ?? [], skill, file) },

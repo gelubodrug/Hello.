@@ -147,6 +147,7 @@ const NAMES: Record<string, Naming> = {
   browser_open: named('Open in browser', 'Opened in browser', count => `Opened ${count} pages`),
   browser_tabs: named('Check open tabs', 'Checked open tabs', count => `Checked open tabs ${count} times`),
   browser_read: named('Read open page', 'Read open page', count => `Read ${count} open pages`),
+  browser_note: named('Note about this site', 'Noted about this site', count => `Noted about ${count} sites`),
   browser_navigate: {
     one: part => { const where = site(field(part, 'url')); return where ? (past(part) ? `Went to ${where}` : `Go to ${where}`) : past(part) ? 'Went to page' : 'Go to page'; },
     many: count => `Went to ${count} pages`,

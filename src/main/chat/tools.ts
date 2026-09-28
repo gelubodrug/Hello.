@@ -500,6 +500,15 @@ export function toolDefinitions(
         'List this chat’s downloads, newest first: every file a page offered or browser_download saved, with its state (saving, saved, failed, cancelled, refused), path, size and source. Needs no tab or grant. Check it before saying nothing was saved: a download a link opened in a popup, or one still saving when a click returned, is listed here.',
         {},
       ),
+      tool(
+        'browser_note',
+        `Keep what you learned about the site a tab is on, so the next visit does not start from nothing: the route that works, where a control really is, a trap to avoid, a page worth going straight to. One note per site, replaced by the next call, at most ${DOMAIN_NOTE_LIMIT} characters; send notes empty to clear it. Requires that tab’s Agent control Read or Full, and the site is taken from the tab itself — you cannot write a note about another site. The first browser_read of that site in a later thread hands the note back, marked as possibly out of date; when it disagrees with the page, correct it here rather than working around it. Keep only what generalises across visits, never page content to save re-reading it. Never put a credential, a token, a personal detail or anything private in a note: notes are the application’s, shared across this person’s chats, and a secret is refused here. A site this app serves for you — a generated document or a local preview — has no site to remember.`,
+        {
+          tabId: property('Tab ID of a tab on the site the note is about, at Read or Full.'),
+          notes: property('What to keep about this site, in your own words. Empty clears what is kept.'),
+        },
+        ['tabId'],
+      ),
     );
   if (extensions.skills.length)
     result.push(tool(
@@ -765,6 +774,13 @@ export interface ToolContext {
   skills?: { read(conversationId: string, name: string, file?: string): Promise<string> };
   /** Calls a tool on an activated MCP server through Hello's own client. */
   mcp?: { call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> };
+  /**
+   * The sites whose earlier-visit notes this thread has already been given, so
+   * the first read of a site carries its note and the next ones do not repeat
+   * it. Held by the chat service for the life of the thread; without it every
+   * read simply carries the note again.
+   */
+  notedDomains?: Set<string>;
 }
 
 /**
@@ -821,6 +837,61 @@ const TOOL_OUTPUT_LIMIT = 50 * 1024;
 
 /** Parts of a document still being written, per chat. Never written to disk. */
 const drafts = new Map<string, string[]>();
+
+/** How much one site's notes may be: a page of hints, never a copy of the site. */
+export const DOMAIN_NOTE_LIMIT = 2_048;
+/** Addresses that are this machine talking to itself, not a site to remember. */
+const LOOPBACK_HOST = /^(?:localhost|127(?:\.\d+){1,3}|0\.0\.0\.0|\[?::1?\]?)$/i;
+/**
+ * The site a note belongs to: the host of a real web page, and nothing else. A
+ * page this app serves for a chat — a generated document, a preview of the
+ * person's own file, a dev server — sits on a loopback port that changes with
+ * every run, so a note kept under that name would describe no site at all and
+ * would be handed to every other local page afterwards.
+ */
+export function noteDomain(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    const host = parsed.hostname.toLowerCase();
+    return !host || LOOPBACK_HOST.test(host) ? undefined : host;
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * A note is the model's own words about how a site works, never a credential.
+ * The rule is in the tool's description, where the model reads it; this is the
+ * refusal behind the rule — deliberately narrow, a guard and not a promise.
+ */
+const SECRET_IN_NOTE =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bbearer\s+[A-Za-z0-9._~+/=-]{16,}|\bauthorization\b\s*[:=]\s*\S{12,}|\b(?:password|passwd|passphrase|api[_-]?key|secret|token)\b\s*[:=]\s*\S{6,}|\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}/i;
+/**
+ * The first read of a site in a thread carries what earlier visits learned,
+ * marked as memory rather than as the page: the note is a head start, the page
+ * above it is the truth. A second read of the same site does not repeat it —
+ * it is already in the thread, and repeating it is what made history expensive.
+ * Nothing here can stop a read: a store that cannot answer leaves the page
+ * exactly as it was.
+ */
+function withEarlierNotes(context: ToolContext, content: BrowserContent): BrowserContent & { notes?: string } {
+  try {
+    const domain = noteDomain(content.url);
+    if (!domain || context.notedDomains?.has(domain)) return content;
+    const kept = context.store.getDomainNote(domain);
+    if (!kept) return content;
+    context.notedDomains?.add(domain);
+    const when = kept.updatedAt ? ` on ${new Date(kept.updatedAt).toISOString().slice(0, 10)}` : ' earlier';
+    return {
+      ...content,
+      notes: `What you kept about ${domain}${when}, not what the page says now. The page above is the truth: check the note against it before acting on it, and where they disagree correct it or clear it with browser_note. Given once per thread.\n\n${kept.notes}`,
+    };
+  } catch {
+    // Memory is a convenience; a read is the work. A failure here is silent.
+    return content;
+  }
+}
 
 /** A result carrying pictures. Only a tool that means to return images makes one. */
 class ImageResult {
@@ -1257,6 +1328,7 @@ export async function executeToolOutput(
       case 'browser_pointer':
       case 'browser_press':
       case 'browser_wait':
+      case 'browser_note':
       case 'browser_download': {
         const browser = context.browser;
         if (!browser) throw new Error('Browser tools are unavailable.');
@@ -1269,7 +1341,9 @@ export async function executeToolOutput(
         if (!tab) throw new Error(`Browser tab ${JSON.stringify(id)} is not owned by this chat. Refresh browser_tabs; do not reuse an old ID. Current tabs: ${JSON.stringify(available)}`);
         const waiting = name === 'browser_wait' ? parseWait(input) : undefined;
         const inspects = waiting !== undefined && (waiting.text !== undefined || waiting.target !== undefined);
-        const reading = name === 'browser_read' || name === 'browser_screenshot' || inspects;
+        // Keeping a note about a site is a reader's privilege, not a page
+        // action: the gate is the same one a read passes, and Off writes nothing.
+        const reading = name === 'browser_read' || name === 'browser_screenshot' || name === 'browser_note' || inspects;
         // A wait for an address, the load or time reads nothing: any mode.
         const unguarded = name === 'browser_navigate' || (waiting !== undefined && !inspects);
         if (
@@ -1280,10 +1354,28 @@ export async function executeToolOutput(
             `The requested tab ${JSON.stringify(tab.title)} (${tab.id}) has Agent control ${tab.control}, but ${name} requires ${reading ? 'Read or Full' : 'Full'}. Permission on another tab does not apply here. Current tabs: ${JSON.stringify(available)}. Use the permitted tab only if it matches the user's request; do not repeat this denied call or change permission automatically.`,
           );
         signal.throwIfAborted();
+        if (name === 'browser_note') {
+          const domain = noteDomain(tab.url);
+          if (!domain)
+            throw new Error(
+              `A note is kept per site, and ${JSON.stringify(tab.url)} is not one: a page this app serves for you, or an address on this machine, has no site to remember. Nothing was kept.`,
+            );
+          const notes = input.notes === undefined || input.notes === null ? '' : text(input, 'notes', DOMAIN_NOTE_LIMIT).trim();
+          if (!notes) {
+            store.deleteDomainNote(domain);
+            return `Cleared what was kept about ${domain}.`;
+          }
+          if (SECRET_IN_NOTE.test(notes))
+            throw new Error(
+              'That note reads like a credential, and a site note is shared across this person’s chats, so it was refused. Keep how the site works — routes, controls, traps — and never a password, token, key or personal detail.',
+            );
+          store.saveDomainNote(domain, notes);
+          return `Kept about ${domain}: ${notes.length} characters, replacing whatever was there. The first browser_read of ${domain} in a later thread hands it back, marked as possibly out of date.`;
+        }
         if (name === 'browser_read')
-          return browserOperation(signal, () =>
+          return withEarlierNotes(context, await browserOperation(signal, () =>
             browser.read(conversationId, id, signal),
-          );
+          ));
         if (name === 'browser_screenshot') {
           const request = parseScreenshotRequest(input);
           if (!browser.screenshot) throw new Error('Screenshots are unavailable in this running app.');
