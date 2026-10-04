@@ -38,6 +38,15 @@ export function liveTail(rows: readonly { kind: string }[], maxRows = 4): number
   return Math.max(0, rows.length - maxRows, rows.length - 2);
 }
 
+/** A span of work as people say it: 8s, 1m 05s, 1h 02m. */
+export function workDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
 export function activitySummary(parts: readonly MessagePart[]) {
   let searches = 0;
   let completedTools = 0;
@@ -88,6 +97,13 @@ const field = (part: ToolStep, key: string): string | undefined => {
     return typeof value === 'string' && value.trim() ? value : undefined;
   } catch { return undefined; }
 };
+/** A list of words from the step's input, such as the groups tools_find loaded. */
+const words = (part: ToolStep, key: string): string[] => {
+  try {
+    const value = (JSON.parse(part.input) as Record<string, unknown>)[key];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').slice(0, 6) : [];
+  } catch { return []; }
+};
 const site = (url?: string): string | undefined => {
   try { return new URL(url!).hostname.replace(/^www\./, ''); } catch { return undefined; }
 };
@@ -106,12 +122,22 @@ const named = (run: string, ran: string, plural: (count: number) => string): Nam
 });
 
 /**
- * Every tool Hello can call, named the way it would be said out loud. A tool
- * with no entry here still never shows its identifier: it says what little is
- * true — that a step ran — and carries the raw name after it as detail, where
- * an identifier is data rather than a name.
+ * Every tool Hello can call, named the way it would be said out loud. A
+ * plugin's tool has no name in Hello's words: it is said by its own name,
+ * "Used subagent", because "Ran a step" said nothing a reader could use
+ * (user, 29.09). An MCP server's tool stays "a connected tool".
  */
 const NAMES: Record<string, Naming> = {
+  // The groups it loaded, by the names people know them by: a plugin's, an
+  // MCP server's, or an area of Hello's own tools.
+  tools_find: {
+    one: part => {
+      const groups = words(part, 'groups').map(id => id.replace(/^(?:plugin|mcp):/, ''));
+      if (groups.length) return `${past(part) ? 'Loaded' : 'Load'} ${groups.join(', ')} tools`;
+      return past(part) ? 'Looked for tools' : 'Look for tools';
+    },
+    many: count => `Loaded tools ${count} times`,
+  },
   web_search: named('Search web', 'Searched web', count => `Ran ${count} searches`),
   fetch_url: {
     one: part => { const where = site(field(part, 'url')); return where ? `Read ${where}` : past(part) ? 'Read web page' : 'Read web page'; },
@@ -174,6 +200,7 @@ const NAMES: Record<string, Naming> = {
     many: count => `Used the pointer ${count} times`,
   },
   browser_screenshot: named('Look at page', 'Looked at page', count => `Looked at page ${count} times`),
+  browser_mark: named('Mark the page for you', 'Marked the page for you', count => `Marked pages for you ${count} times`),
   browser_download: named('Save file from page', 'Saved file from page', count => `Saved ${count} files from pages`),
   browser_downloads: named('Check downloads', 'Checked downloads', count => `Checked downloads ${count} times`),
   worker_list: named('Check workers', 'Checked workers', count => `Checked workers ${count} times`),
@@ -192,17 +219,22 @@ const NAMES: Record<string, Naming> = {
     one: part => { const said = field(part, 'text'); return said ? (past(part) ? `Said “${said.slice(0, 40)}” to a worker` : 'Talk to worker') : past(part) ? 'Talked to worker' : 'Talk to worker'; },
     many: count => `Talked to workers ${count} times`,
   },
+  skills_find: {
+    one: part => { const need = field(part, 'need'); return need ? (past(part) ? `Looked for a skill for “${need.slice(0, 40)}”` : 'Look for a skill') : past(part) ? 'Looked for a skill' : 'Look for a skill'; },
+    many: count => `Looked for skills ${count} times`,
+  },
   skill_load: {
-    one: part => { const name = field(part, 'name'); return name ? `Read ${name} skill` : 'Read skill'; },
+    // A found skill arrives by id: its last segment is its name.
+    one: part => { const name = field(part, 'name') ?? field(part, 'id')?.split(/[/:]/).filter(Boolean).at(-1); return name ? `Read ${name} skill` : 'Read skill'; },
     many: count => `Read ${count} skills`,
   },
 };
 const UNNAMED: Naming = {
   one: part => (part.name.startsWith('mcp_')
     ? (past(part) ? 'Used a connected tool' : 'Use a connected tool')
-    : (past(part) ? 'Ran a step' : 'Run a step')),
+    : `${past(part) ? 'Used' : 'Use'} ${part.name}`),
   many: (count, parts) => parts[0]?.name.startsWith('mcp_')
-    ? `Used ${count} connected tools` : `Ran ${count} steps`,
+    ? `Used ${count} connected tools` : `Used ${parts[0]?.name ?? 'a tool'} ${count} times`,
 };
 
 /** The label for one step or for a run of them. Never a tool identifier. */

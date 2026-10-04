@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ToolDefinition } from './tools';
+import type { ToolCatalog } from './tool-groups';
 import { readToolOutput, type ToolOutput } from './tool-output';
 
 // One bridge belongs to one headless Pi process and one Hello conversation.
@@ -21,6 +22,8 @@ export interface PiToolBridgeOptions {
   ): Promise<ToolOutput>;
   /** Current browser/tab guidance, computed afresh before every model request. */
   getContext?(): string | Promise<string>;
+  /** Which tools are core and which the model loads by group (tool-groups.ts). */
+  getCatalog?(tools: ToolDefinition[]): ToolCatalog | Promise<ToolCatalog>;
 }
 
 export interface PiToolBridge {
@@ -138,7 +141,9 @@ export async function createPiToolBridge(options: PiToolBridgeOptions): Promise<
     void (async () => {
       const { signal } = controller;
       if (request.method === 'GET' && request.url === '/tools') {
-        send(response, 200, { tools: await withAbort(signal, Promise.resolve(options.getTools())) });
+        const tools = await withAbort(signal, Promise.resolve(options.getTools()));
+        const catalog = options.getCatalog ? await withAbort(signal, Promise.resolve(options.getCatalog(tools))) : undefined;
+        send(response, 200, { tools, ...(catalog ?? {}) });
         return;
       }
       if (request.method === 'GET' && request.url === '/ready') {
@@ -176,7 +181,9 @@ export async function createPiToolBridge(options: PiToolBridgeOptions): Promise<
       }
     })().catch((error: unknown) => {
       const status = error instanceof BridgeError ? error.status : 500;
-      const message = error instanceof Error ? error.message.slice(0, 2048) : 'Hello tool execution failed.';
+      // Whatever a tool threw says why; only nothing at all falls back to the generic words.
+      const message = error instanceof Error ? error.message.slice(0, 2048)
+        : typeof error === 'string' && error.trim() ? error.slice(0, 2048) : 'Hello tool execution failed.';
       send(response, status, { error: message });
       request.resume();
     }).finally(() => {

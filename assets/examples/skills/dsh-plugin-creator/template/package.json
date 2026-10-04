@@ -1,0 +1,19 @@
+{
+  "name": "dsh-plugin-word-count",
+  "version": "0.1.0",
+  "description": "A DeepSeek Harness plugin made in Hello.: one tool, word_count, and the skill that says when to use it.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/", "skills/", "cordis.patch.yml", "README.md"],
+  "keywords": ["deepseek-harness", "dsh", "dsh-plugin", "tools", "skill"],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2 || >=0.2.0-rc.1 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
+}

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fetchedSources, sourcesForMessage, withSourceLinks } from '../../shared/web';
 import type {
   AppSettings,
+  UsageSummary,
   SavedConnection,
   LibraryResource,
   ResourceKind,
@@ -29,6 +30,8 @@ import type {
   QueuedMessage,
   QueuedMode,
   SettingsPatch,
+  TabMark,
+  TabMarks,
 } from '../../shared/types';
 
 export interface SecretCodec {
@@ -120,10 +123,13 @@ type StoredConversation = Omit<Conversation, 'planning' | 'runbook' | 'tasks' | 
 const hydrateConversation = ({ freshFrom, ...row }: StoredConversation): Conversation =>
   ({ ...row, planning: row.planning === 1, runbook: row.runbook === 1, tasks: row.tasks === 1,
     ...(typeof freshFrom === 'number' && freshFrom > 0 ? { freshFrom } : {}) });
+export const NOTEBOOK_KINDS: readonly NotebookKind[] = ['runbook', 'tasks', 'plan'];
 function validKind(kind: string): asserts kind is NotebookKind {
-  if (kind !== 'runbook' && kind !== 'tasks')
+  if (!(NOTEBOOK_KINDS as readonly string[]).includes(kind))
     throw new Error('Unknown notebook kind.');
 }
+type StoredNotebook = Omit<NotebookEntry, 'shared'> & { shared: number };
+const hydrateNotebook = ({ shared, ...row }: StoredNotebook): NotebookEntry => ({ ...row, shared: shared !== 0 });
 function parse<T>(json: unknown, fallback: T): T {
   try {
     return typeof json === 'string' ? (JSON.parse(json) as T) : fallback;
@@ -196,7 +202,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 7)
+    if (version > 14)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -345,6 +351,49 @@ export class DataStore {
         PRIMARY KEY (conversationId, domain)
       );
       PRAGMA user_version = 10;`);
+      })();
+    if (version < 11)
+      this.db.transaction(() => {
+        // One notebook with three sections (user, 29.09): Runbooks, Tasks and
+        // Plans, each chapter with its own switch. The plan plan_write keeps
+        // was the Tasks entry titled "Plan" — the one it replaced whole — and
+        // it moves to Plans. SQLite cannot widen a CHECK in place: the table
+        // is rebuilt, rows copied as they are.
+        this.db.exec(`CREATE TABLE notebooks_next (
+          id TEXT PRIMARY KEY,
+          conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('runbook','tasks','plan')),
+          title TEXT NOT NULL, body TEXT NOT NULL,
+          createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+          shared INTEGER NOT NULL DEFAULT 1 CHECK(shared IN (0,1))
+        );
+        INSERT INTO notebooks_next(id,conversationId,kind,title,body,createdAt,updatedAt,shared)
+          SELECT id,conversationId,CASE WHEN kind = 'tasks' AND title = 'Plan' THEN 'plan' ELSE kind END,title,body,createdAt,updatedAt,1 FROM notebooks;
+        DROP TABLE notebooks;
+        ALTER TABLE notebooks_next RENAME TO notebooks;
+        CREATE INDEX notebooks_conversation ON notebooks(conversationId, kind, createdAt);
+        PRAGMA user_version = 11;`);
+      })();
+    if (version < 12)
+      this.db.transaction(() => {
+        // A reply Pi began on its own, woken by a plugin, says so (user, 29.09).
+        const columns = (this.db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>).map(column => column.name);
+        if (!columns.includes('startedBy')) this.db.exec('ALTER TABLE messages ADD COLUMN startedBy TEXT');
+        this.db.exec('PRAGMA user_version = 12');
+      })();
+    if (version < 13)
+      this.db.transaction(() => {
+        // The marks an agent left on a page stay with its tab (user, 30.09).
+        const columns = (this.db.prepare('PRAGMA table_info(browser_tabs)').all() as Array<{ name: string }>).map(column => column.name);
+        if (!columns.includes('marks')) this.db.exec('ALTER TABLE browser_tabs ADD COLUMN marks TEXT');
+        this.db.exec('PRAGMA user_version = 13');
+      })();
+    if (version < 14)
+      this.db.transaction(() => {
+        // How long a reply worked, across its retries, so its activity says so (user, 04.10).
+        const columns = (this.db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>).map(column => column.name);
+        if (!columns.includes('workedMs')) this.db.exec('ALTER TABLE messages ADD COLUMN workedMs INTEGER');
+        this.db.exec('PRAGMA user_version = 14');
       })();
   }
 
@@ -505,6 +554,8 @@ export class DataStore {
       if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, !patch.runbook, 'off');
       if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, !patch.tasks, 'off');
     })();
+    // A section switched off empties its export: a worker's file is not a way around the switch.
+    if (patch.planning !== undefined || patch.runbook !== undefined || patch.tasks !== undefined) this.refreshNotebookExports(id);
     return row;
   }
   /**
@@ -540,7 +591,7 @@ export class DataStore {
   }
   /**
    * The chat as new: its messages, queued messages and restart mark go and,
-   * with notes, its Runbook and Tasks. Its browser tabs, downloads, switches,
+   * with notes, its notebook (Runbooks, Tasks and Plans). Its browser tabs, downloads, switches,
    * folder and title stay: the tools are the reason to keep the chat at all.
    */
   resetConversation(id: string, options: { notes: boolean }): Conversation {
@@ -553,7 +604,7 @@ export class DataStore {
     })();
     if (options.notes) {
       this.refreshNotebookExports(id);
-      for (const kind of ['runbook', 'tasks'] as const) this.notifyNotebooks({ conversationId: id, kind });
+      for (const kind of NOTEBOOK_KINDS) this.notifyNotebooks({ conversationId: id, kind });
     }
     return this.getConversation(id);
   }
@@ -564,9 +615,9 @@ export class DataStore {
         .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     })();
-    // Remove only our two known generated exports, never a user repository.
+    // Remove only our known generated exports, never a user repository.
     const directory = path.join(this.dataDir, 'notebooks', row.id);
-    for (const kind of ['runbook', 'tasks']) {
+    for (const kind of NOTEBOOK_KINDS) {
       const file = path.join(directory, `${kind}.md`);
       if (existsSync(file)) unlinkSync(file);
     }
@@ -632,12 +683,42 @@ export class DataStore {
     return row;
   }
 
+  /**
+   * What every reply has cost and moved, added up (user, 04.10, the second
+   * design audit: cost lived only inside one chat's meter, with no total and
+   * no way to see which model or chat spends it). Read from the usage each
+   * reply already keeps; a reply without one counts for nothing.
+   */
+  usageSummary(): UsageSummary {
+    const rows = this.db.prepare(`SELECT m.conversationId AS conversationId, c.title AS title, m.model AS model,
+        COALESCE(json_extract(m.usage, '$.input'), 0) AS input, COALESCE(json_extract(m.usage, '$.output'), 0) AS output,
+        COALESCE(json_extract(m.usage, '$.cost'), 0) AS cost
+      FROM messages m JOIN conversations c ON c.id = m.conversationId
+      WHERE m.role = 'assistant' AND m.usage IS NOT NULL`).all() as Array<{ conversationId: string; title: string; model: string | null; input: number; output: number; cost: number }>;
+    const total = { replies: 0, input: 0, output: 0, cost: 0 };
+    const models = new Map<string, UsageSummary['models'][number]>();
+    const chats = new Map<string, UsageSummary['chats'][number]>();
+    for (const row of rows) {
+      const input = Number(row.input) || 0, output = Number(row.output) || 0, cost = Number(row.cost) || 0;
+      const add = <T extends { replies: number; input: number; output: number; cost: number }>(into: T) => {
+        into.replies += 1; into.input += input; into.output += output; into.cost += cost;
+      };
+      add(total);
+      const model = row.model || 'Unknown model';
+      add(models.get(model) ?? models.set(model, { model, replies: 0, input: 0, output: 0, cost: 0 }).get(model)!);
+      add(chats.get(row.conversationId) ?? chats.set(row.conversationId, { conversationId: row.conversationId, title: row.title, replies: 0, input: 0, output: 0, cost: 0 }).get(row.conversationId)!);
+    }
+    const heaviest = (a: { cost: number; input: number; output: number }, b: { cost: number; input: number; output: number }) =>
+      b.cost - a.cost || (b.input + b.output) - (a.input + a.output);
+    return { ...total, models: [...models.values()].sort(heaviest), chats: [...chats.values()].sort(heaviest).slice(0, 5) };
+  }
+
   listMessages(conversationId: string): Message[] {
     this.getConversation(conversationId);
     const rows = this.db
       .prepare('SELECT * FROM messages WHERE conversationId = ? ORDER BY seq')
       .all(conversationId) as Array<
-      Message & { parts: string; usage: string | null; model: string | null }
+      Message & { parts: string; usage: string | null; model: string | null; startedBy: string | null; workedMs: number | null }
     >;
     return rows.map((row) => ({
       id: row.id,
@@ -650,6 +731,8 @@ export class DataStore {
       error: row.error,
       usage: parse(row.usage, undefined),
       ...(row.model ? { model: row.model } : {}),
+      ...(row.startedBy ? { startedBy: row.startedBy } : {}),
+      ...(row.workedMs ? { workedMs: row.workedMs } : {}),
     }));
   }
   saveMessage(message: Message): Message {
@@ -662,10 +745,11 @@ export class DataStore {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model)
-        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model)
+          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model,startedBy,workedMs)
+        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model,@startedBy,@workedMs)
         ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts,
-          status=excluded.status, error=excluded.error, usage=excluded.usage, model=COALESCE(excluded.model, messages.model)`,
+          status=excluded.status, error=excluded.error, usage=excluded.usage, model=COALESCE(excluded.model, messages.model),
+          startedBy=COALESCE(excluded.startedBy, messages.startedBy), workedMs=COALESCE(excluded.workedMs, messages.workedMs)`,
         )
         .run({
           ...message,
@@ -673,6 +757,8 @@ export class DataStore {
           error: message.error ?? null,
           usage: message.usage ? JSON.stringify(message.usage) : null,
           model: message.model ?? null,
+          startedBy: message.startedBy ?? null,
+          workedMs: message.workedMs ?? null,
         });
       this.db
         .prepare('UPDATE conversations SET updatedAt = ? WHERE id = ?')
@@ -740,9 +826,12 @@ export class DataStore {
       maxOutputTokens: patch.maxOutputTokens ?? current.maxOutputTokens ?? 4096,
       modelCompatibility: patch.modelCompatibility ?? current.modelCompatibility ?? 'auto',
       approvals: patch.approvals ?? current.approvals ?? 'all',
+      subagentModel: patch.subagentModel !== undefined ? (patch.subagentModel.trim().slice(0, 500) || undefined) : current.subagentModel,
       // What was learned about one model does not carry to the next.
       contextScale: patch.contextScale ?? current.contextScale,
     };
+    // A model id is its provider's: another connection starts from the chat's own model again.
+    if (patch.subagentModel === undefined && next.endpointUrl !== current.endpointUrl) delete next.subagentModel;
     // Provenance for the two numbers Pi launches on. Writing either one claims
     // them for the endpoint and model in force, so a deliberate value is never
     // replaced by a published one; pointing at a different model or provider
@@ -881,20 +970,21 @@ export class DataStore {
   listNotebooks(conversationId: string, kind: NotebookKind): NotebookEntry[] {
     this.getConversation(conversationId);
     validKind(kind);
-    return this.db
+    return (this.db
       .prepare(
         'SELECT * FROM notebooks WHERE conversationId = ? AND kind = ? ORDER BY createdAt, id',
       )
-      .all(conversationId, kind) as NotebookEntry[];
+      .all(conversationId, kind) as StoredNotebook[]).map(hydrateNotebook);
   }
   saveNotebook(input: NotebookInput): NotebookEntry {
     this.getConversation(input.conversationId);
     validKind(input.kind);
-    const old = input.id
+    const stored = input.id
       ? (this.db
           .prepare('SELECT * FROM notebooks WHERE id = ?')
-          .get(input.id) as NotebookEntry | undefined)
+          .get(input.id) as StoredNotebook | undefined)
       : undefined;
+    const old = stored ? hydrateNotebook(stored) : undefined;
     if (input.id && !old) throw new Error('Notebook entry not found.');
     if (
       old &&
@@ -918,14 +1008,16 @@ export class DataStore {
       title: title(input.title, 'Untitled'),
       createdAt: old?.createdAt ?? now,
       updatedAt: now,
+      // A new chapter is on; a save never moves the switch.
+      shared: old?.shared ?? true,
     };
     this.db
       .prepare(
-        `INSERT INTO notebooks(id,conversationId,kind,title,body,createdAt,updatedAt)
-      VALUES (@id,@conversationId,@kind,@title,@body,@createdAt,@updatedAt)
+        `INSERT INTO notebooks(id,conversationId,kind,title,body,createdAt,updatedAt,shared)
+      VALUES (@id,@conversationId,@kind,@title,@body,@createdAt,@updatedAt,@shared)
       ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,updatedAt=excluded.updatedAt`,
       )
-      .run(row);
+      .run({ ...row, shared: row.shared ? 1 : 0 });
     this.refreshNotebookExports(input.conversationId);
     this.notifyNotebooks({ conversationId: input.conversationId, kind: input.kind });
     return row;
@@ -939,6 +1031,18 @@ export class DataStore {
     this.refreshNotebookExports(old.conversationId);
     this.notifyNotebooks({ conversationId: old.conversationId, kind: old.kind });
   }
+  /**
+   * A chapter's switch: whether the model and CLI workers see it. Its words
+   * and revision stay as they are, so a draft open on it saves normally.
+   */
+  shareNotebook(id: string, shared: boolean): NotebookEntry {
+    const stored = this.db.prepare('SELECT * FROM notebooks WHERE id = ?').get(id) as StoredNotebook | undefined;
+    if (!stored) throw new Error('Notebook entry not found.');
+    this.db.prepare('UPDATE notebooks SET shared = ? WHERE id = ?').run(shared ? 1 : 0, id);
+    this.refreshNotebookExports(stored.conversationId);
+    this.notifyNotebooks({ conversationId: stored.conversationId, kind: stored.kind });
+    return { ...hydrateNotebook(stored), shared };
+  }
   notebookPaths(conversationId: string): NotebookPaths {
     const conversation = this.getConversation(conversationId);
     const directory = path.join(this.dataDir, 'notebooks', conversation.id);
@@ -946,9 +1050,12 @@ export class DataStore {
     const files: NotebookPaths = {
       runbook: path.join(directory, 'runbook.md'),
       tasks: path.join(directory, 'tasks.md'),
+      plan: path.join(directory, 'plan.md'),
     };
-    for (const kind of ['runbook', 'tasks'] as const) {
-      const text = this.listNotebooks(conversationId, kind)
+    const on = { runbook: conversation.runbook !== false, tasks: conversation.tasks !== false, plan: conversation.planning === true };
+    for (const kind of NOTEBOOK_KINDS) {
+      // What a worker may read: a section that is on, and of Runbooks only the chapters that are on.
+      const text = (on[kind] ? this.listNotebooks(conversationId, kind) : []).filter(entry => kind !== 'runbook' || entry.shared)
         .map((entry) => `# ${entry.title}\n\n${entry.body.trimEnd()}\n`)
         .join('\n');
       if (existsSync(files[kind]) && readFileSync(files[kind], 'utf8') === text)
@@ -992,9 +1099,9 @@ export class DataStore {
     const rows = this.db
       .prepare('SELECT * FROM browser_tabs ORDER BY rowid')
       .all() as Array<
-      Pick<BrowserTab, 'id' | 'conversationId' | 'title' | 'url'> & { control?: string; source?: string | null }
+      Pick<BrowserTab, 'id' | 'conversationId' | 'title' | 'url'> & { control?: string; source?: string | null; marks?: string | null }
     >;
-    return rows.map(({ control, source, ...row }) => ({
+    return rows.map(({ control, source, marks, ...row }) => ({
       ...row,
       // What the human chose for this page, kept between sessions.
       control: control === 'read' || control === 'full' ? control : 'off',
@@ -1002,6 +1109,7 @@ export class DataStore {
       // rather than empty: the browser asks `!tab.source` to tell an ordinary
       // web page from one the app serves, and an empty string is not a handle.
       ...(typeof source === 'string' && source ? { source } : {}),
+      ...(storedMarks(marks) ? { marks: storedMarks(marks) } : {}),
       loading: false,
       progress: null,
       canGoBack: false,
@@ -1017,18 +1125,22 @@ export class DataStore {
       throw new Error('Browser tab belongs to another conversation.');
     this.db
       .prepare(
-        `INSERT INTO browser_tabs(id,conversationId,title,url,control,source) VALUES (@id,@conversationId,@title,@url,@control,@source)
-      ON CONFLICT(id) DO UPDATE SET title=excluded.title,url=excluded.url,control=excluded.control,source=excluded.source`,
+        `INSERT INTO browser_tabs(id,conversationId,title,url,control,source,marks) VALUES (@id,@conversationId,@title,@url,@control,@source,@marks)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title,url=excluded.url,control=excluded.control,source=excluded.source,marks=excluded.marks`,
       )
       .run({
         id: tab.id,
         conversationId: tab.conversationId,
         title: tab.title,
         url: tab.url,
-        control: tab.control === 'read' || tab.control === 'full' ? tab.control : 'off',
+        // Only the human's grant is kept: the Full a tab got because the model
+        // opened it was for that session's work (user, 29.09).
+        control: !tab.agentGranted && (tab.control === 'read' || tab.control === 'full') ? tab.control : 'off',
         // A tab that navigates away from the page the app served for it loses
         // its handle, and the row must lose it too: NULL, not the old handle.
         source: typeof tab.source === 'string' && tab.source ? tab.source : null,
+        // Each page's marks, kept until the person reloads that page or clears them.
+        marks: tab.marks?.length ? JSON.stringify(tab.marks) : null,
       });
   }
   deleteBrowserTab(id: string): void {
@@ -1102,6 +1214,25 @@ export class DataStore {
   close(): void {
     if (this.db.open) this.db.close();
   }
+}
+
+/** Marks read back from a tab's row: only what is shaped like them — at most ten pages, six marks each. */
+function storedMarks(value: string | null | undefined): TabMarks[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    // One page, as the first version of this column kept them.
+    const pages = (Array.isArray(parsed) ? parsed : [parsed]) as Array<{ url?: unknown; marks?: unknown }>;
+    const kept = pages.flatMap(page => {
+      if (!page || typeof page.url !== 'string' || !Array.isArray(page.marks)) return [];
+      const marks = page.marks.filter((mark): mark is TabMark => Boolean(mark) && typeof mark === 'object'
+        && ['n', 'x', 'y', 'width', 'height'].every(key => Number.isFinite((mark as Record<string, unknown>)[key]))
+        && typeof (mark as TabMark).note === 'string'
+        && ((mark as TabMark).path === undefined || typeof (mark as TabMark).path === 'string')).slice(0, 6);
+      return marks.length ? [{ url: page.url, marks }] : [];
+    }).slice(-10);
+    return kept.length ? kept : undefined;
+  } catch { return undefined; }
 }
 
 export function createDataStore(

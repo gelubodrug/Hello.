@@ -1,0 +1,11 @@
+# One tool row, and the plugin's own skills folder offered through dsh's
+# filesystem skill provider (the same shape @tt-a1i/archify-dsh uses).
+- insert:
+    - id: word-count-tool
+      name: dsh-plugin-word-count
+    - id: word-count-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: word-count-plugin
+        includeDefaultRoots: false
+        bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('dsh-plugin-word-count/package.json')), 'skills')

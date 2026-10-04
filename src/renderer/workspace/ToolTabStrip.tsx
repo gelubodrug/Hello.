@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Bot, FolderOpen, Globe, Terminal, X } from 'lucide-react';
+import { ArrowLeftToLine, Bot, FolderOpen, Globe, Terminal, X } from 'lucide-react';
 import type { BrowserTab, TerminalSession } from '../../shared/types';
 import type { FilesTab } from '../../shared/files';
 import { ContextMenu, Truncated } from '../ui/primitives';
@@ -8,12 +8,15 @@ type Tool = BrowserTab | TerminalSession | FilesTab;
 
 /** Tabs share the available width, down to one icon each. Only once the icon
  * budget is exhausted does the strip scroll; pane actions never shrink. */
-export function ToolTabStrip({ tools, selectedId, onSelect, onClose }: {
+export function ToolTabStrip({ tools, selectedId, onSelect, onClose, onDock }: {
   tools: Tool[]; selectedId?: string; onSelect: (id: string) => void; onClose: (tool: Tool) => void;
+  /** Moves a terminal into the chat pane, as a page beside Chat and Notebook. */
+  onDock?: (session: TerminalSession) => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const menuTool = tools.find(tool => tool.id === menu?.id);
+  const menuTerminal = menuTool && !('url' in menuTool) && menuTool.kind !== 'files' ? menuTool : undefined;
   useEffect(() => { if (menu && !menuTool) setMenu(null); }, [menu, menuTool]);
   useLayoutEffect(() => {
     const node = strip.current;
@@ -69,7 +72,11 @@ export function ToolTabStrip({ tools, selectedId, onSelect, onClose }: {
     </div>
     <ContextMenu position={menu && menuTool ? { x: menu.x, y: menu.y } : null}
       ariaLabel={menuTool ? `Actions for ${menuTool.title || 'tool'}` : 'Tool actions'}
-      items={menuTool ? [{ id: 'close', label: 'Close tab', icon: X, action: () => onClose(menuTool) }] : []}
+      items={menuTool ? [
+        // A CLI as the chat (user, 30.09): the same session, moved to the left.
+        ...(onDock && menuTerminal ? [{ id: 'dock', label: 'Set as chat tab', icon: ArrowLeftToLine, action: () => onDock(menuTerminal) }] : []),
+        { id: 'close', label: 'Close tab', icon: X, action: () => onClose(menuTool) },
+      ] : []}
       onClose={() => setMenu(null)} />
   </>;
 }

@@ -49,6 +49,7 @@ vi.mock("electron", async () => {
     setWindowOpenHandler = vi.fn();
     isDestroyed = () => this.destroyed;
     isLoading = () => this.loading;
+    isLoadingMainFrame = () => this.loading;
     getURL = () => this.url;
     getTitle = () => this.title;
     loadURL = vi.fn(async (url: string) => {

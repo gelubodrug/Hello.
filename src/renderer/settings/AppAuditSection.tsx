@@ -1,7 +1,10 @@
-import { Anchor, Copy, FolderOpen, HardDrive, Info, Plug, Server, CheckCircle, AlertCircle } from 'lucide-react';
+import { Anchor, Copy, FolderOpen, HardDrive, Info, Plug, Server, CheckCircle, AlertCircle, Coins } from 'lucide-react';
+import type { UsageSummary } from '../../shared/types';
 import { api } from '../api';
 import { IconButton } from '../ui/primitives';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { dollars, tokens } from '../chat/ContextMeter';
+import { modelName } from './presets';
 
 interface Props {
   dataPath: string;
@@ -10,8 +13,54 @@ interface Props {
   extensionsLoaded: number;
 }
 
+/**
+ * What every reply has cost and moved, by model and by chat (user, 04.10, the
+ * second design audit: cost lived only inside one chat's meter). Tokens are
+ * always shown; cost only where a provider reported one.
+ */
+function UsageCard({ usage }: { usage: UsageSummary }) {
+  const priced = usage.cost > 0;
+  const row = (input: number, output: number, cost: number) => <>
+    <td>{tokens(input + output)}</td>
+    {priced && <td>{cost > 0 ? dollars(cost) : '—'}</td>}
+  </>;
+  return (
+    <div className="audit-card audit-card-wide">
+      <div className="audit-card-head">
+        <Coins size={16} aria-hidden />
+        <span>Usage</span>
+      </div>
+      <p className="audit-value">
+        {priced ? `${dollars(usage.cost)} · ` : ''}{tokens(usage.input)} in · {tokens(usage.output)} out · {usage.replies.toLocaleString()} {usage.replies === 1 ? 'reply' : 'replies'}
+      </p>
+      <table className="audit-usage" aria-label="Usage by model">
+        <thead><tr><th>Model</th><th>Replies</th><th>Tokens</th>{priced && <th>Cost</th>}</tr></thead>
+        <tbody>
+          {usage.models.slice(0, 6).map(item => (
+            <tr key={item.model}><td title={item.model}>{modelName(item.model)}</td><td>{item.replies}</td>{row(item.input, item.output, item.cost)}</tr>
+          ))}
+        </tbody>
+      </table>
+      <table className="audit-usage" aria-label="Usage by chat">
+        <thead><tr><th>Chat</th><th>Replies</th><th>Tokens</th>{priced && <th>Cost</th>}</tr></thead>
+        <tbody>
+          {usage.chats.map(item => (
+            <tr key={item.conversationId}><td title={item.title}>{item.title}</td><td>{item.replies}</td>{row(item.input, item.output, item.cost)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function AppAuditSection({ dataPath, version, endpointUrl, extensionsLoaded }: Props) {
   const [copyOk, setCopyOk] = useState(false);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void api.settings.usage?.().then(value => { if (alive) setUsage(value); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const endpoint = endpointUrl || 'Not configured';
   const endpointOk = !!endpointUrl;
 
@@ -73,6 +122,8 @@ export function AppAuditSection({ dataPath, version, endpointUrl, extensionsLoad
           </div>
           <p className="audit-value">{extensionsLoaded} installed</p>
         </div>
+
+        {usage && usage.replies > 0 && <UsageCard usage={usage} />}
       </div>
 
       <div className="audit-note">

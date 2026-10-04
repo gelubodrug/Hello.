@@ -118,7 +118,7 @@ describe('importing skills', () => {
 });
 
 describe('importing plugins', () => {
-  it('lists the Pi resources it contains and reports declared dependencies', async () => {
+  it('lists the Pi resources it contains; a declared package nothing imports needs nothing', async () => {
     const folder = path.join(source, 'plugin');
     mkdirSync(path.join(folder, 'extensions'), { recursive: true });
     mkdirSync(path.join(folder, 'skills', 'bundled'), { recursive: true });
@@ -132,7 +132,9 @@ describe('importing plugins', () => {
     expect(imported.name).toBe('demo-plugin');
     expect(imported.version).toBe('2.0.0');
     expect(imported.entries).toEqual(expect.arrayContaining(['extension: extensions/tool.ts', 'skill: skills/bundled']));
-    expect(imported.warning).toMatch(/left-pad/);
+    // What an extension imports is bundled at import (extensions-bundle.test.ts);
+    // a package only declared is neither bundled nor worth a warning.
+    expect(imported.warning).toBeUndefined();
 
     store.setResourceActive(conversationId, imported.id, true);
     const active = await library.activeFor(conversationId);

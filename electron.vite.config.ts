@@ -6,7 +6,7 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: { rollupOptions: {
-      input: { index: resolve('src/main/index.ts'), 'pi-extension': resolve('src/main/chat/pi-extension.ts') },
+      input: { index: resolve('src/main/index.ts'), 'pi-extension': resolve('src/main/chat/pi-extension.ts'), 'dsh-host': resolve('src/main/dsh/host-entry.ts') },
       output: { entryFileNames: '[name].js' },
     } },
   },

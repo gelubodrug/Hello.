@@ -1,12 +1,13 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Script } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Conversation, NotebookEntry, NotebookKind } from '../src/shared/types';
+import type { BrowserTab, Conversation, NotebookEntry, NotebookKind } from '../src/shared/types';
 import type { DataStore } from '../src/main/data/store';
+import type { BrowserHooks } from '../src/main/chat/tools';
 import { createWorkerNotebookContext, type WorkerNotebookContext } from '../src/main/terminal/notebook-context';
 
 const roots: string[] = [];
@@ -27,7 +28,7 @@ interface BridgeReply {
   error?: string;
 }
 
-async function fixture(options: { folder?: string | null; runbook?: boolean; tasks?: boolean } = {}) {
+async function fixture(options: { folder?: string | null; runbook?: boolean; tasks?: boolean; browser?: BrowserHooks; piExtension?: string } = {}) {
   const folder = options.folder;
   const root = mkdtempSync(join(tmpdir(), 'hello-cli-notebooks-test-'));
   roots.push(root);
@@ -38,7 +39,7 @@ async function fixture(options: { folder?: string | null; runbook?: boolean; tas
     createdAt: 1, updatedAt: 1,
   };
   const makeEntry = (id: string, conversationId: string, kind: NotebookKind, body: string): NotebookEntry => ({
-    id, conversationId, kind, title: id, body, createdAt: 1, updatedAt: 1,
+    id, conversationId, kind, title: id, body, createdAt: 1, updatedAt: 1, shared: true,
   });
   const entries = new Map([
     makeEntry('task-a', chat.id, 'tasks', '# Work\n- [ ] Audit entry points\n  - [ ] Check route ownership\n- [x] Existing done'),
@@ -66,7 +67,7 @@ async function fixture(options: { folder?: string | null; runbook?: boolean; tas
   // Only the store operations used by this bridge exist: no native SQLite,
   // browser, filesystem tool, PTY, model or provider process is constructed.
   const store = { getConversation, listNotebooks, saveNotebook } as unknown as DataStore;
-  const context = await createWorkerNotebookContext({ store, conversationId: chat.id, cwd, userDataDir: root });
+  const context = await createWorkerNotebookContext({ store, conversationId: chat.id, cwd, userDataDir: root, browser: options.browser, piExtension: options.piExtension });
   contexts.push(context);
   const request = async (path: string, payload?: unknown, authenticated = true) => {
     const response = await fetch(context.env.HELLO_NOTEBOOK_BRIDGE_URL + path, {
@@ -122,6 +123,20 @@ describe('conversation-scoped CLI notebook connection', () => {
     f.entries.set(before.id, { ...before, body: '- [ ] Added after CLI launch' });
     expect((await f.execute('notebook_list', { kind: 'tasks' })).value[0].body)
       .toBe('- [ ] Added after CLI launch');
+  });
+
+  it('does not list a Runbook chapter the human switched off; Tasks have no such switch', async () => {
+    const f = await fixture();
+    f.entries.set('reference', { ...f.entries.get('reference')!, shared: false });
+    expect((await f.execute('notebook_list', { kind: 'runbook' })).value).toEqual([]);
+    // Only a Runbook chapter has a switch (user, 29.09): Tasks are all there while the section is on.
+    f.entries.set('task-b', { ...f.entries.get('task-b')!, shared: false });
+    const tasks = await f.execute('notebook_list', { kind: 'tasks' });
+    expect(tasks.value.map((entry: NotebookEntry) => entry.id)).toEqual(['task-a', 'task-b']);
+    // The switch is the human's, not data for the worker.
+    expect(tasks.value[0]).not.toHaveProperty('shared');
+    const updated = await f.execute('notebook_task_status', { id: 'task-b', line: 2, expectedLine: '- [ ] Review assets', status: 'done' });
+    expect(updated.status).toBe(200);
   });
 
   it('refuses a foreign entry and a mismatched line in another entry without touching either', async () => {
@@ -281,5 +296,167 @@ describe('what a CLI worker is told about this chat', () => {
     expect(neither.context.instructions).not.toMatch(/HELLO_NOTEBOOK_CLIENT" list/);
     expect(neither.context.instructions).not.toContain('Shared');
     expect(neither.context.instructions).toContain('$HELLO_REPORT');
+  });
+});
+
+// Hello's browser, for a CLI (user, 30.09): it could not see it, and read the
+// human's own Chrome through osascript instead. The chat's tools, this chat's
+// tabs, each tab's Agent control — checked in main, as for the chat.
+describe('Hello’s browser over the CLI connection', () => {
+  const tab = (id: string, control: BrowserTab['control'], conversationId = 'chat-a'): BrowserTab => ({
+    id, conversationId, title: `Page ${id}`, url: `https://example.test/${id}`, control, loading: false, progress: null, canGoBack: false, canGoForward: false,
+  });
+  // A 1x1 transparent PNG.
+  const pixel = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const browserFake = () => {
+    const clicks: string[] = [];
+    const hooks: BrowserHooks = {
+      getTabs: () => [tab('t-off', 'off'), tab('t-read', 'read'), tab('t-full', 'full'), tab('t-other', 'full', 'chat-b')],
+      read: (_conversationId, id) => ({ title: `Page ${id}`, url: `https://example.test/${id}`, text: `Text of ${id}\nline two` }),
+      navigate: () => undefined,
+      click: (_conversationId, id) => { clicks.push(id); return 'Clicked.'; },
+      type: () => undefined,
+      scroll: () => undefined,
+      screenshot: () => ({ frames: [{ mimeType: 'image/png', data: pixel, width: 1, height: 1 }], viewport: { width: 1, height: 1 } }),
+    } as BrowserHooks;
+    return { hooks, clicks };
+  };
+  const call = (f: Awaited<ReturnType<typeof fixture>>, name: string, args: Record<string, unknown>) =>
+    f.request('/execute', { name, args, toolCallId: randomUUID() });
+
+  it('offers the chat’s page tools and holds every call to the tab’s Agent control', async () => {
+    const { hooks, clicks } = browserFake();
+    const f = await fixture({ browser: hooks });
+    const names = (await f.request('/tools')).body.tools?.map(tool => tool.function.name) ?? [];
+    expect(names).toEqual(expect.arrayContaining(['browser_tabs', 'browser_open', 'browser_read', 'browser_click', 'browser_screenshot', 'browser_show_html']));
+    for (const absent of ['browser_pointer', 'browser_note', 'browser_download', 'shell', 'file_read']) expect(names).not.toContain(absent);
+    // Only this chat's tabs.
+    expect(JSON.parse((await call(f, 'browser_tabs', {})).body.result!).map((item: BrowserTab) => item.id)).toEqual(['t-off', 't-read', 't-full']);
+    expect((await call(f, 'browser_read', { tabId: 't-other' })).body.error).toMatch(/not owned by this chat/);
+    // Off reads nothing, Read reads but does not act, Full acts.
+    expect((await call(f, 'browser_read', { tabId: 't-off' })).body.error).toMatch(/Agent control off/);
+    expect((await call(f, 'browser_read', { tabId: 't-read' })).body.result).toContain('Text of t-read');
+    expect((await call(f, 'browser_click', { tabId: 't-read', ref: 'e1' })).body.error).toMatch(/requires Full/);
+    expect((await call(f, 'browser_click', { tabId: 't-full', ref: 'e1' })).status).toBe(200);
+    expect(clicks).toEqual(['t-full']);
+  });
+
+  it('saves a screenshot where the CLI can open it, names the file, and hands a Pi the picture too', async () => {
+    const f = await fixture({ browser: browserFake().hooks });
+    const shot = await call(f, 'browser_screenshot', { tabId: 't-read' });
+    const result = shot.body.result as unknown as { text: string; images: Array<{ data: string }> };
+    expect(result.images.map(image => image.data)).toEqual([pixel]);
+    const file = result.text.split('\n').find(line => line.endsWith('.png'))!;
+    expect(dirname(dirname(file))).toBe(dirname(f.context.instructionsPath));
+    expect(readFileSync(file).equals(Buffer.from(pixel, 'base64'))).toBe(true);
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('is told as the only browser, and the client reaches it from a shell', async () => {
+    const f = await fixture({ browser: browserFake().hooks });
+    const instructions = readFileSync(f.context.instructionsPath, 'utf8');
+    expect(instructions).toContain('## The browser in Hello');
+    expect(instructions).toContain('do not script Chrome, Safari or any other app');
+    // Another app's browser bridge is not this chat's browser (user, 30.09: another app's open_browser).
+    expect(instructions).toContain('Browser tools of any other MCP server you may have');
+    expect(instructions).toContain('browser read \'{"tabId":"TAB_ID"}\'');
+    const run = (...args: string[]) => new Promise<{ stdout: string; stderr: string; code: number }>(resolve => {
+      execFile(process.execPath, [f.context.env.HELLO_NOTEBOOK_CLIENT, ...args], {
+        env: { PATH: process.env.PATH, HELLO_NOTEBOOK_BRIDGE_URL: f.context.env.HELLO_NOTEBOOK_BRIDGE_URL, HELLO_NOTEBOOK_BRIDGE_TOKEN: f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN },
+      }, (error, stdout, stderr) => resolve({ stdout, stderr, code: error ? Number((error as { code?: number }).code ?? 1) : 0 }));
+    });
+    const tabs = await run('browser', 'tabs');
+    expect(tabs.code).toBe(0);
+    expect(JSON.parse(tabs.stdout).map((item: BrowserTab) => item.id)).toEqual(['t-off', 't-read', 't-full']);
+    // A page reads as text: a short header, then its words, never escaped JSON.
+    const read = await run('browser', 'read', '{"tabId":"t-read"}');
+    expect(read.stdout).toBe('title: Page t-read\nurl: https://example.test/t-read\n\nText of t-read\nline two\n');
+    const denied = await run('browser', 'read', '{"tabId":"t-off"}');
+    expect(denied.code).toBe(1);
+    expect(denied.stderr).toMatch(/Agent control off/);
+    const unknown = await run('browser', 'osascript');
+    expect(unknown.stderr).toMatch(/^Usage: browser </);
+    // A picture prints its saved path, never its pixels.
+    const shot = await run('browser', 'screenshot', '{"tabId":"t-read"}');
+    expect(shot.stdout).toMatch(/\.png\n$/);
+    expect(shot.stdout).not.toContain(pixel);
+  });
+
+  it('passes on why a page refused, even when it was thrown as text', async () => {
+    const { hooks } = browserFake();
+    // How Electron hands over a page script's exception: its stack, as a string.
+    hooks.click = () => { throw 'Error: No visible element shows "Apple iPad Air 11 M4". browser_read lists the visible controls with their words.\n    at find (<anonymous>:167:28)'; };
+    const f = await fixture({ browser: hooks });
+    const refused = await call(f, 'browser_click', { tabId: 't-full', label: 'Apple iPad Air 11 M4' });
+    expect(refused.body.error).toBe('Error: No visible element shows "Apple iPad Air 11 M4". browser_read lists the visible controls with their words.\n    at find (<anonymous>:167:28)');
+  });
+
+  // The same connection as an MCP server, for Claude Code and Codex (user, 30.09).
+  it('is an MCP server too: the same tools, the same refusals, pictures as images, and no secret in its files', async () => {
+    const f = await fixture({ browser: browserFake().hooks });
+    const mcp = f.context.mcp!;
+    const config = readFileSync(mcp.config, 'utf8');
+    expect(config).not.toContain(f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN);
+    expect(JSON.parse(config).mcpServers.hello).toEqual({
+      type: 'stdio', command: process.execPath, args: [mcp.server],
+      env: { ELECTRON_RUN_AS_NODE: '1', HELLO_NOTEBOOK_BRIDGE_URL: '${HELLO_NOTEBOOK_BRIDGE_URL}', HELLO_NOTEBOOK_BRIDGE_TOKEN: '${HELLO_NOTEBOOK_BRIDGE_TOKEN}' },
+    });
+    expect(readFileSync(mcp.server, 'utf8')).not.toContain(f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN);
+    if (process.platform !== 'win32') for (const file of [mcp.server, mcp.config]) expect(statSync(file).mode & 0o777).toBe(0o600);
+
+    // Spoken to as a CLI speaks to it: JSON-RPC, a line each, on its stdin.
+    const child = spawn(process.execPath, [mcp.server], {
+      env: { PATH: process.env.PATH, HELLO_NOTEBOOK_BRIDGE_URL: f.context.env.HELLO_NOTEBOOK_BRIDGE_URL, HELLO_NOTEBOOK_BRIDGE_TOKEN: f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN },
+    });
+    const waiting = new Map<number, (message: { result?: any; error?: any }) => void>();
+    let buffer = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      buffer += chunk;
+      for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
+        const message = JSON.parse(buffer.slice(0, at));
+        buffer = buffer.slice(at + 1);
+        waiting.get(message.id)?.(message);
+      }
+    });
+    let next = 1;
+    const ask = (method: string, params?: unknown) => new Promise<{ result?: any; error?: any }>(resolve => {
+      const id = next++;
+      waiting.set(id, resolve);
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    });
+    try {
+      const started = await ask('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
+      expect(started.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'hello' } });
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+      const listed = (await ask('tools/list')).result.tools as Array<{ name: string; inputSchema: { type: string } }>;
+      expect(listed.map(tool => tool.name)).toEqual(expect.arrayContaining(['notebook_list', 'browser_read', 'browser_mark', 'browser_screenshot']));
+      expect(listed.find(tool => tool.name === 'browser_read')?.inputSchema.type).toBe('object');
+      const tabs = (await ask('tools/call', { name: 'browser_tabs', arguments: {} })).result;
+      expect(JSON.parse(tabs.content[0].text).map((tab: BrowserTab) => tab.id)).toEqual(['t-off', 't-read', 't-full']);
+      // Off refuses, as for the chat: the tool's answer, not a broken server.
+      const refused = (await ask('tools/call', { name: 'browser_read', arguments: { tabId: 't-off' } })).result;
+      expect(refused).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringMatching(/Agent control off/) }] });
+      const shot = (await ask('tools/call', { name: 'browser_screenshot', arguments: { tabId: 't-read' } })).result;
+      expect(shot.content[1]).toEqual({ type: 'image', data: pixel, mimeType: 'image/png' });
+      expect((await ask('resources/list')).error).toMatchObject({ code: -32601 });
+    } finally {
+      child.stdin.end();
+    }
+  });
+
+  it('offers a Pi CLI Hello’s extension on this connection, in the CLI role', async () => {
+    const f = await fixture({ browser: browserFake().hooks, piExtension: '/app/out/main/pi-extension.js' });
+    expect(f.context.piExtension).toEqual({ path: '/app/out/main/pi-extension.js', env: {
+      HELLO_PI_BRIDGE_URL: f.context.env.HELLO_NOTEBOOK_BRIDGE_URL,
+      HELLO_PI_BRIDGE_TOKEN: f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN,
+      HELLO_PI_EXTENSION_ROLE: 'cli',
+    } });
+    expect(readFileSync(f.context.instructionsPath, 'utf8')).toContain('a Pi opened from Hello has them');
+  });
+
+  it('without a browser, stays the notebook connection it was', async () => {
+    const f = await fixture();
+    expect((await f.request('/tools')).body.tools?.map(tool => tool.function.name).sort()).toEqual(['notebook_list', 'notebook_task_status']);
+    expect(readFileSync(f.context.instructionsPath, 'utf8')).not.toContain('The browser in Hello');
   });
 });

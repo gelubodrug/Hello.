@@ -4,13 +4,42 @@
 import type { ExtensionAPI, ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { PiBridgeContextResponse, PiBridgeExecuteRequest } from './pi-tool-bridge';
 import type { ToolDefinition } from './tools';
+import { statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { readToolOutput } from './tool-output';
+import {
+  activeToolNames, firstSentence, matchGroups, pluginToolGroups, toolsFindDescription, TOOLS_FIND,
+  type ToolCatalog, type ToolGroup,
+} from './tool-groups';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const CONTEXT_TYPE = 'hello-live-browser-context';
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * A tool call's arguments as its schema names them, before Pi checks them
+ * (user, 30.09: a model sent tab_id for tabId, and every browser call failed
+ * validation). A snake_case key its schema knows in camelCase is renamed,
+ * unless both came; arguments sent as one JSON string are parsed. Anything
+ * else is left for the schema to judge.
+ */
+export function schemaArguments(args: unknown, parameters: Record<string, unknown>): unknown {
+  let value = args;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return args; }
+  }
+  if (!object(value)) return value;
+  const known = object(parameters.properties) ? parameters.properties : {};
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const camel = key.includes('_') ? key.replace(/_([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase()) : key;
+    const name = !(key in known) && camel in known && !(camel in value) ? camel : key;
+    out[name] = item;
+  }
+  return out;
 }
 
 function rejectChildFetchRedirects(): void {
@@ -25,7 +54,28 @@ function rejectChildFetchRedirects(): void {
   globalThis.fetch = guarded;
 }
 
+/**
+ * The extensions a person activated in a chat see its folder as their working
+ * directory, as they would if Pi ran in the project. Pi itself started in the
+ * chat's private directory and keeps its session and settings there; this
+ * extension loads before the others, so every one of them starts here.
+ */
+function enterChatFolder(): void {
+  const folder = process.env.HELLO_CHAT_FOLDER;
+  if (!folder || !isAbsolute(folder)) return;
+  try {
+    if (statSync(folder).isDirectory()) process.chdir(folder);
+  } catch {
+    // A folder that is gone leaves them in the private directory.
+  }
+}
+
 export default async function helloTools(pi: ExtensionAPI): Promise<void> {
+  // A Pi CLI the person opened from Hello (user, 30.09) loads this too, for
+  // the connection's tools as its own. That process is the person's: it keeps
+  // its folder, its fetch and its context; only the tools are added.
+  const cli = process.env.HELLO_PI_EXTENSION_ROLE === 'cli';
+  if (!cli) enterChatFolder();
   const address = process.env.HELLO_PI_BRIDGE_URL;
   const token = process.env.HELLO_PI_BRIDGE_TOKEN;
   if (!address || !token || !/^[a-f0-9]{64}$/.test(token))
@@ -34,7 +84,8 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port ||
       url.username || url.password || url.pathname !== '/' || url.search || url.hash)
     throw new Error('Hello tool bridge must use its private loopback address.');
-  rejectChildFetchRedirects();
+  // The bridge's own requests refuse redirects either way.
+  if (!cli) rejectChildFetchRedirects();
 
   async function request<T>(
     route: string,
@@ -99,8 +150,121 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
   }
 
   const registered = new Map<string, string>();
+  const descriptions = new Map<string, string>();
+  // Tools are prompt-context driven: the groups main describes, one group per
+  // plugin extension, and which of them the model has loaded in this chat.
+  let catalog: ToolCatalog | undefined;
+  const loaded = new Set<string>();
+  const knownGroups = new Set<string>();
+  let findSignature = '';
+  // Pi binds its action methods (getAllTools among them) only after every
+  // extension has loaded; until session_start only registration is legal.
+  let bound = false;
+
+  /** Every tool Pi knows, once it can be asked; plugins register theirs later. */
+  function piTools(): ReturnType<ExtensionAPI['getAllTools']> {
+    if (!bound || typeof pi.getAllTools !== 'function') return [];
+    try { return pi.getAllTools(); } catch { return []; }
+  }
+
+  function allGroups(): ToolGroup[] {
+    if (!catalog) return [];
+    return [...catalog.groups, ...pluginToolGroups(piTools(), catalog.plugins)];
+  }
+
+  function describe(name: string): string {
+    return descriptions.get(name) ?? piTools().find(tool => tool.name === name)?.description ?? '';
+  }
+
+  /** tools_find, re-registered only when the groups it lists change. */
+  function registerToolsFind(groups: ToolGroup[]): void {
+    const ids = groups.filter(group => !group.core).map(group => group.id);
+    const description = toolsFindDescription(groups);
+    // No enum: an id this step's schema does not know yet (a group that just
+    // arrived) or a bare server name gets the listing back, not a rejected call.
+    const parameters = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groups: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The groups to load, from the list in this tool’s description.',
+        },
+        need: { type: 'string', description: 'A few words about the task, when you are not sure which group fits.' },
+      },
+    };
+    const signature = JSON.stringify({ description, parameters });
+    if (signature === findSignature) return;
+    pi.registerTool({
+      name: TOOLS_FIND,
+      label: 'tools find',
+      description,
+      promptSnippet: ids.length ? `Load the tool group for the area of work at hand: ${ids.join(', ')}.` : 'Lists the tool groups this chat has.',
+      parameters: parameters as PiToolDefinition['parameters'],
+      executionMode: 'sequential',
+      async execute(_toolCallId, params) {
+        const input = object(params) ? params : {};
+        const groups = allGroups();
+        const requested = Array.isArray(input.groups) ? input.groups.filter((id): id is string => typeof id === 'string') : [];
+        // A bare server or plugin name means its group: `github` is `mcp:github`.
+        const named = (id: string) => groups.find(group => !group.core &&
+          (group.id === id || group.id.toLowerCase() === id.toLowerCase() || group.id.split(':')[1]?.toLowerCase() === id.toLowerCase()));
+        let chosen = [...new Set(requested.map(named).filter((group): group is ToolGroup => Boolean(group)))];
+        const unknown = requested.filter(id => !named(id) && !groups.some(group => group.core && group.id === id));
+        if (!chosen.length && typeof input.need === 'string') chosen = matchGroups(groups, input.need);
+        const listing = toolsFindDescription(groups).split('\n').slice(1).join('\n');
+        if (!chosen.length) {
+          return {
+            content: [{ type: 'text', text: `${unknown.length ? `No group named ${unknown.join(', ')}.` : 'No single group fits that.'} Pick from these:\n${listing}` }],
+            details: { loaded: [] },
+          };
+        }
+        for (const group of chosen) loaded.add(group.id);
+        pi.setActiveTools(activeToolNames(groups, loaded));
+        const text = chosen.map(group => [
+          `${group.title} (${group.id}) is loaded. Its tools can be called from your next step:`,
+          ...group.tools.map(name => `- ${name}: ${firstSentence(describe(name))}`),
+          ...(group.manual ? ['', 'Rules for these tools:', group.manual] : []),
+        ].join('\n')).join('\n\n');
+        const note = unknown.length ? `\n\nNo group named ${unknown.join(', ')}; the others are:\n${listing}` : '';
+        return { content: [{ type: 'text', text: text + note }], details: { loaded: chosen.map(group => group.id) } };
+      },
+    });
+    findSignature = signature;
+  }
+
+  /**
+   * Groups loaded earlier in this session whose manual is still in context,
+   * read back from the durable transcript. A compaction summarizes a group's
+   * manual away, so only tools_find results the latest compaction kept count:
+   * a group loaded before it loads again, with its rules, when needed.
+   */
+  function restoreLoaded(ctx: unknown): void {
+    loaded.clear();
+    try {
+      const manager = object(ctx) ? ctx.sessionManager as { getBranch?: () => unknown[] } | undefined : undefined;
+      const branch = manager?.getBranch?.() ?? [];
+      let from = 0;
+      for (let index = branch.length - 1; index >= 0; index -= 1) {
+        const entry = branch[index];
+        if (!object(entry) || entry.type !== 'compaction') continue;
+        const kept = typeof entry.firstKeptEntryId === 'string'
+          ? branch.findIndex(item => object(item) && item.id === entry.firstKeptEntryId) : -1;
+        from = kept >= 0 ? kept : index + 1;
+        break;
+      }
+      for (const entry of branch.slice(from)) {
+        const message = object(entry) && entry.type === 'message' && object(entry.message) ? entry.message : undefined;
+        const details = message && message.role === 'toolResult' && message.toolName === TOOLS_FIND && object(message.details) ? message.details : undefined;
+        if (details && Array.isArray(details.loaded))
+          for (const id of details.loaded) if (typeof id === 'string') loaded.add(id);
+      }
+    } catch { /* a transcript that cannot be read starts with the core set */ }
+  }
+
   async function refreshTools(activate = true): Promise<string[]> {
-    const response = await request<{ tools: ToolDefinition[] }>('/tools');
+    const response = await request<{ tools: ToolDefinition[] } & Partial<ToolCatalog>>('/tools');
     if (!Array.isArray(response.tools)) throw new Error('Hello tool bridge returned no tool definitions.');
     const names: string[] = [];
     for (const definition of response.tools) {
@@ -109,6 +273,7 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
           typeof tool.description !== 'string' || !object(tool.parameters))
         throw new Error('Hello tool bridge returned an invalid tool definition.');
       names.push(tool.name);
+      descriptions.set(tool.name, tool.description);
       const signature = JSON.stringify(tool);
       if (registered.get(tool.name) === signature) continue;
       pi.registerTool({
@@ -117,6 +282,8 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
         description: tool.description,
         promptSnippet: tool.description,
         parameters: tool.parameters as PiToolDefinition['parameters'],
+        // Before Pi checks them: an older Pi ignores this and checks as sent.
+        prepareArguments: (args: unknown) => schemaArguments(args, tool.parameters as Record<string, unknown>) as never,
         // Preserve the existing Hello ordering and one approval at a time.
         executionMode: 'sequential',
         async execute(toolCallId, params, signal) {
@@ -137,19 +304,32 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
       });
       registered.set(tool.name, signature);
     }
-    // Launch with --no-builtin-tools and explicit built-in exclusions;
-    // --no-tools would also remove extension tools from Pi's allowlist.
-    // Activate Hello's tools WITHOUT deactivating tools registered by the
-    // user's activated plugin extensions: replacing the set would silently
-    // disable a plugin the human turned on for this conversation.
-    if (activate) pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
-    return names;
+    if (!Array.isArray(response.groups)) {
+      // A bridge without groups offers every Hello tool, beside whatever the
+      // plugin extensions activated themselves.
+      catalog = undefined;
+      if (activate) pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
+      return names;
+    }
+    catalog = { groups: response.groups, plugins: Array.isArray(response.plugins) ? response.plugins : [] };
+    const groups = allGroups();
+    registerToolsFind(groups);
+    // Launched with --no-builtin-tools and explicit built-in exclusions;
+    // --no-tools would also remove extension tools from Pi's allowlist. The
+    // set is the core, the groups loaded in this chat and tools_find: a
+    // plugin's tools, which Pi activates as they register, wait in their group.
+    const active = activeToolNames(groups, loaded);
+    if (activate) pi.setActiveTools(active);
+    return names.filter(name => active.includes(name));
   }
 
   // During extension loading only registration is legal: action methods are
   // bound later by Pi's runner. Activate after that binding at session_start.
   await refreshTools(false);
-  pi.on('session_start', async () => {
+  let unloaded: string[] = [];
+  pi.on('session_start', async (_event, ctx) => {
+    bound = true;
+    restoreLoaded(ctx);
     const expected = await refreshTools();
     const active = pi.getActiveTools();
     // Hello's own tools must all be live; plugin tools may add to them.
@@ -160,6 +340,14 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
   pi.on('before_agent_start', async () => {
     await refreshTools();
   });
+  // A compaction summarizes the tools_find results that carried each group's
+  // manual. What it did not keep is unloaded, and the next step says so.
+  pi.on('session_compact', async (_event, ctx) => {
+    const before = new Set(loaded);
+    restoreLoaded(ctx);
+    unloaded = [...before].filter(id => !loaded.has(id));
+    try { await refreshTools(); } catch { pi.setActiveTools(activeToolNames(allGroups(), loaded)); }
+  });
   // A reply keeps running across steers, and Pi snapshots the active tools for
   // each next step right after turn_end. Refreshing here is what lets a folder
   // attached mid-reply bring its tools to the very next step. A failed refresh
@@ -168,6 +356,8 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
   pi.on('turn_end', async () => {
     try { await refreshTools(); } catch { /* next step keeps the current tools */ }
   });
+  // The runtime snapshot is the chat's: a CLI's context stays its own.
+  if (cli) return;
   pi.on('context', async event => {
     const messages = event.messages.filter(message =>
       message.role !== 'custom' || message.customType !== CONTEXT_TYPE);
@@ -175,9 +365,15 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
     // available since is callable from the next step, and the model is told so
     // rather than being shown a folder whose tools it cannot call yet.
     let late: string[] = [];
+    let arrived: string[] = [];
     try {
       const before = new Set(pi.getActiveTools());
       late = (await refreshTools()).filter(name => !before.has(name));
+      // A group that appeared since the last step — a folder attached, an
+      // MCP server connected — is announced once, so it is not overlooked.
+      const current = allGroups().filter(group => !group.core).map(group => group.id);
+      if (knownGroups.size) arrived = current.filter(id => !knownGroups.has(id));
+      for (const id of current) knownGroups.add(id);
     } catch { /* the live context below still describes the current state */ }
     let context: string;
     try {
@@ -190,6 +386,14 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
     if (late.length)
       context = [context, `These Hello tools were just enabled and can be called from your next step, not in this one: ${late.join(', ')}.`]
         .filter(Boolean).join('\n');
+    if (arrived.length)
+      context = [context, `These tool groups just became available; load one with tools_find from your next step when the task needs it: ${arrived.join(', ')}.`]
+        .filter(Boolean).join('\n');
+    if (unloaded.length) {
+      context = [context, `Compaction summarized away the rules of these tool groups, so they were unloaded: ${unloaded.join(', ')}. Load one again with tools_find before using its tools.`]
+        .filter(Boolean).join('\n');
+      unloaded = [];
+    }
     if (context) {
       // Pi serializes a custom message as a USER message. Appending this after
       // tool results made every step look like a fresh request to list tabs,

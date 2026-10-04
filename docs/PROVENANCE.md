@@ -228,7 +228,26 @@ At the owner's request, two sibling-app sources were read-only ported from
   viewport capture — `capture()` returns the markers the page reported, checked by
   `parseProbeAnnotations`, with main's URL — attaches it to the chat composer with
   the `composeAnnotations` list and ends the mode; Copy puts the same on the
-  clipboard. No SQLite, no agent tool.
+  clipboard. No SQLite, and the person's markers are no agent tool's.
+- Added 2026-09-30 (user: "a pointer for agents"): `S.hints`/`S.clearHints`, the
+  agent's own marks for `browser_mark` — the same pins, notes and colours, each
+  with an outline around the element it means, drawn on a separate closed
+  shadow layer (`data-hello-hints`) that needs no armed mode and never joins the
+  person's markers, their Send or their exit. Page coordinates from main's
+  `boxScript` measurement; only the person's trusted click puts one away.
+  Same day, after the user's sketch: an × on every mark, a chat-bubble index
+  fixed at the page's left (hover lists them, a click scrolls to one and makes
+  it pulse, × there too), a staggered reveal, `S.hintsWait` for main to follow
+  what the person kept, and `S.hints` drawing kept page coordinates again for a
+  restored tab. Then each mark tied to its element: main's `boxScript` returns a
+  CSS path to it (a unique id, else nth-of-type steps), the layer keeps the
+  element and follows its box through resize, inner scrolls and layout shifts
+  (one layout per frame, a light 600 ms check for content that moves it),
+  finds a re-rendered node again by that path, and hides the mark while its
+  element is hidden. A restored tab re-anchors by the path before falling back
+  to the kept coordinates. Then marks kept per page of the tab (Back or Forward
+  to a page shows its own again) and a double click on the bubble fading them
+  all away.
 - Changed after the page-mode test round (2026-09-13), departing from the sibling app:
   the probe acts only on trusted (the person's) clicks, moves and presses — a
   script's or an agent's `el.click()` goes to the page; a note still being typed
@@ -280,3 +299,65 @@ report already written survives a restart. Delivery into the chat uses Hello's
 own waiting list (`ChatService.workerReported` → `queue(…, 'next')`), so a
 report waits its turn during a reply and wakes an idle chat. No sibling-app source
 file was copied.
+
+## Pi package market — 2026-09-29
+
+The Pi market reuses the ported market window (`src/renderer/market/`) with a
+second backend (`src/main/market/pi-*.ts`). Its list is read from
+**pi.dev/packages** (the official gallery; the site's footer says MIT): the card
+attributes the page publishes for its own filtering (`data-package-*`), the
+author, downloads and date beside them, and its count, with its type and order
+menus reproduced in the toolbar. No markup, script or asset of pi.dev is copied
+into Hello; a trimmed excerpt of one page is a test fixture
+(`tests/fixtures/pi-gallery-page.html`). The npm search fallback follows the
+gallery's type rule from keywords. Pi's own installer
+(`pi-coding-agent/dist/core/package-manager.js`, MIT) was read for its pnpm
+settings; Hello's install differs (scripts off, registry pinned, integrity bound).
+
+## DSH surface and Community Plugin Market — 2026-09-28/29
+
+At the owner's request ("facem suprafața DSH", "il facem la fel ca interfata ...
+nu vreau sa inventam nimic"), these MIT-licensed sources were consulted read-only
+and adapted:
+
+- **`dsh-community-market` 0.1.0-dev.0** (Anywhere Labs, MIT; shipped inside
+  DSH Desktop 2.0.15). Parts ported to TypeScript: `src/client/styles.ts` copied
+  verbatim into `src/renderer/market/market.css`, the English strings, the view
+  structure of `MarketSettingsTab.tsx` and `MarketOverlay.tsx`,
+  `lib/network/restricted-http.js` and `blocked-subnets.js`
+  (`src/main/market/net.ts`), `lib/adapters/dsh-1024store.js` for the direct path
+  (`src/main/market/store1024.ts`), and the npm verifier and profile bundle update
+  from `lib/install/service.js` (`src/main/market/install.ts`), plus
+  `lib/adapters/dshfind.js` and `standard-http.js`, the source and
+  provider-page rules of `lib/contracts/validate.js` and `query.js`, and the
+  `catalog-source` and `catalog-provider-page` schemas
+  (`src/main/market/standard.ts`). The source list follows
+  `lib/catalog/service.js`: several sources, one in use. Not ported: dshfind's
+  full-catalog scan (the provider's paged search is used), source reordering,
+  and the multi-category query.
+- **`deepseek-harness` `apps/desktop-host/src/index.ts`** (MIT, checkout 21638c5):
+  the `runProfile` boot and the `ready`/`fatal`/`shutdown` protocol, reimplemented
+  in `src/main/dsh/host-entry.ts`.
+- **`@deepseek-ai/dsh-client-ui-theme` 0.1.7-rc.2** (MIT): the list of official
+  tokens, snapshotted in `assets/dsh/hello-dsh/official-tokens.json`.
+- **`@deepseek-ai/dsh-client-ui-brand-official`** (MIT): the brand-slot
+  registration shape, reused for Hello's mark and name.
+
+Hello's own parts, written here and not copied: the host manager, surface,
+checkpoints, model proxy, the `node-addon-require-builtin` shim
+(`assets/dsh/shims/`), the theme generator (`scripts/dsh-theme.mjs`) and the
+compatibility gate.
+
+## Pi tab theme and engine — 2026-10-01
+
+- **the sibling app `src/runtime/piTheme.ts`** (sibling-app, revision 5):
+  the dark `the sibling app` Pi theme it writes to `~/.pi/agent/themes/hello.json`, copied
+  as-is into `src/main/terminal/pi-theme.ts` (user, 01.10: "copiază tema pi din
+  sibling-app să fie default pentru pi în Hello"). Like the sibling app,
+  Hello makes it current through the agent folder's `settings.json`, since
+  `--theme` alone only registers a theme; the folder is the Pi tab's private
+  one, so `~/.pi` is not touched.
+
+Hello's own: the Pi engine updates (`src/main/chat/pi-engine.ts`,
+`src/main/updates.ts`) and running the tab on the chats' Pi.
+

@@ -10,6 +10,8 @@ import StarterKit from "@tiptap/starter-kit";
 import {
   Bold,
   CheckSquare,
+  Folder,
+  FolderOpen,
   Clipboard,
   Code,
   FileCode2,
@@ -21,7 +23,8 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import type { NotebookEntry, NotebookKind } from "../../shared/types";
+import type { Conversation, NotebookEntry, NotebookKind } from "../../shared/types";
+import { NotebookSwitch } from "./NotebookSwitch";
 import { api } from "../api";
 import { Markdown } from "../chat/Markdown";
 import {
@@ -37,15 +40,68 @@ import "./Notebook.css";
 type CloseReason = "action" | "escape" | "dismiss";
 type NotebookDraft = NotebookEntry & { expectedUpdatedAt: number };
 
-function savedDraft(value: unknown, conversationId: string, kind: NotebookKind): NotebookDraft | null {
+/**
+ * One notebook, three sections (user, 29.09): Runbooks, Tasks and Plans, each
+ * switched on or off for the model as a whole. Only a Runbook chapter has a
+ * switch of its own, since the Runbooks are reference the human picks from;
+ * Tasks and Plans are all there while their section is on. Plans follows the
+ * chat's Plan: it is where plan_write keeps the plan.
+ */
+const SECTIONS: ReadonlyArray<{ kind: NotebookKind; title: string; placeholder: string; empty: (on: boolean) => string; label: (on: boolean) => string }> = [
+  {
+    kind: "runbook", title: "Runbooks",
+    placeholder: "Keep findings, decisions and useful references here.",
+    empty: () => "No chapters yet",
+    label: on => on ? "Runbooks on — the model reads the chapters that are on" : "Runbooks off — the model does not see them",
+  },
+  {
+    kind: "tasks", title: "Tasks",
+    placeholder: "Write the next steps. One task at a time.",
+    empty: () => "No task lists yet",
+    label: on => on ? "Tasks on — the model reads and updates them" : "Tasks off — the model does not see them",
+  },
+  {
+    kind: "plan", title: "Plans",
+    placeholder: "The steps the model works through. Edit them freely.",
+    empty: on => on ? "The model writes its plan here" : "Turn Plans on and the model keeps a plan here",
+    label: on => on ? "Plans on — the model keeps its plan here" : "Plans off — the model writes no plan",
+  },
+];
+const KINDS: NotebookKind[] = SECTIONS.map(section => section.kind);
+/** Chapters a section shows before “Show more”. */
+const SECTION_ROWS = 6;
+
+/** Whether the model may use a section at all. Plans is on while Plan is. */
+export function sectionOn(conversation: Pick<Conversation, "runbook" | "tasks" | "planning">, kind: NotebookKind): boolean {
+  return kind === "plan" ? conversation.planning === true : conversation[kind] !== false;
+}
+
+/** What this browser remembers of a chat's notebook: the chapter open, folded and unfolded sections. */
+interface NotebookView { selected?: string; collapsed?: NotebookKind[]; expanded?: NotebookKind[] }
+function readView(conversationId: string): NotebookView {
+  try {
+    const value = JSON.parse(localStorage.getItem(`hello.notebookView.${conversationId}`) ?? "null") as NotebookView | null;
+    return value && typeof value === "object" ? value : {};
+  } catch { return {}; }
+}
+function writeView(conversationId: string, view: NotebookView): void {
+  try { localStorage.setItem(`hello.notebookView.${conversationId}`, JSON.stringify(view)); }
+  catch { /* A view that is not remembered opens at its first chapter. */ }
+}
+
+/** A draft kept in this browser for this chat, matched to its chapter by id. */
+function savedDraft(value: unknown, conversationId: string): NotebookDraft | null {
   if (!value || typeof value !== "object") return null;
   const draft = value as Partial<NotebookDraft>;
-  if (typeof draft.id !== "string" || draft.conversationId !== conversationId || draft.kind !== kind ||
+  if (typeof draft.id !== "string" || draft.conversationId !== conversationId ||
+      !KINDS.includes(draft.kind as NotebookKind) ||
       typeof draft.title !== "string" || typeof draft.body !== "string" ||
       typeof draft.createdAt !== "number" || typeof draft.updatedAt !== "number") return null;
   // Older drafts have no known base. Preserve them, but never overwrite a
-  // potentially newer external edit by guessing their revision.
-  return { ...draft, expectedUpdatedAt: Number.isSafeInteger(draft.expectedUpdatedAt) &&
+  // potentially newer external edit by guessing their revision. Nor did they
+  // know the chapter switch: the saved entry's decides, else on.
+  return { ...draft, shared: typeof draft.shared === "boolean" ? draft.shared : true,
+    expectedUpdatedAt: Number.isSafeInteger(draft.expectedUpdatedAt) &&
     Number(draft.expectedUpdatedAt) >= 0 ? Number(draft.expectedUpdatedAt) : 0 } as NotebookDraft;
 }
 
@@ -64,7 +120,8 @@ function sameDraft(a: NotebookEntry, b: NotebookEntry): boolean {
 
 function acknowledgeDraft(sent: NotebookDraft, newer: NotebookEntry | undefined, revision: number): void {
   try {
-    const stored = savedDraft(JSON.parse(localStorage.getItem(`hello.notebook.${sent.id}`) ?? "null"), sent.conversationId, sent.kind);
+    // By id: a draft kept before its chapter moved section (the plan left Tasks) is still that chapter's.
+    const stored = savedDraft(JSON.parse(localStorage.getItem(`hello.notebook.${sent.id}`) ?? "null"), sent.conversationId);
     // A component remounted while this IPC call was running may already own a
     // newer draft. An old acknowledgement must not delete or replace it.
     if (stored && sameDraft(stored, sent)) clearDraft(sent.id);
@@ -558,25 +615,29 @@ function RichEntryEditor({
 
 /** Keying the session prevents drafts and undo history crossing conversations. */
 export function Notebook(props: {
-  conversationId: string;
-  kind: NotebookKind;
+  conversation: Conversation;
+  onConversationChange: (conversation: Conversation) => void;
+  reportError: (reason: unknown) => void;
 }) {
   return (
     <NotebookSession
-      key={`${props.conversationId}:${props.kind}`}
+      key={props.conversation.id}
       {...props}
     />
   );
 }
 
-/** Both notebooks use the same editor and independent persisted entries. */
+/** All three sections share one editor; each chapter is persisted on its own. */
 function NotebookSession({
-  conversationId,
-  kind,
+  conversation,
+  onConversationChange,
+  reportError,
 }: {
-  conversationId: string;
-  kind: NotebookKind;
+  conversation: Conversation;
+  onConversationChange: (conversation: Conversation) => void;
+  reportError: (reason: unknown) => void;
 }) {
+  const conversationId = conversation.id;
   const [entries, setEntries] = useState<NotebookEntry[]>([]);
   const entriesRef = useRef<NotebookEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -587,6 +648,7 @@ function NotebookSession({
   const [reloading, setReloading] = useState<NotebookEntry | null>(null);
   const [resolving, setResolving] = useState(false);
   const [conflicts, setConflicts] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<NotebookView>(() => readView(conversationId));
   const conflictIds = useRef(new Set<string>());
   const baseVersions = useRef(new Map<string, number>());
   const loaded = useRef(false);
@@ -599,12 +661,24 @@ function NotebookSession({
   const queue = useRef(Promise.resolve());
   const mounted = useRef(true);
   const current = entries.find((entry) => entry.id === selected);
-  const title = kind === "runbook" ? "Runbook" : "Runbook tasks";
+  const currentSection = SECTIONS.find(section => section.kind === current?.kind) ?? SECTIONS[0];
+  const collapsed = new Set(view.collapsed ?? []);
+  const unfolded = new Set(view.expanded ?? []);
+  const updateView = (patch: Partial<NotebookView>) => setView(previous => {
+    const next = { ...previous, ...patch };
+    writeView(conversationId, next);
+    return next;
+  });
+  // The chapter open is remembered with the rest of the view.
+  useEffect(() => {
+    if (loaded.current && (selected ?? undefined) !== view.selected) updateView({ selected: selected ?? undefined });
+  }, [selected]);
   const setConflict = (id: string, value: boolean) => {
     if (value) conflictIds.current.add(id);
     else conflictIds.current.delete(id);
     if (mounted.current) setConflicts(new Set(conflictIds.current));
   };
+  const listAll = async () => (await Promise.all(KINDS.map(kind => api.notebooks.list(conversationId, kind)))).flat();
 
   const flush = (): Promise<void> => {
     clearTimeout(timer.current);
@@ -628,7 +702,8 @@ function NotebookSession({
             const newer = entriesRef.current.find(row => row.id === entry.id);
             acknowledgeDraft(entry, newer, saved.updatedAt);
             if (newer && sameDraft(newer, entry)) {
-              const rows = entriesRef.current.map(row => row.id === entry.id ? saved : row);
+              // The switch is not part of a save: the one on screen stands.
+              const rows = entriesRef.current.map(row => row.id === entry.id ? { ...saved, shared: row.shared } : row);
               entriesRef.current = rows;
               if (mounted.current) setEntries(rows);
             } else if (newer) {
@@ -667,21 +742,23 @@ function NotebookSession({
   useEffect(() => {
     mounted.current = true;
     let alive = true;
-    void api.notebooks
-      .list(conversationId, kind)
+    void listAll()
       .then((rows) => {
         if (!alive) return;
         const restored = rows.map((row) => {
           baseVersions.current.set(row.id, row.updatedAt);
           try {
+            // By id, taking the saved entry's section: a draft kept before the
+            // plan moved from Tasks to Plans is still that chapter's.
             const draft = savedDraft(JSON.parse(
               localStorage.getItem(`hello.notebook.${row.id}`) ?? "null",
-            ), conversationId, kind);
+            ), conversationId);
             if (draft?.id === row.id && (draft.title !== row.title || draft.body !== row.body)) {
               baseVersions.current.set(row.id, draft.expectedUpdatedAt);
-              pending.current.set(row.id, draft);
+              const kept = { ...draft, kind: row.kind, shared: row.shared };
+              pending.current.set(row.id, kept);
               if (draft.expectedUpdatedAt !== row.updatedAt) setConflict(row.id, true);
-              return draft;
+              return kept;
             }
             if (draft?.id === row.id) clearDraft(row.id);
           } catch {
@@ -696,7 +773,7 @@ function NotebookSession({
             const key = localStorage.key(index);
             if (!key?.startsWith("hello.notebook.")) continue;
             let draft: NotebookDraft | null = null;
-            try { draft = savedDraft(JSON.parse(localStorage.getItem(key) ?? "null"), conversationId, kind); }
+            try { draft = savedDraft(JSON.parse(localStorage.getItem(key) ?? "null"), conversationId); }
             catch { continue; }
             if (!draft || key !== `hello.notebook.${draft.id}` || restored.some(row => row.id === draft.id)) continue;
             restored.push(draft);
@@ -708,7 +785,8 @@ function NotebookSession({
         entriesRef.current = restored;
         loaded.current = true;
         setEntries(restored);
-        setSelected(restored[0]?.id ?? null);
+        const remembered = readView(conversationId).selected;
+        setSelected(restored.some(row => row.id === remembered) ? remembered! : restored[0]?.id ?? null);
         setLoading(false);
         if (pending.current.size) void flush();
         if (refreshRequested.current) refreshNotebooks.current();
@@ -729,7 +807,7 @@ function NotebookSession({
       window.removeEventListener("beforeunload", saveOnLeave);
       void flush();
     };
-  }, [conversationId, kind]);
+  }, [conversationId]);
 
   useEffect(() => {
     let alive = true;
@@ -744,7 +822,7 @@ function NotebookSession({
       const version = ++request;
       const revision = mutationRevision.current;
       try {
-        const rows = await api.notebooks.list(conversationId, kind);
+        const rows = await listAll();
         if (!alive || version !== request) return;
         if (revision !== mutationRevision.current) {
           void refresh();
@@ -770,7 +848,9 @@ function NotebookSession({
             // result determine whether this is our own update or a conflict.
             else if (!inFlight.current.has(row.id) && baseVersions.current.get(row.id) !== row.updatedAt)
               setConflict(row.id, true);
-            return draft ?? row;
+            // A draft keeps its words; the saved entry's switch is the truth.
+            // The same object while nothing changed: recovery compares by identity.
+            return draft ? (draft.shared === row.shared ? draft : { ...draft, shared: row.shared }) : row;
           });
           for (const draft of local) {
             if (!rows.some(row => row.id === draft.id)) setConflict(draft.id, true);
@@ -800,7 +880,7 @@ function NotebookSession({
         if (
           part.type !== "tool" ||
           part.status !== "complete" ||
-          !["notebook_save", "notebook_task_status"].includes(part.name) ||
+          !["notebook_save", "notebook_task_status", "plan_write"].includes(part.name) ||
           completed.has(part.id)
         )
           return false;
@@ -810,7 +890,7 @@ function NotebookSession({
       if (changed) void refresh();
     });
     const unsubscribeNotebooks = api.notebooks.onChange?.(event => {
-      if (event.conversationId === conversationId && event.kind === kind) void refresh();
+      if (event.conversationId === conversationId) void refresh();
     });
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
@@ -820,7 +900,7 @@ function NotebookSession({
       unsubscribeNotebooks?.();
       window.removeEventListener("focus", onFocus);
     };
-  }, [conversationId, kind]);
+  }, [conversationId]);
 
   const update = (
     id: string,
@@ -847,7 +927,7 @@ function NotebookSession({
     timer.current = setTimeout(() => void flush(), 450);
   };
 
-  const add = async () => {
+  const add = async (kind: NotebookKind) => {
     try {
       await flush();
       const entry = await api.notebooks.save({
@@ -862,6 +942,7 @@ function NotebookSession({
       entriesRef.current = rows;
       setEntries(rows);
       setSelected(entry.id);
+      if (collapsed.has(kind)) updateView({ collapsed: [...collapsed].filter(item => item !== kind) });
     } catch (reason) {
       setError(errorText(reason));
     }
@@ -882,11 +963,37 @@ function NotebookSession({
       mutationRevision.current += 1;
       entriesRef.current = rows;
       setEntries(rows);
-      if (selected === entry.id) setSelected(rows[0]?.id ?? null);
+      if (selected === entry.id) setSelected(rows.find(row => row.kind === entry.kind)?.id ?? rows[0]?.id ?? null);
       setRemoving(null);
     } catch (reason) {
       setError(errorText(reason));
     }
+  };
+
+  /** A chapter's own switch. Its words and revision stay as they are. */
+  const share = async (entry: NotebookEntry, shared: boolean) => {
+    if (!api.notebooks.share) return;
+    const set = (value: boolean) => {
+      mutationRevision.current += 1;
+      const rows = entriesRef.current.map(row => row.id === entry.id ? { ...row, shared: value } : row);
+      entriesRef.current = rows;
+      setEntries(rows);
+    };
+    set(shared);
+    try {
+      await api.notebooks.share(entry.id, shared);
+    } catch (reason) {
+      set(!shared);
+      setError(errorText(reason));
+    }
+  };
+
+  /** A section's switch: the chat's own Runbook, Tasks or Plan setting. */
+  const switchSection = (kind: NotebookKind, on: boolean) => {
+    void api.conversations
+      .update(conversationId, kind === "plan" ? { planning: on } : { [kind]: on })
+      .then(onConversationChange)
+      .catch(reportError);
   };
 
   const recover = async (entry: NotebookEntry, saveCopy: boolean) => {
@@ -896,9 +1003,9 @@ function NotebookSession({
       await queue.current;
       const snapshot = entriesRef.current.find(row => row.id === entry.id);
       if (!snapshot) return;
-      const latest = (await api.notebooks.list(conversationId, kind)).find(row => row.id === entry.id);
+      const latest = (await api.notebooks.list(conversationId, entry.kind)).find(row => row.id === entry.id);
       const copy = saveCopy ? await api.notebooks.save({
-        conversationId, kind, title: `${snapshot.title || "Untitled"} (draft)`, body: snapshot.body,
+        conversationId, kind: entry.kind, title: `${snapshot.title || "Untitled"} (draft)`, body: snapshot.body,
       }) : null;
       // Preserve any edits made while a save request was in flight.
       const unchanged = entriesRef.current.find(row => row.id === entry.id) === snapshot;
@@ -929,27 +1036,80 @@ function NotebookSession({
     }
   };
 
+  const toggleFold = (kind: NotebookKind) =>
+    updateView({ collapsed: collapsed.has(kind) ? [...collapsed].filter(item => item !== kind) : [...collapsed, kind] });
+  const toggleMore = (kind: NotebookKind) =>
+    updateView({ expanded: unfolded.has(kind) ? [...unfolded].filter(item => item !== kind) : [...unfolded, kind] });
+
   return (
-    <section className="notebook" aria-label={title}>
-      <aside className="notebook-list" aria-label={`${title} entries`}>
-        <button className="text-button notebook-add" onClick={() => void add()}>
-          <Plus size={15} />
-          New entry
-        </button>
-        {entries.map((entry) => (
-          <button
-            key={entry.id}
-            className="notebook-entry"
-            data-selected={selected === entry.id}
-            aria-pressed={selected === entry.id}
-            onClick={() => {
-              void flush();
-              setSelected(entry.id);
-            }}
-          >
-            <span className="truncate">{entry.title || "Untitled"}</span>
-          </button>
-        ))}
+    <section className="notebook" aria-label="Notebook">
+      <aside className="notebook-list notebook-tree" aria-label="Notebook sections">
+        {SECTIONS.map((section) => {
+          const rows = entries.filter(entry => entry.kind === section.kind);
+          const on = sectionOn(conversation, section.kind);
+          const folded = collapsed.has(section.kind);
+          const all = unfolded.has(section.kind) || rows.length <= SECTION_ROWS;
+          // The chapter being read is never folded away behind “Show more”.
+          const shown = all ? rows : rows.filter((row, index) => index < SECTION_ROWS || row.id === selected);
+          return (
+            <div className="notebook-section" data-on={on} key={section.kind}>
+              <div className="notebook-section-header">
+                <button
+                  type="button"
+                  className="notebook-section-title"
+                  aria-expanded={!folded}
+                  onClick={() => toggleFold(section.kind)}
+                >
+                  {folded ? <Folder size={15} aria-hidden /> : <FolderOpen size={15} aria-hidden />}
+                  <span className="truncate">{section.title}</span>
+                </button>
+                <IconButton label={`New chapter in ${section.title}`} onClick={() => void add(section.kind)}>
+                  <Plus size={14} />
+                </IconButton>
+                <NotebookSwitch on={on} label={section.label(on)} onChange={next => switchSection(section.kind, next)} />
+              </div>
+              {!folded && (
+                <div className="notebook-section-entries" role="group" aria-label={section.title}>
+                  {!rows.length && !loading && <p className="notebook-section-empty">{section.empty(on)}</p>}
+                  {shown.map((entry) => (
+                    <div className="notebook-entry-row" key={entry.id} data-selected={selected === entry.id}
+                      data-shared={section.kind !== "runbook" || entry.shared}>
+                      {/* Only a Runbook chapter has a switch: Tasks and Plans are
+                          on or off as a whole, by their section (user, 29.09). */}
+                      {section.kind === "runbook" && (
+                        <NotebookSwitch
+                          on={entry.shared}
+                          label={entry.shared
+                            ? `“${entry.title || "Untitled"}” on — the model sees it`
+                            : `“${entry.title || "Untitled"}” off — hidden from the model`}
+                          disabled={!api.notebooks.share}
+                          onChange={next => void share(entry, next)}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className="notebook-entry"
+                        data-selected={selected === entry.id}
+                        aria-pressed={selected === entry.id}
+                        onClick={() => {
+                          void flush();
+                          setSelected(entry.id);
+                        }}
+                      >
+                        <span className="truncate">{entry.title || "Untitled"}</span>
+                      </button>
+                    </div>
+                  ))}
+                  {rows.length > SECTION_ROWS && (
+                    <button type="button" className="notebook-show-more" onClick={() => toggleMore(section.kind)}>
+                      {unfolded.has(section.kind) ? "Show less" : "Show more"}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </aside>
       <div className="notebook-editor">
         <ErrorNote error={error} />
@@ -1000,28 +1160,24 @@ function NotebookSession({
             <RichEntryEditor
               key={current.id}
               body={current.body}
-              label={`${title} entry body`}
-              placeholder={
-                kind === "tasks"
-                  ? "Write the next steps. One task at a time."
-                  : "Keep findings, decisions and useful references here."
-              }
+              label={`${currentSection.title} entry body`}
+              placeholder={currentSection.placeholder}
               onBodyChange={(body) => update(current.id, { body })}
               onBlur={() => void flush()}
             />
           </>
         ) : (
           <div className="notebook-empty">
-            <h2>{title}</h2>
+            <h2>Notebook</h2>
             <p>
               {loading
                 ? "Loading entries…"
                 : "A quiet place to keep what matters."}
             </p>
             {!loading && (
-              <button className="pill" onClick={() => void add()}>
+              <button className="pill" onClick={() => void add("runbook")}>
                 <Plus size={15} />
-                New entry
+                New chapter
               </button>
             )}
           </div>

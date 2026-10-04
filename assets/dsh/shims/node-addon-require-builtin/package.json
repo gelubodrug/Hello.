@@ -1,0 +1,9 @@
+{
+  "name": "node-addon-require-builtin",
+  "version": "0.1.6-hello.0",
+  "description": "Hello shim: the same API, answered by Node's --expose-internals instead of a V8-fingerprinted addon.",
+  "type": "commonjs",
+  "main": "lib/index.js",
+  "exports": { ".": "./lib/index.js", "./package.json": "./package.json" },
+  "license": "MIT"
+}

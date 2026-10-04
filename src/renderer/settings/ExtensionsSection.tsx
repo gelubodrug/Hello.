@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Blocks, ChevronRight, Cpu, Download, Pencil, Plug, RefreshCw, Search, Trash2, Wrench } from 'lucide-react';
+import { AlertTriangle, Blocks, ChevronRight, Cpu, Download, Pencil, Plug, RefreshCw, Search, Store, Trash2, Wrench } from 'lucide-react';
 import type { DiscoveredResources, LibraryResource, McpServerStatus, ResourceKind } from '../../shared/types';
 import { api } from '../api';
 import { ErrorNote, IconButton, errorText } from '../ui/primitives';
+import { DshSection } from './DshSection';
 
 const groups: Array<{ kind: ResourceKind; title: string; blurb: string }> = [
   { kind: 'skill', title: 'Skills', blurb: 'Instructions and reference files the model loads when a task matches. Import a folder with SKILL.md, or a single SKILL.md file.' },
@@ -53,7 +54,7 @@ function ResourceRow({ resource, status, onChanged, onError, busy, setBusy, onEd
             {status.connected ? `${status.tools.length} tool(s)` : status.error ? 'Failed' : 'Not connected'}
           </span>
         )}
-        {resource.kind === 'mcp' && (
+        {resource.kind === 'mcp' && resource.source !== 'hello:dsh' && (
           <IconButton label={`Edit ${resource.name}`} disabled={busy} onClick={() => onEdit?.(resource)}>
             <Pencil size={14} />
           </IconButton>
@@ -260,14 +261,14 @@ export function ExtensionsSection() {
       .discover()
       .then(result => {
         setFound(result);
-        if (!result.mcp.length && !result.skills.length)
-          setNotice('No servers or skills found in the configuration files of the agent tools on this Mac.');
+        if (!result.mcp.length && !result.skills.length && !result.plugins?.length)
+          setNotice('No servers, skills or Pi extensions found in the configuration files of the agent tools on this Mac.');
       })
       .catch(reason => setError(errorText(reason)))
       .finally(() => setScanning(false));
   };
   scanRef.current = scan;
-  const adopt = (kind: 'skill' | 'mcp', id: string) => {
+  const adopt = (kind: 'skill' | 'mcp' | 'plugin', id: string) => {
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -292,8 +293,8 @@ export function ExtensionsSection() {
         </button>
         {found && (
           <span className="muted">
-            {found.skills.length + found.mcp.length
-              ? `${found.skills.length} skill(s), ${found.mcp.length} server(s) found`
+            {found.skills.length + found.mcp.length + (found.plugins?.length ?? 0)
+              ? `${found.skills.length} skill(s), ${found.mcp.length} server(s)${found.plugins?.length ? `, ${found.plugins.length} Pi extension(s)` : ''} found`
               : 'Nothing found'}
           </span>
         )}
@@ -331,11 +332,16 @@ export function ExtensionsSection() {
                 ))}
               </ul>
             )}
-            {found && group.kind !== 'plugin' && (() => {
+            {found && (() => {
               const entries = group.kind === 'skill'
                 ? found.skills.map(skill => ({
                     key: skill.id, name: skill.name, source: skill.source,
                     detail: skill.description || skill.path, blocked: undefined as string | undefined,
+                  }))
+                : group.kind === 'plugin'
+                ? (found.plugins ?? []).map(plugin => ({
+                    key: plugin.id, name: plugin.name, source: plugin.source,
+                    detail: plugin.description || plugin.path, blocked: undefined as string | undefined,
                   }))
                 : found.mcp.map(server => ({
                     key: server.id, name: server.name, source: server.source,
@@ -356,7 +362,7 @@ export function ExtensionsSection() {
                           className="pill"
                           disabled={busy || Boolean(item.blocked)}
                           title={item.blocked ?? `Copy ${item.name} into this app’s library`}
-                          onClick={() => adopt(group.kind as 'skill' | 'mcp', item.key)}
+                          onClick={() => adopt(group.kind, item.key)}
                         >
                           {item.blocked ? 'Not supported' : 'Add'}
                         </button>
@@ -370,6 +376,12 @@ export function ExtensionsSection() {
               !editing && <McpForm onSaved={load} onError={setError} busy={busy} setBusy={setBusy} editing={null} onCancelEdit={() => setEditing(null)} />
             ) : (
               <div className="extension-actions">
+                {group.kind === 'plugin' && (api as Partial<typeof api>).piMarket && (
+                  <button type="button" className="text-button" onClick={() => window.dispatchEvent(new CustomEvent('hello:market-open', { detail: 'pi' }))}>
+                    <Store size={14} />
+                    Browse Pi packages
+                  </button>
+                )}
                 <button type="button" className="text-button" disabled={busy} onClick={() => importResource(group.kind as 'skill' | 'plugin')}>
                   <Blocks size={14} />
                   {group.kind === 'skill' ? 'Import a skill…' : 'Import a plugin…'}
@@ -403,6 +415,7 @@ export function ExtensionsSection() {
           </section>
         );
       })}
+      <DshSection />
       {notice && <p className="extension-notice" role="status">{notice}</p>}
       <ErrorNote error={error} />
     </div>

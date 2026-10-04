@@ -14,7 +14,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { parse as parseYaml } from 'yaml';
-import type { DiscoveredMcpServer, DiscoveredSkill } from '../../shared/types';
+import type { DiscoveredMcpServer, DiscoveredPlugin, DiscoveredSkill } from '../../shared/types';
+import { slug } from './library';
 
 /** Whole file read into memory; a config far past this is not one of these tools'. */
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
@@ -254,6 +255,7 @@ function skillRootsFor(home: string): Array<{ label: string; path: string }> {
     { label: 'Qwen Code', path: join(home, '.qwen', 'skills') },
     { label: 'Cursor', path: join(home, '.cursor', 'skills') },
     { label: 'opencode', path: join(home, '.config', 'opencode', 'skills') },
+    { label: 'Pi', path: join(home, '.pi', 'agent', 'skills') },
   ];
 }
 
@@ -319,8 +321,9 @@ async function skillsUnder(root: string, label: string): Promise<DiscoveredSkill
 export async function discoverSkills(
   home = homedir(),
   extraProjects: string[] = [],
+  extraRoots: Array<{ label: string; path: string }> = [],
 ): Promise<DiscoveredSkill[]> {
-  const roots = skillRootsFor(home);
+  const roots = [...skillRootsFor(home), ...extraRoots];
   // A project folder keeps its own skills beside its own MCP configuration.
   const projects = [...new Set([...extraProjects.filter(path => path?.startsWith('/')), ...await claudeProjects(home)])]
     .slice(0, MAX_PROJECTS);
@@ -351,6 +354,47 @@ export async function discoverSkills(
       seen.add(skill.id);
       found.push(skill);
     }
+  return found;
+}
+
+/**
+ * Extensions installed for Pi itself, in its global extensions folder — where
+ * an installer such as OpenViking's puts one, with its dependencies. Pi's own
+ * rule: a .ts/.js file, or a folder holding index.ts/index.js or a
+ * package.json with a "pi" section. Reading stops at that package.json. The
+ * name is the one the library will give it, so an added one is not offered
+ * again.
+ */
+export async function discoverPiExtensions(home = homedir(), agentDir = join(home, '.pi', 'agent')): Promise<DiscoveredPlugin[]> {
+  const root = join(agentDir, 'extensions');
+  const found: DiscoveredPlugin[] = [];
+  let names: string[];
+  try { names = (await readdir(root)).sort().slice(0, MAX_SERVERS); } catch { return []; }
+  for (const name of names) {
+    const path = join(root, name);
+    let info;
+    try { info = await stat(path); } catch { continue; }
+    if (info.isFile()) {
+      if (!/\.(?:ts|mts|js|mjs)$/.test(name) || /\.hello-bundle\.mjs$/.test(name)) continue;
+      found.push({ id: path, name: slug(name.replace(/\.[^.]+$/, '')), description: '', source: 'Pi', path });
+      continue;
+    }
+    if (!info.isDirectory()) continue;
+    let manifest: Record<string, unknown> = {};
+    try {
+      const file = join(path, 'package.json');
+      if ((await stat(file)).size <= MAX_CONFIG_BYTES) manifest = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    } catch { /* no manifest: the index decides */ }
+    const hasIndex = await Promise.all(['index.ts', 'index.js'].map(file => stat(join(path, file)).then(entry => entry.isFile(), () => false)));
+    if (!hasIndex.some(Boolean) && (typeof manifest.pi !== 'object' || manifest.pi === null)) continue;
+    found.push({
+      id: path,
+      name: slug(typeof manifest.name === 'string' && manifest.name ? manifest.name : name),
+      description: typeof manifest.description === 'string' ? manifest.description.slice(0, 500) : '',
+      source: 'Pi',
+      path,
+    });
+  }
   return found;
 }
 

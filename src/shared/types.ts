@@ -1,6 +1,7 @@
 import type { FileDocument, FileListing } from './files';
 import type { AnnotationShot } from './page-mode-format';
-export type NotebookKind = 'runbook' | 'tasks';
+/** A chat's notebook has three sections: Runbooks, Tasks and Plans (the steps plan_write keeps). */
+export type NotebookKind = 'runbook' | 'tasks' | 'plan';
 export type AgentControl = 'off' | 'read' | 'full';
 export type WorkerId = 'claude' | 'codex' | 'qwen' | 'kimi' | 'opencode' | 'pi' | 'aider';
 export type ResourceKind = 'skill' | 'plugin' | 'mcp';
@@ -42,20 +43,42 @@ export interface DiscoveredMcpServer {
 }
 /** A skill folder another agent tool already has on this Mac. */
 export interface DiscoveredSkill { id: string; name: string; description: string; source: string; path: string; }
-export interface DiscoveredResources { mcp: DiscoveredMcpServer[]; skills: DiscoveredSkill[]; }
+/** A Pi extension installed for Pi itself (~/.pi/agent/extensions). */
+export interface DiscoveredPlugin { id: string; name: string; description: string; source: string; path: string; }
+/** One skill in the catalog skills_find and the composer's / menu search: Hello's library, another agent's on this Mac, or skills.sh's. */
+export interface CatalogSkill {
+  /** `library:<resource id>`, `local:<folder>` or `skills.sh:<owner>/<repo>/<skill>`. */
+  id: string;
+  name: string;
+  description: string;
+  /** Where it lives, as a person would say it. */
+  source: string;
+  origin: 'library' | 'local' | 'online';
+  installs?: number;
+}
+export interface CatalogSearch { local: CatalogSkill[]; online: CatalogSkill[]; onlineError?: string; }
+export interface SkillUse {
+  name: string;
+  resourceId: string;
+  /** False when the skill was already in the library. */
+  imported: boolean;
+  source: string;
+}
+export interface DiscoveredResources { mcp: DiscoveredMcpServer[]; skills: DiscoveredSkill[]; /** Optional for an older main. */ plugins?: DiscoveredPlugin[]; }
 /** A model the endpoint offers, with the limits it publishes for it. */
-export interface ModelChoice { id: string; contextWindow?: number; maxOutputTokens?: number; }
+export interface ModelChoice { id: string; contextWindow?: number; maxOutputTokens?: number; /** Costs nothing to ask: on a server of the person's own, or priced at zero by its provider (OpenRouter's `:free`). */ free?: boolean; }
 /** One connection's models for the chat's picker: the one in use (unnamed until kept), a kept one, or a server running on this Mac. A connection that could not answer keeps its place with the reason. */
 export interface ConnectionModels { name: string; endpointUrl: string; active: boolean; models: ModelChoice[]; error?: string; }
 /** A model server found running on this Mac, named after what it is and the port it took. */
 export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[]; }
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
 export interface ResourceChange { conversationId?: string }
-/** Three switches a chat carries. `planning` is the Plan switch: off by
- *  default, because a two-line request answered with a written plan is slower
- *  than the answer. `runbook` and `tasks` are the two shared pages: on by
- *  default, and when one is off it is gone from the UI and invisible to the
- *  model — no page, no tool, nothing about it in what the model is told. */
+/** The switches of a chat's notebook sections (user, 29.09). `planning` is
+ *  Plans — the Plan switch: off by default, because a two-line request
+ *  answered with a written plan is slower than the answer. `runbook` and
+ *  `tasks` are on by default. A section that is off stays in the notebook,
+ *  quieter, and is invisible to the model and CLI workers — no tool, no
+ *  export, nothing about it in what the model is told. */
 export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean;
   /** When the chat was last restarted: the model's memory begins here; what came before stays for the person. */
   freshFrom?: number;
@@ -68,7 +91,11 @@ export type MessagePart =
   | { type: 'tool'; id: string; name: string; input: string; output?: string; status: 'running' | 'complete' | 'error' | 'approval'; approvalId?: string; durationMs?: number };
 export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; parts?: MessagePart[]; status: 'complete' | 'streaming' | 'error'; createdAt: number; error?: string | null; usage?: MessageUsage; runtimePhase?: 'starting' | 'working' | 'compacting' | 'retrying';
   /** The model that wrote this reply, as it was selected when the reply began. */
-  model?: string; }
+  model?: string;
+  /** Pi began this reply on its own, woken by a plugin (subagents finishing, say): what woke it, in a line. */
+  startedBy?: string;
+  /** How long the reply worked, across its retries: its activity says so. */
+  workedMs?: number; }
 /**
  * What a reply cost in tokens. input and output add up every call the reply
  * made — a tool step sends the whole context again — so they are its bill,
@@ -76,9 +103,15 @@ export interface Message { id: string; conversationId: string; role: 'user' | 'a
  * model's window is now.
  */
 export interface MessageUsage { input: number; output: number; context?: number; cost?: number; }
+/** Every reply's usage added up: in all, by the model that wrote it, and by chat (the costliest first). */
+export interface UsageSummary {
+  replies: number; input: number; output: number; cost: number;
+  models: Array<{ model: string; replies: number; input: number; output: number; cost: number }>;
+  chats: Array<{ conversationId: string; title: string; replies: number; input: number; output: number; cost: number }>;
+}
 /** A message that has the words searched for, and the words around them. */
 export interface MessageMatch { conversationId: string; messageId: string; role: 'user' | 'assistant'; snippet: string; createdAt: number; }
-export interface NotebookEntry { id: string; conversationId: string; kind: NotebookKind; title: string; body: string; createdAt: number; updatedAt: number; }
+export interface NotebookEntry { id: string; conversationId: string; kind: NotebookKind; title: string; body: string; createdAt: number; updatedAt: number; /** A Runbook chapter's own switch: the model and CLI workers see only the Runbook chapters that are on. Tasks and Plans are on or off as a whole and ignore it. */ shared: boolean; }
 export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 /**
  * How much the agent may do inside a chat's attached folder without being asked.
@@ -89,18 +122,37 @@ export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 export type ApprovalMode = 'ask' | 'writes' | 'all';
 /** A provider the user asked this app to keep, so switching is a click and not a retyped URL. Its key lives under its endpoint, never in this record. */
 export interface SavedConnection { name: string; endpointUrl: string; model: string; apiKeySet: boolean; }
-export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; connections: SavedConnection[]; }
+export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; connections: SavedConnection[]; }
 export type SettingsPatch = Partial<Omit<AppSettings, 'apiKeySet' | 'connections'>> & { apiKey?: string };
 /** Where a message the person wrote during a run is meant to land. */
 export type QueuedMode = 'steer' | 'next' | 'later';
 /** Their words, waiting. Not part of the conversation until it is delivered. */
 export interface QueuedMessage { id: string; conversationId: string; text: string; mode: QueuedMode; createdAt: number; }
 export interface WorkerInfo { id: WorkerId; label: string; installed: boolean; usesActiveModel: boolean; }
-export interface TerminalSession { id: string; conversationId: string; title: string; kind: 'terminal' | 'worker'; workerId?: WorkerId; cwd: string; status: 'running' | 'exited'; exitCode?: number; notebookContext?: boolean; }
+export interface TerminalSession { id: string; conversationId: string; title: string; kind: 'terminal' | 'worker'; workerId?: WorkerId; cwd: string; status: 'running' | 'exited'; exitCode?: number; notebookContext?: boolean;
+  /** The conversation this CLI can continue in a later launch (Claude Code, Pi): what brings a chat tab back after a restart. */
+  session?: string; }
 export interface TerminalData { id: string; data: string; sequence: number; }
+/** A slash command a plugin added to a chat's Pi (its get_commands): `/name`, typed in the composer. */
+export interface PluginCommand { name: string; description: string; }
 export interface TerminalExit { id: string; exitCode: number; }
 export interface TerminalAttach { session: TerminalSession; scrollback: string; sequence: number; }
+/** One mark an agent left on a page for the person (browser_mark), in page CSS px. */
+export interface TabMark { n: number; note: string; x: number; y: number; width: number; height: number;
+  /** The CSS path of the element it marks: it follows that element, and finds it again after a reload. */
+  path?: string; }
+/** The marks left on one page of a tab, by its address without #. */
+export interface TabMarks { url: string; marks: TabMark[]; }
 export interface BrowserTab { id: string; conversationId: string; title: string; url: string; control: AgentControl; loading: boolean; progress: number | null; canGoBack: boolean; canGoForward: boolean; error?: string | null; pageOwned?: boolean; openerId?: string; sessionOnly?: boolean;
+  /**
+   * The marks an agent left for the person, page by page (user, 30.09: "tie
+   * them to the link that made them, until reset"): each page shows its own
+   * again when the tab comes back to it — Back, Forward, a restart — until the
+   * person reloads it or clears them. The newest last, at most ten pages.
+   */
+  marks?: TabMarks[];
+  /** Full because the model opened this tab for its work (user, 29.09), not because the human set it: not restored after a restart. */
+  agentGranted?: boolean;
   /** Bumped when the page must be re-created; the renderer keys its guest on it. */
   generation?: number;
   /** The isolated session a generated preview runs in, chosen by the main process. */
@@ -187,7 +239,17 @@ export interface ChatQuote extends ChatQuoteExtra { text: string; }
 export interface ChatEvent { conversationId: string; message: Message; }
 /** The waiting list after main changed it on its own: a steer said, a held message delivered. */
 export interface ChatQueueEvent { conversationId: string; items: QueuedMessage[]; }
-export interface NotebookPaths { runbook: string; tasks: string; }
+/**
+ * What the plugins active in a chat show while its Pi runs headless (user,
+ * 29.09): Pi's extension UI as it travels over RPC — text widgets, status
+ * lines, notifications and questions. Every word is the plugin's.
+ */
+export interface ExtensionWidget { key: string; lines: string[]; placement: 'aboveEditor' | 'belowEditor'; }
+export interface ExtensionNotice { id: string; message: string; kind: 'info' | 'warning' | 'error'; at: number; }
+export interface ExtensionDialog { id: string; method: 'select' | 'confirm' | 'input' | 'editor'; title: string; message?: string; options?: string[]; placeholder?: string; prefill?: string; /** When Pi answers it by itself. */ expiresAt?: number; }
+export interface ExtensionUiState { conversationId: string; widgets: ExtensionWidget[]; statuses: Array<{ key: string; text: string }>; notices: ExtensionNotice[]; dialogs: ExtensionDialog[]; /** Text a plugin put in the composer, and when. */ editorText?: { text: string; at: number }; }
+export type ExtensionAnswer = { value: string } | { confirmed: boolean } | { cancelled: true };
+export interface NotebookPaths { runbook: string; tasks: string; plan: string; }
 export interface Bootstrap { conversations: Conversation[]; settings: AppSettings; workers: WorkerInfo[]; terminals: TerminalSession[]; browsers: BrowserTab[]; dataPath: string; version: string; extensionsCount: number; }
 
 export interface HelloAPI {
@@ -220,6 +282,8 @@ export interface HelloAPI {
     models(endpointUrl?: string): Promise<ModelChoice[]>;
     /** Every model the chat can reach: the endpoint in use, kept connections and servers on this Mac. */
     catalog(): Promise<ConnectionModels[]>;
+    /** What replies have cost and how many tokens they moved, in all, by model and by chat. Optional for an older preload. */
+    usage?(): Promise<UsageSummary>;
     /** Model servers running on this Mac, looked for afresh. */
     localServers(): Promise<LocalServer[]>;
     /** Keeps the endpoint and model as currently saved under a name. */
@@ -229,8 +293,8 @@ export interface HelloAPI {
     /** Drops a remembered connection and the key stored for its endpoint. */
     forgetConnection(endpointUrl: string): Promise<AppSettings>;
   };
-  chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>; /** A data: URL of one of this chat's image attachments. */ previewAttachment(conversationId: string, attachmentId: string): Promise<string>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; /** A row that is already gone is not an error: the chat's current list comes back. */ dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; onQueue?(listener: (event: ChatQueueEvent) => void): () => void; };
-  notebooks: { list(conversationId: string, kind: NotebookKind): Promise<NotebookEntry[]>; save(input: { id?: string; conversationId: string; kind: NotebookKind; title: string; body: string; expectedUpdatedAt?: number }): Promise<NotebookEntry>; delete(id: string): Promise<void>; paths(conversationId: string): Promise<NotebookPaths>; onChange?(listener: (event: NotebookChange) => void): () => void; };
+  chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>; /** A data: URL of one of this chat's image attachments. */ previewAttachment(conversationId: string, attachmentId: string): Promise<string>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; /** A row that is already gone is not an error: the chat's current list comes back. */ dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; onQueue?(listener: (event: ChatQueueEvent) => void): () => void; /** What the chat's plugins show. Optional for an older preload. */ extensionUi?(conversationId: string): Promise<ExtensionUiState>; onExtensionUi?(listener: (state: ExtensionUiState) => void): () => void; /** Answers a plugin's question. */ answerExtension?(conversationId: string, dialogId: string, answer: ExtensionAnswer): Promise<void>; /** The slash commands the chat's plugins added, as its running Pi last said; null before it ever ran. */ commands?(conversationId: string): Promise<PluginCommand[] | null>; /** Summarises the conversation now, as Pi does by itself near the limit. Optional for an older preload. */ compact?(conversationId: string): Promise<{ tokensBefore: number; tokensAfter?: number }>; };
+  notebooks: { list(conversationId: string, kind: NotebookKind): Promise<NotebookEntry[]>; save(input: { id?: string; conversationId: string; kind: NotebookKind; title: string; body: string; expectedUpdatedAt?: number }): Promise<NotebookEntry>; delete(id: string): Promise<void>; /** A chapter's switch. Leaves its revision alone, so an open draft stays valid. Optional for an older preload. */ share?(id: string, shared: boolean): Promise<NotebookEntry>; paths(conversationId: string): Promise<NotebookPaths>; onChange?(listener: (event: NotebookChange) => void): () => void; };
   extensions: {
     list(): Promise<LibraryResource[]>;
     importResource(kind: 'skill' | 'plugin'): Promise<LibraryResource | null>;
@@ -239,7 +303,7 @@ export interface HelloAPI {
     addMcp(input: McpServerInput): Promise<LibraryResource>;
     /** MCP servers and skills found in other agent tools' own configuration. */
     discover(): Promise<DiscoveredResources>;
-    importDiscovered(kind: 'mcp' | 'skill', id: string): Promise<LibraryResource>;
+    importDiscovered(kind: 'mcp' | 'skill' | 'plugin', id: string): Promise<LibraryResource>;
     update(id: string): Promise<LibraryResource>;
     remove(id: string): Promise<void>;
     active(conversationId: string): Promise<string[]>;
@@ -249,6 +313,14 @@ export interface HelloAPI {
     disconnect(id: string): Promise<void>;
     onChange(listener: (event: ResourceChange) => void): () => void;
   };
+  /** Every skill in one place (skill-catalog.ts). Optional for an older preload. */
+  skills?: {
+    /** Hello's library, then every skill another agent on this Mac keeps. */
+    list(): Promise<CatalogSkill[]>;
+    search(query: string, online: boolean): Promise<CatalogSearch>;
+    /** Copies it into the library when it is not there, and turns it on for the chat. */
+    use(id: string, conversationId: string): Promise<SkillUse>;
+  };
   system: { chooseFolder(): Promise<string | null>; pathsForFiles(files: File[]): string[]; openExternal(url: string): Promise<void>; revealPath(path: string): Promise<void>; copy(content: { text: string; html?: string }): Promise<void>;
     /** A macOS notification about one chat; clicking it brings that chat forward. Optional for an older preload. */
     notify?(input: { title: string; body: string; conversationId: string }): Promise<boolean>;
@@ -256,12 +328,15 @@ export interface HelloAPI {
     badge?(count: number): Promise<void>;
     /** A notification was clicked: the chat it was about. */
     onFocusConversation?(listener: (conversationId: string) => void): () => void;
+    /** An item of the app menu, by its key: ⌘N `new-chat`, ⌘B `toggle-sidebar`. Optional for an older preload. */
+    onMenu?(listener: (action: 'new-chat' | 'toggle-sidebar') => void): () => void;
     /** The app's window gained or lost the OS focus. */
     onWindowFocus?(listener: (focused: boolean) => void): () => void; };
   terminal: {
     list(): Promise<TerminalSession[]>;
     workers(): Promise<WorkerInfo[]>;
-    create(conversationId: string, workerId?: WorkerId): Promise<TerminalSession>;
+    /** `session`: continue that conversation of the CLI, the one a chat tab had before a restart. */
+    create(conversationId: string, workerId?: WorkerId, session?: string): Promise<TerminalSession>;
     attach(id: string): Promise<TerminalAttach>;
     write(id: string, data: string): Promise<void>;
     resize(id: string, cols: number, rows: number): Promise<void>;
@@ -319,6 +394,138 @@ export interface HelloAPI {
       onEvent(listener: (event: PageModeEvent) => void): () => void;
     };
   };
+  /** The DSH surface: dsh's own client, hosted by Hello. Optional for an older preload. */
+  dsh?: {
+    status(): Promise<DshStatus>;
+    /** Downloads and installs the pinned dsh runtime into the app's data folder. */
+    install(): Promise<DshStatus>;
+    /** `acceptProfileChange` starts with packages that changed outside Hello. */
+    start(acceptProfileChange?: boolean): Promise<DshStatus>;
+    stop(): Promise<DshStatus>;
+    restart(): Promise<DshStatus>;
+    /** Puts the profile back as a restore point had it, reinstalls, starts again. */
+    restore(checkpointId: string): Promise<DshStatus>;
+    /** One-time URL the window may create the surface's page with. */
+    attach(): Promise<string>;
+    /** The window is dropping the page it created with this nonce. */
+    detach(nonce: string): Promise<void>;
+    reload(): Promise<void>;
+    revealLogs(): Promise<void>;
+    /** Applies on the next start. Optional for an older preload. */
+    setUseHelloModel?(value: boolean): Promise<DshStatus>;
+    /** Whether the plugins' tools are in Hello's library, to switch on per chat. Optional for an older preload. */
+    toolsInLibrary?(): Promise<boolean>;
+    setToolsInLibrary?(value: boolean): Promise<boolean>;
+    /** Installs the newer dsh npm offers and runs it. Optional for an older preload. */
+    update?(): Promise<DshStatus>;
+    /** Goes back to the dsh this Hello came with. Optional for an older preload. */
+    useBundled?(): Promise<DshStatus>;
+    onStatus(listener: (status: DshStatus) => void): () => void;
+    /** A web link the surface's page wanted to open. */
+    onOpenLink(listener: (url: string) => void): () => void;
+  };
+  /** Optional for an older preload. */
+  /** The DSH Community Plugin Market. */
+  market?: MarketApi;
+  /** The Pi package market: the same window over Pi packages, installed into Hello's library. Optional for an older preload. */
+  piMarket?: MarketApi;
+  /** The Pi Hello's chats run on, and its updates. Optional for an older preload. */
+  piEngine?: {
+    status(): Promise<PiEngineStatus>;
+    /** Installs the newer Pi npm offers; chats move to it on their next message. */
+    update(): Promise<PiEngineStatus>;
+    /** Goes back to the Pi this Hello came with. */
+    useBundled(): Promise<PiEngineStatus>;
+    onStatus(listener: (status: PiEngineStatus) => void): () => void;
+  };
+}
+
+/** The Pi engine: the one running, the one Hello came with, and a newer one npm offers. */
+export interface PiEngineStatus {
+  version: string;
+  bundled: string;
+  /** Newer than `version`, when npm has one. */
+  latest?: string;
+  state: 'idle' | 'updating' | 'failed';
+  message?: string;
+}
+
+/** Which market a window shows. */
+export type MarketKind = 'dsh' | 'pi';
+/** One market's handles. Both markets share this shape and the window drawn over it. */
+export interface MarketApi {
+  sources(): Promise<MarketSource[]>;
+  /** Source list changes; each answers with the list as it now stands. Optional for an older preload. */
+  addSource?(key: string): Promise<MarketSource[]>;
+  /** Main reads and checks the manifest at this URL before adding it. */
+  addStandardSource?(manifestUrl: string): Promise<MarketSource[]>;
+  removeSource?(id: string): Promise<MarketSource[]>;
+  selectSource?(id: string): Promise<MarketSource[]>;
+  query(query: MarketQuery): Promise<MarketPage>;
+  /** An item's icon as a data URL, fetched and re-encoded by main; null when there is none. */
+  icon(ref: string): Promise<string | null>;
+  installed(): Promise<MarketInstalledPlugin[]>;
+  preview(key: string): Promise<MarketPreview>;
+  previewByName(name: string): Promise<MarketPreview>;
+  previewUninstall(packageName: string): Promise<MarketPreview>;
+  /** Moving an installed package to npm's newest version, from the Installed list. Optional for an older preload. */
+  previewUpdate?(packageName: string): Promise<MarketPreview>;
+  /** Main asks for a folder; null when the person cancels. A market without folder installs leaves it out. */
+  previewFolder?(): Promise<MarketPreview | null>;
+  confirm(token: string): Promise<MarketResult>;
+}
+
+/** The Community Plugin Market (a port of dsh-community-market), browsing and installing into the DSH profile. */
+export interface MarketSource { id: string; name: string; description: string; homepage: string; endpointHost: string; builtIn: boolean; partner: boolean; selected: boolean; available: boolean; /** In the person's list; a built-in partner is offered to add until then. Absent from an older main: treat as added. */ added?: boolean; attribution: { name: string; url: string; notice: string }; }
+export interface MarketItem { key: string; name: string; summary: string; publisher?: string; categories: string[]; repository: string; installable: boolean; manualCommand?: string; sourceName: string; icon?: string; installs: number; stars: number; updatedAt?: string; }
+export interface MarketPage { items: MarketItem[]; total: number; /** Every entry the source holds, when a filter narrows `total`. */ unfiltered?: number; nextCursor?: string; categories: string[]; generatedAt?: string; }
+export interface MarketQuery { q?: string; category?: string; sort?: 'downloads' | 'updated' | 'name' | 'stars'; cursor?: string; limit?: number; installable?: boolean; reload?: boolean; }
+export interface MarketInstalledPlugin { packageName: string; version: string; kind: 'plugin' | 'hello' | 'product'; bundle: boolean; /** npm's newest stable version, when it is newer than the one installed. */ latest?: string; }
+export type MarketAction = 'install' | 'uninstall' | 'update';
+export interface MarketPreview { token: string; action: MarketAction; displayName: string; packageName: string; version?: string; /** For an update: the version installed now. */ from?: string; folder?: string; profile: string; expiresAt: number; compatibility: { ok: boolean; reason?: string }; hello?: { ui: boolean; skills: boolean; mcp: boolean; lines: string[] }; }
+export interface MarketResult { action: MarketAction; packageName: string; version?: string; installedAt: number; }
+
+/** absent: never installed · installing · stopped · starting · running · stopping · failed. */
+export type DshState = 'absent' | 'installing' | 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
+export interface DshCheckpoint { id: string; kind: 'healthy' | 'before'; at: number; label: string; }
+export interface DshStatus {
+  state: DshState;
+  /** The dsh version this app runs: the one it came with, or an update chosen since. */
+  version: string;
+  /** The dsh version this app came with. */
+  bundledVersion?: string;
+  /** Newer than `version`, when npm has one. */
+  latest?: string;
+  /** Why the last switch of version failed; gone with the next one. */
+  updateError?: string;
+  /** The dsh version on disk, when there is one. */
+  installedVersion?: string;
+  progress?: {
+    resolved: number;
+    downloaded: number;
+    added: number;
+    /** What pnpm said it would add (`Packages: +N`): what "added" counts towards. */
+    total?: number;
+    /** Every package is in place; what remains is finishing. */
+    done?: boolean;
+    /** pnpm's latest word, in the person's terms: a retry, a slow download, a build. */
+    activity?: string;
+    /** When pnpm last printed anything, and when the install began (ms since epoch). */
+    at?: number;
+    startedAt?: number;
+  };
+  /** Why the surface failed, or what it is doing, in the person's words. */
+  message?: string;
+  startedAt?: number;
+  profileDir: string;
+  logFile: string;
+  checkpoints: DshCheckpoint[];
+  /** The profile's packages changed outside Hello; a start waits for the person. */
+  profileChange?: { added: string[]; removed: string[]; changed: string[] };
+  /** Plugin entries dsh's client could not activate on its last boot. */
+  bootFailure?: string[];
+  /** Sessions in the surface use Hello's active connection (through the proxy), not dsh's own providers. */
+  useHelloModel?: boolean;
 }
 
 declare global { interface Window { hello: HelloAPI; } }

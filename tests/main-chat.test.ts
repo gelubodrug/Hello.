@@ -133,7 +133,7 @@ afterEach(async () => {
   }
 });
 
-function create(options: Pick<ChatServiceOptions, 'fetch' | 'browser' | 'localServers'> = {}): ChatService {
+function create(options: Pick<ChatServiceOptions, 'fetch' | 'browser' | 'localServers' | 'piEntry'> = {}): ChatService {
   // Never the real lsof and the real ports of the machine running the tests.
   service = new ChatService({ store, emit: event => events.push(structuredClone(event)),
     emitQueue: event => queueEvents.push(structuredClone(event)), localServers: async () => [], ...options });
@@ -223,6 +223,8 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
       { type: 'text', text: 'Hello world.' },
     ]);
     expect(rpc.prompt).toHaveBeenCalledWith('Hi');
+    // How long it worked, kept with the reply for its activity header.
+    expect(assistant().workedMs).toEqual(expect.any(Number));
     const root = piConversationDir(directory, conversationId);
     expect(readFileSync(path.join(root, 'system-prompt.md'), 'utf8')).not.toContain('DO NOT INJECT');
     expect(readFileSync(path.join(root, 'session.jsonl'), 'utf8')).not.toContain('DO NOT INJECT');
@@ -247,6 +249,44 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(store.listMessages(conversationId).map(message => message.content)).toEqual([
       'First question', 'First answer', 'Follow-up question', 'Second answer',
     ]);
+  });
+
+  // User, 04.10 (both design audits): the context meter offers "Summarise now".
+  it('summarises the conversation on the person\'s word, with Pi\'s own compaction', async () => {
+    const chat = create();
+    const first = chat.send(conversationId, 'First question');
+    const current = await runtime();
+    settle(current.rpc, 'First answer');
+    await first;
+    current.rpc.request.mockImplementationOnce(async (command: { type: string }) =>
+      ({ type: 'response', id: 'fixture', command: command.type, success: true, data: { tokensBefore: 150_000, estimatedTokensAfter: 32_000 } }));
+    const summarising = chat.compact(conversationId);
+    // Nothing is sent into a chat while Pi summarises it.
+    await expect(chat.send(conversationId, 'Too soon')).rejects.toThrow('being summarised');
+    await expect(summarising).resolves.toEqual({ tokensBefore: 150_000, tokensAfter: 32_000 });
+    expect(current.rpc.request).toHaveBeenCalledWith({ type: 'compact' }, 15 * 60_000);
+    // The same warm Pi did it: no second process for a summary.
+    expect(harness.instances).toHaveLength(1);
+  });
+
+  // User, 01.10: "update" in the sidebar installs a newer Pi beside the bundled
+  // one; a chat moves to it at its next message, and back the same way.
+  it('starts Pi from the engine in use, and moves the chat to an updated one at its next message', async () => {
+    let entry = '/app/node_modules/@earendil-works/pi-coding-agent/dist/bundle/rpc-entry.js';
+    const chat = create({ piEntry: () => entry });
+    const first = chat.send(conversationId, 'First question');
+    const current = await runtime();
+    expect(current.rpc.options.args?.[0]).toBe(entry);
+    settle(current.rpc, 'First answer');
+    await first;
+
+    entry = '/data/pi/runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/rpc-entry.js';
+    const second = chat.send(conversationId, 'Follow-up question');
+    const next = await runtime(1);
+    expect(next.rpc.options.args?.[0]).toBe(entry);
+    expect(current.rpc.dispose).toHaveBeenCalled();
+    settle(next.rpc, 'Second answer');
+    await second;
   });
 
   it('runs notebook tools in Hello and records one result card', async () => {
@@ -968,12 +1008,35 @@ describe('servers running on this Mac', () => {
       models: [{ id: '/Users/q/Models/Nex-N2.5-mini-Q8_0.gguf', contextWindow: 262144 }] };
     const ollama = { name: 'Ollama · 11434', endpointUrl: 'http://localhost:11434/v1', models: [{ id: 'gemma4:12b' }] };
     const fetcher = vi.fn<typeof fetch>();
+    // A server of the person's own costs nothing to ask: its models are free.
     expect(await create({ fetch: fetcher, localServers: async () => [local, ollama] }).catalog()).toEqual([
-      { ...local, active: true },
-      { ...ollama, active: false },
+      { ...local, active: true, models: [{ ...local.models[0], free: true }] },
+      { ...ollama, active: false, models: [{ id: 'gemma4:12b', free: true }] },
     ]);
     // What the look already listed is not asked for again.
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  // Free first (user, 01.10): the picker opens on the models that cost nothing.
+  it('marks what costs nothing: a model priced at zero or named :free, and every model of a server of the person\'s own', async () => {
+    store.saveSettings({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'm', apiKey: 'key' });
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [
+      { id: 'qwen/qwen3-coder:free' },
+      { id: 'openrouter/sonoma-sky-alpha', pricing: { prompt: '0', completion: '0' } },
+      { id: 'anthropic/claude-sonnet-4.5', pricing: { prompt: '0.000003', completion: '0.000015' } },
+      { id: 'openrouter/auto', pricing: { prompt: '-1', completion: '-1' } },
+      { id: 'vendor/unpriced', pricing: { prompt: '', completion: '' } },
+    ] })));
+    const ollama = { name: 'Ollama · 11434', endpointUrl: 'http://localhost:11434/v1', models: [{ id: 'gemma4:12b' }] };
+    const [cloud, local] = await create({ fetch: fetcher, localServers: async () => [ollama] }).catalog();
+    expect(cloud.models).toEqual([
+      { id: 'anthropic/claude-sonnet-4.5' },
+      { id: 'openrouter/auto' },
+      { id: 'openrouter/sonoma-sky-alpha', free: true },
+      { id: 'qwen/qwen3-coder:free', free: true },
+      { id: 'vendor/unpriced' },
+    ]);
+    expect(local.models).toEqual([{ id: 'gemma4:12b', free: true }]);
   });
 
   it('answers from the last look, however old, and looks afresh only when asked', async () => {

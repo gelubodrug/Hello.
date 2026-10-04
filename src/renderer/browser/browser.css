@@ -21,6 +21,7 @@
 .browser-start p{max-width:330px;font-size:13px;line-height:1.7;margin:0 0 24px}
 .browser-start form{display:flex;align-items:center;gap:12px;padding:8px 12px 8px 18px;background:var(--surface-raised,#212225);border-radius:999px;width:min(440px,100%)}
 .browser-start input{width:100%;min-width:0;border:0;background:transparent;color:var(--ink-primary,#e5e5e7);outline:none;font:inherit;font-size:13px}
+.browser-start form:has(input:focus-visible){outline:var(--focus-ring-width) solid var(--color-focus-ring);outline-offset:0}
 .browser-start button{border:0;border-radius:999px;background:#303238;color:#e5e5e7;padding:8px;display:flex;cursor:pointer}
 .browser-start small{font-size:11px;margin-top:18px}
 /* Downloads: the button's ring fills while a file saves, as a browser's does. */

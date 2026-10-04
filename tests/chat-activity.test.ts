@@ -35,8 +35,20 @@ describe('chat activity layout and truthful labels', () => {
       const part: MessagePart = { type: 'tool', id: name, name, input: '{}', status: 'complete', output: '' };
       const label = stepLabel([part]);
       expect(label, `${name} shows its identifier`).not.toMatch(/^[a-z0-9]+_[a-z0-9_]+$/);
-      expect(label, `${name} has no name of its own`).not.toBe('Ran a step');
+      // A plugin's tool is said by its own name; Hello's own tools each have one of Hello's.
+      expect(label, `${name} has no name of its own`).not.toBe(`Used ${name}`);
     }
+  });
+
+  it('says a plugin’s tool by its own name, and which groups tools_find loaded', () => {
+    const tool = (name: string, input: unknown = {}, status: 'complete' | 'error' | 'running' = 'complete'): MessagePart =>
+      ({ type: 'tool', id: `${name}-${status}`, name, input: JSON.stringify(input), status, output: '' });
+    expect(stepLabel([tool('subagent')])).toBe('Used subagent');
+    expect(stepLabel([tool('todo', {}, 'running')])).toBe('Use todo');
+    expect(stepLabel([tool('subagent'), tool('subagent', {}, 'error'), tool('subagent')])).toBe('Used subagent 3 times');
+    expect(stepLabel([tool('tools_find', { groups: ['plugin:pi-subagents', 'plugin:juicesharp-rpiv-todo'] })])).toBe('Loaded pi-subagents, juicesharp-rpiv-todo tools');
+    expect(stepLabel([tool('tools_find', { groups: ['browser'] }, 'running')])).toBe('Load browser tools');
+    expect(stepLabel([tool('tools_find', { need: 'edit files' })])).toBe('Looked for tools');
   });
 
   it('never shows a tool identifier, whatever the tool is', () => {

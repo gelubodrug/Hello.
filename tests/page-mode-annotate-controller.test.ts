@@ -23,6 +23,7 @@ class Contents extends EventEmitter {
   fiber: unknown = { component: 'Card › Button', file: 'src/Button.tsx:3' };
   isDestroyed = () => this.destroyed;
   isLoading = () => false;
+  isLoadingMainFrame = () => false;
   getURL = () => this.url;
   mainFrame = { executeJavaScript: vi.fn(async (_code: string) => this.fiber) };
   capturePage = vi.fn(async () => image);

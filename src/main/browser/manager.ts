@@ -10,6 +10,8 @@ import type {
   BrowserTab,
   BrowserLifecycleEvent,
   BrowserContent,
+  TabMark,
+  TabMarks,
   ViewBounds,
 } from "../../shared/types";
 import {
@@ -18,6 +20,7 @@ import {
   checkAgentOwnership,
   isAgentControl,
   safeBounds,
+  searchInstead,
 } from "./policy";
 import {
   AGENT_INPUT_WORLD_ID,
@@ -35,15 +38,18 @@ import {
   type ScreenshotRequest,
 } from "./agent-input";
 import {
-  ERASE_SCRIPT, FRAME_BOXES_SCRIPT, READ_HEADER, hitScript, locateScript, matchesUrl, scanScript, typeScript, waitScript,
-  type ElementTarget, type ScanResult, type WaitCondition,
+  ERASE_SCRIPT, FRAME_BOXES_SCRIPT, READ_HEADER, boxScript, hitScript, locateScript, matchesUrl, pageScriptError, scanScript, typeScript, waitScript,
+  type ElementBox, type ElementTarget, type ScanResult, type WaitCondition,
 } from "./agent-target";
+import { PAGE_MODE_PROBE, PAGE_MODE_WORLD_ID, probeCall } from "./page-mode-probe";
 
 interface PendingOperation {
   cancel(error: Error): void;
   mutation: boolean;
   navigation: boolean;
 }
+/** A page by its address without #: a #section of it is the same page. */
+const pageOf = (url: string): string => url.split("#")[0];
 interface RecordTab {
   tab: BrowserTab;
   partition?: string;
@@ -69,6 +75,12 @@ interface RecordTab {
   navigation: number;
   /** The frames the latest read numbered, each with its range of refs and where it sits on the page. */
   refs?: FrameRefs[];
+  /** The page whose kept marks are drawn once its document is ready (by address without #). */
+  pendingMarks?: string;
+  /** The page whose marks are on screen now. */
+  shownMarks?: string;
+  /** Which set of marks the page is being watched for; a newer set ends the older watch. */
+  marksWatch?: number;
 }
 interface FrameRefs {
   frame: WebFrameMain;
@@ -359,7 +371,10 @@ export class BrowserManager {
             // 22.09: "să se rețină setările paginilor AI permission între
             // sesiuni"). A generated document is the exception: its Full is
             // granted again when it is served again, never restored blind.
-            control: !saved.source && isAgentControl(saved.control) ? saved.control : "off",
+            // So is a tab the model opened: its Full was for the work of that
+            // session, and a restart does not hand it over again.
+            control: !saved.source && !saved.agentGranted && isAgentControl(saved.control) ? saved.control : "off",
+            agentGranted: undefined,
             loading: false,
             canGoBack: false,
             canGoForward: false,
@@ -502,8 +517,11 @@ export class BrowserManager {
     const awaited = waiting.length > 0;
     record.waiting = [];
     for (const resolve of [...waiting]) resolve(contents);
-    if (!awaited && record.tab.url !== "about:blank")
+    if (!awaited && record.tab.url !== "about:blank") {
+      // A page with marks kept for it, loaded again: they come back with it.
+      if (this.marksOf(record, record.tab.url)) record.pendingMarks = pageOf(record.tab.url);
       void contents.loadURL(record.tab.url).catch(() => {});
+    }
   }
   /** The page for this tab, as it is right now. */
   private contentsFor(record: RecordTab): WebContents {
@@ -684,7 +702,7 @@ export class BrowserManager {
       try {
         start().then(
           (result) => finish(undefined, result),
-          (error) => finish(error),
+          (error) => finish(pageScriptError(error)),
         );
       } catch (error) {
         finish(error);
@@ -717,10 +735,11 @@ export class BrowserManager {
       // given up for that; a blank popup has nothing to show and is refused.
       if (!/^https?:/i.test(url)) return { action: "deny" };
       const popup = this.newRecord(record.tab.conversationId, url, record.tab.id, record.partition);
-      // It is the opener's page carrying on in another tab, so the human's
-      // grant on that page goes with it: a "View" the agent clicked opens
-      // something the agent can read.
+      // It is the opener's page carrying on in another tab, so the grant on
+      // that page goes with it: a "View" the agent clicked opens something the
+      // agent can read. A grant the model's opening gave stays the model's.
       popup.tab.control = record.tab.control;
+      if (record.tab.agentGranted) popup.tab.agentGranted = true;
       this.publish(popup);
       this.options.lifecycle?.({
         type: "opened",
@@ -798,6 +817,35 @@ export class BrowserManager {
         this.publish(record);
       },
     );
+    // Marks belong to the page that made them (user, 30.09: "tie them to the
+    // link that generated them, until reset"). The page left keeps its own for
+    // when the tab comes back to it — Back, Forward, the address again, a
+    // restart — and the page arriving shows its own once its document is ready.
+    contents.on("did-start-navigation", (details) => {
+      if (record.contents !== contents || !details.isMainFrame || details.isSameDocument) return;
+      record.marksWatch = (record.marksWatch ?? 0) + 1;
+      record.shownMarks = undefined;
+      record.pendingMarks = this.marksOf(record, details.url) ? pageOf(details.url) : undefined;
+    });
+    // An address of its own is another page, even without a load (a search
+    // result in a page that never reloads): the marks on screen give way to
+    // that address's own. A #section of the same page changes nothing.
+    (contents.on as (event: string, fn: (...a: unknown[]) => void) => void)("did-navigate-in-page", (_event, url, isMainFrame) => {
+      if (record.contents !== contents || !isMainFrame || typeof url !== "string") return;
+      if (record.shownMarks === pageOf(url)) return;
+      record.marksWatch = (record.marksWatch ?? 0) + 1;
+      if (record.shownMarks) {
+        record.shownMarks = undefined;
+        void contents.executeJavaScriptInIsolatedWorld(PAGE_MODE_WORLD_ID, [{ code: `${PAGE_MODE_PROBE};${probeCall("clearHints")}` }]).catch(() => {});
+      }
+      if (this.marksOf(record, url)) void this.drawMarks(record, contents, pageOf(url));
+    });
+    contents.on("dom-ready", () => {
+      if (record.contents !== contents || !record.pendingMarks) return;
+      const page = record.pendingMarks;
+      record.pendingMarks = undefined;
+      void this.drawMarks(record, contents, page);
+    });
     contents.on("did-stop-loading", refresh);
     contents.on("did-navigate", refresh);
     contents.on("did-navigate-in-page", refresh);
@@ -806,6 +854,11 @@ export class BrowserManager {
       "did-fail-load",
       (_event, code, description, failedURL, isMainFrame) => {
         if (code === -3 || !isMainFrame || record.contents !== contents) return;
+        record.pendingMarks = undefined;
+        // A load navigate() started reports its own failure once it knows what
+        // the failure means — a typed name no site answers to is a search — so
+        // the pane never flashes an error on the way to the results.
+        if ([...record.pending].some(operation => operation.navigation)) return;
         try { if (failedURL) record.tab.url = browserURL(failedURL); } catch { /* Keep the last allowed address. */ }
         record.tab.error = description || "The page could not be loaded.";
         record.tab.loading = false;
@@ -828,12 +881,18 @@ export class BrowserManager {
     this.publish(record);
     return { ...record.tab };
   }
-  /** Open a requested result for the human. This grants no page inspection or DOM access. */
+  /**
+   * Open a page for the chat. With `grant`, the tab starts at Full: the model
+   * does not open a page just to have it open, it opens it to read it and do
+   * something in it (user, 29.09: "dacă modelul lansează browserul, fă-l AI
+   * mode Full … are ceva de făcut, read-write"). A tab the human opened keeps
+   * the control the human set.
+   */
   async agentOpen(
     conversationId: string,
     url: string,
     signal?: AbortSignal,
-    options: { sessionOnly?: boolean; isolated?: boolean; source?: string } = {},
+    options: { sessionOnly?: boolean; isolated?: boolean; source?: string; grant?: boolean } = {},
   ): Promise<BrowserTab> {
     signal?.throwIfAborted();
     const destination = browserURL(url);
@@ -842,6 +901,7 @@ export class BrowserManager {
       options.isolated ? `hello-preview-${randomUUID()}` : undefined);
     if (options.sessionOnly) record.tab.sessionOnly = true;
     if (options.source) { record.tab.source = options.source; record.servedUrl = url; }
+    if (options.grant) { record.tab.control = "full"; record.tab.agentGranted = true; }
     this.publish(record);
     this.options.lifecycle?.({ type: 'opened', tab: { ...record.tab }, foreground: true, userRequested: true });
     await this.navigate(record.tab.id, destination, signal, conversationId);
@@ -891,10 +951,18 @@ export class BrowserManager {
     // their file, and reading it is a grant only they can give.
     if (record.tab.source?.startsWith("artifact:")) record.tab.control = "full";
   }
-  /** Leaving its own document ends the grant that came with it. */
+  /**
+   * Leaving its own document ends the handle it is saved by, and the grant a
+   * generated document came with — even a move within it, which the page
+   * itself can make. A preview the model opened to work in is different: an
+   * anchor keeps its handle, and it keeps its Full as it navigates, like any
+   * tab the model opened (29.09).
+   */
   private endOwnWork(record: RecordTab, url: string): void {
-    if (!record.tab.source || url === record.servedUrl) return;
-    record.tab.control = "off";
+    if (!record.tab.source) return;
+    const bare = (value: string | undefined) => value?.split("#")[0];
+    if (record.tab.agentGranted ? bare(url) === bare(record.servedUrl) : url === record.servedUrl) return;
+    if (!record.tab.agentGranted) record.tab.control = "off";
     record.tab.source = undefined;
     record.servedUrl = undefined;
     record.artifact = false;
@@ -957,6 +1025,10 @@ export class BrowserManager {
       if (!this.records.has(id) || record.navigation !== navigation)
         throw error;
       if (String(error).includes("ERR_ABORTED")) return;
+      // A name the person typed that no site answers to is a search for it.
+      // The model is told the address failed: that address is what it asked for.
+      const search = !agentConversationId && String(error).includes("ERR_NAME_NOT_RESOLVED") ? searchInstead(input) : null;
+      if (search) return this.searchFor(record, contents, url, search, signal);
       record.tab.loading = false;
       record.tab.progress = null;
       record.tab.error = `Could not load ${new URL(url === "about:blank" ? previous : url).hostname || "this page"}.`;
@@ -964,11 +1036,28 @@ export class BrowserManager {
       throw new Error(record.tab.error);
     }
   }
+  /**
+   * The search a typed name that named no site becomes. The name was never a
+   * page, so it leaves none behind: Back from the results goes where the
+   * person was, rather than to the name failing again.
+   */
+  private async searchFor(record: RecordTab, contents: WebContents, failed: string, search: string, signal?: AbortSignal): Promise<void> {
+    await this.navigate(record.tab.id, search, signal);
+    if (record.contents !== contents || contents.isDestroyed()) return;
+    const history = contents.navigationHistory;
+    const index = history.getActiveIndex() - 1;
+    if (index < 0 || pageOf(history.getEntryAtIndex(index)?.url ?? "") !== pageOf(failed)) return;
+    history.removeEntryAtIndex(index);
+    record.tab.canGoBack = history.canGoBack();
+    this.publish(record);
+  }
   action(id: string, action: string): void | Promise<void> {
     const record = this.record(id);
     // A cancelled agent action or a crashed page can leave a recoverable tab
     // with no page at all. Reload then means: ask for a page and navigate once,
     // rather than reloading a destroyed frame or starting two competing loads.
+    // A reload the person asks for is that page's reset: its marks go.
+    if (action === "reload" && this.marksOf(record, record.tab.url)) this.setMarks(record, record.tab.url, []);
     if (action === "reload" && (!record.contents || record.contents.isDestroyed() || record.tab.error)) {
       if (record.contents?.isDestroyed()) record.contents = undefined;
       return this.navigate(id, record.tab.url);
@@ -1035,6 +1124,8 @@ export class BrowserManager {
     if (!isAgentControl(mode)) throw new Error("Unknown Agent control mode.");
     const record = this.record(id);
     record.tab.control = mode;
+    // From here on the control is the human's choice, and a restart keeps it.
+    record.tab.agentGranted = undefined;
     if (mode !== "full")
       this.cancelPending(
         record,
@@ -1146,6 +1237,127 @@ export class BrowserManager {
     if (owner.frame.isDestroyed()) throw new Error(`Ref ${target.ref} was in a frame that is gone now. Read the page again.`);
     return { frame: owner.frame, offset: owner.offset };
   }
+  /**
+   * Marks on a page for the person (user, 30.09: "a pointer for agents"):
+   * after finding something, the agent shows where to look — Annotate's pins
+   * and notes, each with an outline around what it means, on a layer of their
+   * own in the page (page-mode-probe.ts, S.hints). They read the page and draw
+   * over it, so Read is enough; only at Full is the first one scrolled into
+   * view. A new set replaces the old; an empty list clears them.
+   */
+  async agentMark(
+    conversationId: string,
+    id: string,
+    marks: Array<{ target: ElementTarget; note: string }>,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const record = this.record(id);
+    const contents = await this.agentPage(record, conversationId, false, signal);
+    const draw = (call: string) => this.operation(record,
+      () => contents.executeJavaScriptInIsolatedWorld(PAGE_MODE_WORLD_ID, [{ code: `${PAGE_MODE_PROBE};${call}` }]), { signal });
+    if (!marks.length) {
+      await draw(probeCall("clearHints"));
+      this.keepMarks(record, contents, []);
+      return "Cleared your marks on this page.";
+    }
+    const reveal = record.tab.control === "full";
+    const placed: Array<ElementBox & { n: number; note: string }> = [];
+    for (const [index, mark] of marks.slice(0, 6).entries()) {
+      const { frame, offset } = this.frameOf(record, mark.target, contents);
+      const box = await this.operation(record,
+        () => frame.executeJavaScript(boxScript(mark.target, reveal && index === 0)), { signal }) as ElementBox;
+      if (box.moving)
+        throw new Error(`#${index + 1} ${box.what} moves by itself — it is in a strip that scrolls or animates on its own, like a ticker — so a mark cannot stay on it. Mark the same thing where it stands still (its card, row or heading, often further down the page), naming that element by its words.`);
+      // A frame's path means nothing to the top page: there the mark keeps its place.
+      const { path, moving: _moving, ...measured } = box;
+      placed.push({ ...measured, left: box.left + offset.x, top: box.top + offset.y, n: index + 1, note: mark.note,
+        ...(path && frame === contents.mainFrame ? { path } : {}) });
+    }
+    // Off chosen while they were measured: nothing is drawn.
+    checkAgentAccess(this.record(id).tab, conversationId, false);
+    const drawn = await draw(probeCall("hints", [placed.map(({ n, left, top, width, height, note, path }) => ({ n, left, top, width, height, note, ...(path ? { path } : {}) }))]));
+    this.keepMarks(record, contents, drawn);
+    const away = placed.filter(mark => !mark.inView).map(mark => `#${mark.n}`);
+    return [
+      `Marked ${placed.length === 1 ? "one place" : `${placed.length} places`} for the person on ${JSON.stringify(record.tab.title || record.tab.url)}:`,
+      ...placed.map(mark => `#${mark.n} ${mark.what} — ${mark.note}`),
+      away.length ? `${away.join(", ")} ${away.length === 1 ? "is" : "are"} out of view: say so, the person has to scroll to ${away.length === 1 ? "it" : "them"}.` : "",
+      "In your reply, say what each number is. The marks stay until the page changes or the person puts one away; marking again replaces them, and an empty list clears them.",
+    ].filter(Boolean).join("\n");
+  }
+  /** The marks this tab keeps for one page. */
+  private marksOf(record: RecordTab, url: string): TabMarks | undefined {
+    return record.tab.marks?.find(page => pageOf(page.url) === pageOf(url));
+  }
+  /** One page's marks, replaced; none drops the page. The newest last, ten pages at most. */
+  private setMarks(record: RecordTab, url: string, marks: TabMark[]): void {
+    const others = (record.tab.marks ?? []).filter(page => pageOf(page.url) !== pageOf(url));
+    const pages = marks.length ? [...others, { url: pageOf(url), marks }].slice(-10) : others;
+    record.tab.marks = pages.length ? pages : undefined;
+    this.publish(record);
+  }
+  /**
+   * What is on the page now is what the tab keeps for it (user, 30.09): saved
+   * with the tab, and watched while it is shown, so a mark the person puts
+   * away — or all of them, double-clicking the bubble — stays away.
+   */
+  private keepMarks(record: RecordTab, contents: WebContents, drawn: unknown, page = pageOf(record.tab.url)): void {
+    const marks = Array.isArray(drawn) ? drawn.filter((mark): mark is TabMark => Boolean(mark) && typeof mark === "object"
+      && typeof (mark as TabMark).note === "string" && ["n", "x", "y", "width", "height"].every(key => Number.isFinite((mark as unknown as Record<string, unknown>)[key]))
+      && ((mark as TabMark).path === undefined || typeof (mark as TabMark).path === "string")) : [];
+    const watch = (record.marksWatch ?? 0) + 1;
+    record.marksWatch = watch;
+    record.shownMarks = marks.length ? page : undefined;
+    this.setMarks(record, page, marks);
+    if (marks.length) void this.watchMarks(record, contents, watch, page);
+  }
+  private async watchMarks(record: RecordTab, contents: WebContents, watch: number, page: string): Promise<void> {
+    while (!this.disposed && record.marksWatch === watch && record.contents === contents && !contents.isDestroyed() && this.marksOf(record, page)) {
+      let kept: unknown;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        // The page's own answer, or none when it is gone mid-wait.
+        kept = await Promise.race([
+          contents.executeJavaScriptInIsolatedWorld(PAGE_MODE_WORLD_ID, [{ code: `${PAGE_MODE_PROBE};${probeCall("hintsWait", [20_000])}` }]),
+          new Promise<undefined>(resolve => {
+            const wait = setTimeout(() => resolve(undefined), 25_000);
+            wait.unref?.();
+            timer = wait;
+          }),
+        ]);
+      } catch {
+        return;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      const saved = this.marksOf(record, page);
+      if (record.marksWatch !== watch || !saved) return;
+      if (!Array.isArray(kept)) continue;
+      // What the person kept, where each now is on the page: its element may have moved.
+      const now = new Map(kept.filter((item): item is Pick<TabMark, "n" | "x" | "y" | "width" | "height"> => Boolean(item) && typeof item === "object"
+        && ["n", "x", "y", "width", "height"].every(key => Number.isFinite((item as Record<string, unknown>)[key]))).map(item => [item.n, item]));
+      const left = saved.marks.filter(mark => now.has(mark.n))
+        .map(mark => ({ ...mark, x: now.get(mark.n)!.x, y: now.get(mark.n)!.y, width: now.get(mark.n)!.width, height: now.get(mark.n)!.height }));
+      if (JSON.stringify(left) === JSON.stringify(saved.marks)) continue;
+      if (!left.length) record.shownMarks = undefined;
+      this.setMarks(record, page, left);
+    }
+  }
+  /** A page's kept marks, drawn again on their elements, with their reveal. */
+  private async drawMarks(record: RecordTab, contents: WebContents, page: string): Promise<void> {
+    const saved = this.marksOf(record, page);
+    if (!saved) return;
+    try {
+      const drawn = await contents.executeJavaScriptInIsolatedWorld(PAGE_MODE_WORLD_ID, [{
+        code: `${PAGE_MODE_PROBE};${probeCall("hints", [saved.marks.map(({ n, note, x, y, width, height, path }) => ({ n, note, x, y, width, height, ...(path ? { path } : {}) }))])}`,
+      }]);
+      if (record.contents !== contents || this.marksOf(record, page) !== saved) return;
+      // Kept under the address the page has now: a redirect may have changed it.
+      const now = pageOf(contents.getURL() || page);
+      if (now !== page) this.setMarks(record, page, []);
+      this.keepMarks(record, contents, drawn, now);
+    } catch { /* the page went while they were drawn; the next visit tries again */ }
+  }
   async agentNavigate(
     conversationId: string,
     id: string,
@@ -1180,7 +1392,9 @@ export class BrowserManager {
     const contents = await this.whenAttached(record, signal);
     // WebContents.executeJavaScript queues until load completion. Never enqueue a
     // mutation that could run after Off/Read was selected during a slow load.
-    if (contents.isLoading())
+    // The page's own load, not its frames': ads that keep loading frames kept
+    // eBay "loading" for good, and every click and scroll was refused (user, 30.09).
+    if (contents.isLoadingMainFrame())
       throw new Error(
         "Wait for this page to finish loading before controlling it.",
       );
@@ -1270,7 +1484,7 @@ export class BrowserManager {
   private async agentPage(record: RecordTab, conversationId: string, mutation: boolean, signal?: AbortSignal): Promise<WebContents> {
     checkAgentAccess(record.tab, conversationId, mutation);
     const contents = await this.whenAttached(record, signal);
-    if (contents.isLoading())
+    if (contents.isLoadingMainFrame())
       throw new Error("Wait for this page to finish loading before using it.");
     checkAgentAccess(this.record(record.tab.id).tab, conversationId, mutation);
     return contents;
@@ -1410,8 +1624,9 @@ export class BrowserManager {
       const tab = this.record(id).tab;
       let holds = false;
       if (condition.url !== undefined) holds = matchesUrl(tab.url, condition.url);
-      else if (!inspects) holds = !tab.loading && !contents.isLoading();
-      else if (!contents.isLoading()) {
+      // The page's own load: frames an ad keeps loading never finish.
+      else if (!inspects) holds = !contents.isLoadingMainFrame();
+      else if (!contents.isLoadingMainFrame()) {
         try {
           holds = (await this.operation(record, () => contents.mainFrame.executeJavaScript(waitScript(condition)), { signal })) === true;
         } catch { holds = false; } // Mid-navigation: not yet.

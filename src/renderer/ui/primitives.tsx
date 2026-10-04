@@ -284,6 +284,7 @@ export function MenuButton({
   searchPlaceholder,
   menuClassName = "",
   heading,
+  searchPill,
 }: {
   label: string;
   children: ReactNode;
@@ -295,12 +296,16 @@ export function MenuButton({
   searchPlaceholder?: string;
   menuClassName?: string;
   heading?: string;
+  /** A filter switched on at every opening, in the search field's right end;
+   *  switched off, everything is listed again. */
+  searchPill?: { label: string; title: string; keeps(item: MenuItem): boolean };
 }) {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<MenuItem | null>(null);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState<string | null>(null);
+  const [pill, setPill] = useState(true);
   const layer = useContext(MenuLayer);
   const trigger = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
@@ -320,13 +325,16 @@ export function MenuButton({
         ...(page.children ?? []),
       ]
     : items;
+  const offered = searchPill && pill && !page ? unfiltered.filter(item => searchPill.keeps(item)) : unfiltered;
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   // The kinds present, in the order they first appear, so the pills follow the
   // list rather than an alphabet nobody asked for.
-  const groups = [...new Set(unfiltered.flatMap(item => item.group ?? []))];
-  const matched = unfiltered.filter(item =>
+  const groups = [...new Set(offered.flatMap(item => item.group ?? []))];
+  // A kind the search pill has just emptied is no longer a choice.
+  const kind = group && groups.includes(group) ? group : null;
+  const matched = offered.filter(item =>
     (!terms.length || terms.every(term => item.label.toLocaleLowerCase().includes(term))) &&
-    (!group || !item.group || item.group === group));
+    (!kind || !item.group || item.group === kind));
   // A heading with nothing under it is not a heading.
   const visible = searchPlaceholder
     ? matched.filter((item, index) => {
@@ -408,6 +416,7 @@ export function MenuButton({
             setActive(0);
             setQuery("");
             setGroup(null);
+            setPill(true);
             onOpen?.();
           }
           setOpen((value) => !value);
@@ -472,9 +481,17 @@ export function MenuButton({
             {heading && <div className="menu-heading">{heading}</div>}
             {searchPlaceholder && <div className="menu-search">
               <Search size={14} aria-hidden="true" />
-              <input aria-label={searchPlaceholder} placeholder={searchPlaceholder} value={query}
-                autoComplete="off" spellCheck={false}
-                onChange={event => { setQuery(event.target.value); setActive(0); }} />
+              <span className="menu-search-field">
+                <input aria-label={searchPlaceholder} placeholder={searchPlaceholder} value={query}
+                  autoComplete="off" spellCheck={false}
+                  onChange={event => { setQuery(event.target.value); setActive(0); }} />
+                {searchPill && !page && (
+                  <button type="button" className="menu-search-pill" aria-pressed={pill} title={searchPill.title}
+                    onClick={() => { setPill(value => !value); setActive(0); }}>
+                    {searchPill.label}
+                  </button>
+                )}
+              </span>
             </div>}
             {searchPlaceholder && groups.length > 1 && (
               <div className="menu-filters" role="group" aria-label="Kinds">
@@ -484,20 +501,20 @@ export function MenuButton({
                   className="menu-filter menu-filter-all"
                   aria-label="All"
                   title="All"
-                  aria-pressed={group === null}
+                  aria-pressed={kind === null}
                   onClick={() => { setGroup(null); setActive(0); }}
                 >
                   <Check size={12} aria-hidden />
                 </button>
-                {groups.map(kind => (
+                {groups.map(name => (
                   <button
-                    key={kind}
+                    key={name}
                     type="button"
                     className="menu-filter"
-                    aria-pressed={group === kind}
-                    onClick={() => { setGroup(kind); setActive(0); }}
+                    aria-pressed={kind === name}
+                    onClick={() => { setGroup(name); setActive(0); }}
                   >
-                    <Truncated>{kind}</Truncated>
+                    <Truncated>{name}</Truncated>
                   </button>
                 ))}
               </div>

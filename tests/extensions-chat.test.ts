@@ -13,7 +13,15 @@ const harness = vi.hoisted(() => {
     readonly listeners = new Set<(event: PiRpcEvent) => void>();
     isRunning = true;
     constructor(readonly options: PiRpcProcessOptions) { instances.push(this); }
-    start = vi.fn(async () => {});
+    start = vi.fn(async () => {
+      const failure = state.nextStartError;
+      state.nextStartError = undefined;
+      if (!failure) return;
+      // The real transport reports the exit first, then rejects start().
+      this.isRunning = false;
+      this.options.onExit?.({ code: 1, signal: null, expected: false, error: failure.message, stderr: '' });
+      throw failure;
+    });
     prompt = vi.fn(async () => ({ type: 'response', id: 'fixture', command: 'prompt', success: true }));
     request = vi.fn(async () => ({ type: 'response', id: 'fixture', command: 'noop', success: true }));
     abort = vi.fn(async () => {});
@@ -35,7 +43,8 @@ const harness = vi.hoisted(() => {
   }
   const instances: FakePi[] = [];
   const bridges: Array<{ options: PiToolBridgeOptions }> = [];
-  return { FakePi, instances, bridges };
+  const state: { nextStartError?: Error } = {};
+  return { FakePi, instances, bridges, state };
 });
 vi.mock('../src/main/chat/pi-rpc', () => ({ PiRpcProcess: harness.FakePi }));
 vi.mock('../src/main/chat/pi-tool-bridge', () => ({
@@ -134,6 +143,30 @@ describe('activated resources reach the Pi launch', () => {
     expect(prompt).toContain('skill_load');
   });
 
+  it('expands /skill:<name> itself, by the library name, and leaves the transcript as typed', async () => {
+    const lastPrompt = () => String((harness.instances.at(-1)!.prompt.mock.calls.at(-1) as unknown[])[0]);
+    const folder = path.join(source, 'folder-name');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(path.join(folder, 'SKILL.md'), '---\nname: PDF Tools\ndescription: Fills PDF forms.\n---\n\nStep one: read the form.\n');
+    const imported = await library.importPath('skill', folder);
+    store.setResourceActive(conversationId, imported.id, true);
+    await send('/skill:pdf tools fill this form');
+    const sent = lastPrompt();
+    expect(sent).toMatch(/^<skill name="PDF Tools">/);
+    expect(sent).toContain('Step one: read the form.');
+    expect(sent).not.toContain('description: Fills PDF forms.');
+    expect(sent.endsWith('</skill>\n\nfill this form')).toBe(true);
+    expect(store.listMessages(conversationId).find(message => message.role === 'user')?.content).toBe('/skill:pdf tools fill this form');
+    // A name no active skill has is left to Pi, as typed. (This fixture ends
+    // the reply as failed, so the next message is a wrapped follow-up.)
+    await send('/skill:unknown hi');
+    const wrapped = lastPrompt();
+    expect(wrapped).toMatch(/Current user request:\n\n\/skill:unknown hi$/);
+    // Wrapped in Hello's words, a known skill still arrives expanded.
+    await send('/skill:PDF Tools again');
+    expect(lastPrompt()).toMatch(/Current user request:\n\n<skill name="PDF Tools">[\s\S]*<\/skill>\n\nagain$/);
+  });
+
   it('offers no skill tool when nothing is active', async () => {
     await send();
     const tools = await harness.bridges.at(-1)!.options.getTools();
@@ -215,3 +248,51 @@ describe('activated resources reach the Pi launch', () => {
     expect(harness.instances).toHaveLength(0);
   });
 });
+
+describe('an activated extension that fails', () => {
+  async function activePlugin() {
+    const folder = path.join(source, 'memory');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(path.join(folder, 'package.json'), JSON.stringify({ name: 'memory-plugin', version: '1.0.0' }));
+    writeFileSync(path.join(folder, 'index.ts'), 'export default function () {}\n');
+    const imported = await library.importPath('plugin', folder);
+    store.setResourceActive(conversationId, imported.id, true);
+    return path.join(resourceDirectory(directory, { id: imported.id, kind: 'plugin' }), 'index.ts');
+  }
+
+  it('is named, with Pi’s reason, when Pi cannot load it', async () => {
+    const entry = await activePlugin();
+    harness.state.nextStartError = Object.assign(new Error(`Pi could not load the extension ${entry}: Cannot find module 'x'`), {
+      name: 'PiExtensionLoadError', extensionPath: entry, reason: "Cannot find module 'x'",
+    });
+    await service.send(conversationId, 'salut').catch(() => {});
+    await vi.waitFor(() => expect(store.listMessages(conversationId).at(-1)?.status).toBe('error'));
+    expect(store.listMessages(conversationId).at(-1)?.error).toBe(
+      "The extension “memory-plugin” could not load, so this chat could not start: Cannot find module 'x'. Turn it off for this chat from the composer’s Extensions menu, or fix it and re-import it in Settings › Extensions.");
+  });
+
+  it('does not end the reply when its handler throws, and the warning says which one it was', async () => {
+    const entry = await activePlugin();
+    const pending = service.send(conversationId, 'salut');
+    await vi.waitFor(() => expect(harness.instances.at(-1)?.prompt).toHaveBeenCalled());
+    const pi = harness.instances.at(-1)!;
+    const event = { type: 'extension_error', extensionPath: entry, event: 'context', error: 'recall failed' } as unknown as PiRpcEvent;
+    pi.emit(event);
+    expect((event as unknown as { error: string }).error).toBe('memory-plugin: recall failed');
+    pi.emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } } as unknown as PiRpcEvent);
+    pi.emit({ type: 'agent_settled' } as PiRpcEvent);
+    await pending.catch(() => {});
+    expect(store.listMessages(conversationId).at(-1)).toMatchObject({ status: 'complete', content: 'done' });
+  });
+
+  it('still ends the reply when Hello’s own tool extension fails', async () => {
+    const pending = service.send(conversationId, 'salut');
+    await vi.waitFor(() => expect(harness.instances.at(-1)?.prompt).toHaveBeenCalled());
+    const pi = harness.instances.at(-1)!;
+    const own = [...(pi.options.args ?? [])].find(value => /pi-extension\.js$/.test(value))!;
+    pi.emit({ type: 'extension_error', extensionPath: own, event: 'tool_call', error: 'bridge gone' } as unknown as PiRpcEvent);
+    await pending.catch(() => {});
+    await vi.waitFor(() => expect(store.listMessages(conversationId).at(-1)?.status).toBe('error'));
+  });
+});
+

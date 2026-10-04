@@ -93,7 +93,8 @@ export class PageModeController {
     if (!(this.options.kinds ?? ["design"]).includes(kind)) throw new Error(`${LABELS[kind]} is not available yet.`);
     const { tab, contents } = this.readable(tabId, LABELS[kind]);
     if (tab.url === "about:blank" || tab.error) throw new Error("Open a page first.");
-    if (tab.loading || contents.isLoading()) throw new Error("Wait for this page to finish loading.");
+    // The page's own load: ads that keep loading frames never finish (user, 30.09).
+    if (contents.isLoadingMainFrame()) throw new Error("Wait for this page to finish loading.");
     // One mode per tab: a new arming replaces the old one without an exit,
     // because the window asked for the switch and already knows.
     const previous = this.arms.get(tabId);

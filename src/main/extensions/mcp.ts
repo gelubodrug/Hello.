@@ -19,11 +19,26 @@ const MAX_TOOLS = 200;
 const MAX_RESULT_CHARS = 60_000;
 /** A server connected only by a Settings probe is stopped once it goes idle. */
 const IDLE_TIMEOUT_MS = 5 * 60_000;
-export interface McpOptions { connectTimeoutMs?: number; callTimeoutMs?: number; maxMessageBytes?: number; }
+export interface McpOptions {
+  connectTimeoutMs?: number; callTimeoutMs?: number; maxMessageBytes?: number;
+  /** A server Hello itself provides, reached in-process instead of over stdio (the DSH surface's tools). */
+  links?: (row: ResourceRow) => McpLink | undefined;
+}
 
 interface JsonRpcResponse { jsonrpc: '2.0'; id?: number | string | null; result?: unknown; error?: { code?: number; message?: string }; method?: string; }
 
 export interface McpTool { name: string; description: string; schema: Record<string, unknown>; }
+
+/** One connected server as the manager uses it, whatever carries its messages. */
+export interface McpLink {
+  readonly running: boolean;
+  toolsDirty: boolean;
+  tools: McpTool[];
+  start(): Promise<void>;
+  refreshTools(signal?: AbortSignal): Promise<McpTool[]>;
+  call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string>;
+  stop(reason?: Error): Promise<void>;
+}
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -60,7 +75,7 @@ export function resultText(payload: unknown): string {
     : flagged;
 }
 
-class McpConnection {
+class McpConnection implements McpLink {
   private child?: ChildProcessWithoutNullStreams;
   /** Configured values, longest first, so a message never carries a secret. */
   private readonly secrets: string[];
@@ -282,8 +297,8 @@ export interface McpToolHandle {
 
 /** One process per configured server, shared by the conversations using it. */
 export class McpManager {
-  private readonly connections = new Map<string, McpConnection>();
-  private readonly starting = new Map<string, { connection: McpConnection; promise: Promise<McpConnection> }>();
+  private readonly connections = new Map<string, McpLink>();
+  private readonly starting = new Map<string, { connection: McpLink; promise: Promise<McpLink> }>();
   private disposed = false;
   private readonly errors = new Map<string, string>();
   /** Bumped on disconnect so an in-flight start cannot resurrect a server. */
@@ -293,7 +308,7 @@ export class McpManager {
 
   constructor(private readonly store: DataStore, private readonly options: McpOptions = {}) {}
 
-  private async connect(row: ResourceRow): Promise<McpConnection> {
+  private async connect(row: ResourceRow): Promise<McpLink> {
     if (this.disposed) throw new Error('MCP manager is closed.');
     const existing = this.connections.get(row.id);
     if (existing?.running) return existing;
@@ -303,7 +318,7 @@ export class McpManager {
     const pending = this.starting.get(row.id);
     if (pending) return pending.promise;
     const generation = (this.generations.get(row.id) ?? 0);
-    const connection = new McpConnection(row, this.store.resourceSecret(row.id), this.options);
+    const connection = this.options.links?.(row) ?? new McpConnection(row, this.store.resourceSecret(row.id), this.options);
     const attempt = (async () => {
       try {
         await connection.start();
@@ -332,7 +347,7 @@ export class McpManager {
     return attempt;
   }
 
-  private async connectFor(row: ResourceRow, conversationId?: string, signal?: AbortSignal): Promise<McpConnection> {
+  private async connectFor(row: ResourceRow, conversationId?: string, signal?: AbortSignal): Promise<McpLink> {
     signal?.throwIfAborted();
     if (!signal) return this.connect(row);
     let abort!: () => void;
@@ -354,7 +369,7 @@ export class McpManager {
     for (const row of rows) {
       signal?.throwIfAborted();
       if (conversationId && !this.store.activeResourceIds(conversationId).includes(row.id)) continue;
-      let connection: McpConnection;
+      let connection: McpLink;
       try {
         connection = await this.connectFor(row, conversationId, signal);
         if (connection.toolsDirty) await connection.refreshTools(signal);

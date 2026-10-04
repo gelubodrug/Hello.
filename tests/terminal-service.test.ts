@@ -89,6 +89,7 @@ function fixture(withNotebookContext = false) {
   const notebooks = {
     runbook: join(root, "runbook.md"),
     tasks: join(root, "tasks.md"),
+    plan: join(root, "plan.md"),
   };
   writeFileSync(notebooks.runbook, "");
   writeFileSync(notebooks.tasks, "");
@@ -230,13 +231,17 @@ describe("main terminal service", () => {
         workerId,
         conversationId: "chat",
       });
+      // Claude Code starts a conversation with an id of Hello's, so a chat
+      // tab can continue it after a restart (user, 30.09); Codex cannot.
+      if (workerId === "claude") expect(session.session).toMatch(/^[\da-f]{8}-[\da-f]{4}-/);
+      else expect(session.session).toBeUndefined();
       expect(f.spawn).toHaveBeenCalledWith(
         `/test-bin/${workerId}`,
         // A pane opened from Hello starts in that client's never-ask mode
         // (user, 20.09); nothing else is added to its argv.
-        [workerId === "claude"
-          ? "--dangerously-skip-permissions"
-          : "--dangerously-bypass-approvals-and-sandbox"],
+        workerId === "claude"
+          ? ["--session-id", session.session, "--dangerously-skip-permissions"]
+          : ["--dangerously-bypass-approvals-and-sandbox"],
         expect.objectContaining({
           cwd: f.folder,
           env: expect.objectContaining({
@@ -248,6 +253,20 @@ describe("main terminal service", () => {
       expect(f.processes[0].write).not.toHaveBeenCalled();
     },
   );
+
+  it("continues the conversation a chat tab had, by the id it was given, and refuses anything else", async () => {
+    const f = fixture();
+    const id = "0f3a6c1e-8a51-4c9e-9d2b-7c1f2a3b4c5d";
+    const session = await f.service.create("chat", "claude", id);
+    expect(session.session).toBe(id);
+    // Never written (no first message): started again with the same id rather than a --resume that would end it.
+    expect(f.spawn.mock.calls.at(-1)?.[1]).toEqual(["--session-id", id, "--dangerously-skip-permissions"]);
+    await expect(f.service.create("chat", "claude", "../../etc/passwd")).rejects.toThrow(/Invalid CLI session/);
+    // Asked again for the same conversation while it runs: the same one, not a second process.
+    const again = await f.service.create("chat", "claude", id);
+    expect(again.id).toBe(session.id);
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+  });
 
   it("continues consuming bounded output before attachment and while no pane is observing it", async () => {
     const f = fixture();
@@ -430,6 +449,8 @@ describe("main terminal service", () => {
     expect(f.spawn.mock.calls[0][1]).toEqual([
       "--model", "hello-active/local-model",
       "--append-system-prompt", f.notebookContext.instructionsPath,
+      // Its conversation, by an id of Hello's, in a folder that outlives the app.
+      "--session-dir", join(f.root, "cli-sessions", "pi"), "--session-id", session.session,
     ]);
     expect(f.spawn.mock.calls[0][2]).toMatchObject({
       cwd: f.folder,

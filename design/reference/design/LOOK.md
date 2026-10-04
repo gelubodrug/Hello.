@@ -158,6 +158,14 @@ right, and just one subtle divider. No nested card outlines, Save/Cancel footer
 or separate editor design. Keep formatting controls minimal and reuse the chat's
 Markdown/Shiki rendering. Switching entries, tabs or minimizing retains drafts.
 
+**User decision, 29.09.2026 — one notebook.** Beside Chat there is one Notebook
+pill, not a pill per section. Its entry list becomes a quiet tree of three
+sections — Runbooks, Tasks and Plans (the plan the model keeps) — each row with
+a folder glyph, a + for a new chapter and a switch at its end; each chapter has
+a switch before its title. What is off stays in the tree, quieter. The editor
+side is unchanged. The app implements this (`src/renderer/notebook/`); the
+specimen here predates it.
+
 This is implemented in the renderer specimen only. Real actor ownership,
 session launch/termination and persistence need an explicit app integration;
 the visual grouping does not silently change any of those behaviors.

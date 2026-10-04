@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
 import {
   ArrowDown,
   ArrowUp,
+  BookmarkPlus,
   Check,
   ChevronDown,
   Copy,
@@ -30,7 +31,7 @@ import type {
   WorkerInfo,
 } from "../../shared/types";
 import { api } from "../api";
-import { modelName, suggestedName } from "../settings/presets";
+import { endpointIdentity, modelName, suggestedName } from "../settings/presets";
 import { ContextMeter, dollars } from "./ContextMeter";
 import { ChatFind, type FindJump } from "./ChatFind";
 import { droppedPaths, hasFileDrop } from '../drop';
@@ -47,12 +48,15 @@ import {
 import { CodeBlock, Markdown } from "./Markdown";
 import { fetchedSources, readWebResult, sourcesForMessage, withSourceLinks, type WebSource } from '../../shared/web';
 import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolIcon, webToolTitle } from './WebResearch';
-import { activityLayout, activityRows, liveTail, stepLabel, suppliedDuration, thinkingTitle, type ActivityRow } from './activity';
+import { activityLayout, activityRows, liveTail, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
+import { useElapsed } from './useElapsed';
 import { PendingMessages } from './PendingMessages';
 import { chatCopySnapshot } from './selection';
 import { PillSwitch } from './PillSwitch';
 import { ChatDisclosure } from './ChatDisclosure';
 import { ExtensionsPicker } from './ExtensionsPicker';
+import { useSkillCommands } from './SkillCommands';
+import { useExtensionUi } from './ExtensionPanel';
 
 const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
 /** Chips main can show as a picture: an image snapshot, or a draft chip whose name says it is one. */
@@ -150,6 +154,24 @@ export function ThinkingPart({
   );
 }
 
+/** A chapter's title from a reply: its first heading, else its first line, short. */
+export function chapterTitle(text: string): string {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const heading = lines.find(line => /^#{1,6}\s/.test(line));
+  const first = (heading ?? lines[0] ?? "").replace(/^#{1,6}\s+/, "").replace(/^[-*>\d.)\s]+/, "").replace(/[*_`]/g, "").trim();
+  if (!first) return "From the chat";
+  return first.length > 60 ? `${first.slice(0, 59).trimEnd()}…` : first;
+}
+
+/** The message an arrow key, Home or End leads to from this one, within its transcript. */
+export function messageInDirection(from: HTMLElement, key: string): HTMLElement | null {
+  const list = [...(from.parentElement?.querySelectorAll<HTMLElement>(':scope > article.message') ?? [])];
+  const at = list.indexOf(from);
+  if (at < 0) return null;
+  const to = key === 'ArrowUp' ? at - 1 : key === 'ArrowDown' ? at + 1 : key === 'Home' ? 0 : key === 'End' ? list.length - 1 : -1;
+  return to >= 0 && to < list.length && to !== at ? list[to] : null;
+}
+
 export function ToolPart({
   part,
 }: {
@@ -161,7 +183,10 @@ export function ToolPart({
   const WebIcon = webToolIcon(part.name);
   const id = useId();
   const duration = suppliedDuration(part.durationMs);
-  const status = part.status === 'complete' ? 'Completed' : part.status === 'approval' ? 'Needs approval' : part.status === 'error' ? 'Failed' : 'Running';
+  // A step that runs long says for how long, so slow reads as slow, not stuck.
+  const running = useElapsed(part.status === 'running');
+  const status = part.status === 'complete' ? 'Completed' : part.status === 'approval' ? 'Needs approval' : part.status === 'error' ? 'Failed'
+    : running >= 2000 ? `Running ${workDuration(running)}` : 'Running';
   const argument = webToolArgument(part);
   useEffect(() => {
     if (part.status === "approval") setOpen(true);
@@ -188,7 +213,7 @@ export function ToolPart({
       >
         <span className="tool-action-title" title={webToolTitle(part)}>{webToolTitle(part)}</span>
         {argument && <span className="tool-query" title={argument}>{argument}</span>}
-        {part.status !== 'complete' && <span className="tool-query">{status}</span>}
+        {part.status !== 'complete' && <span className="tool-query tool-status">{status}</span>}
         <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
       </button>
       <ChatDisclosure id={id} open={open}>
@@ -252,7 +277,7 @@ function MergedStep({ row, render }: {
         onClick={() => setOpen(value => !value)}
       >
         <span className="tool-action-title">{stepLabel(row.parts)}</span>
-        {state && <span className="tool-query">{state}</span>}
+        {state && <span className="tool-query tool-status">{state}</span>}
         <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
       </button>
       <ChatDisclosure id={id} open={open}>
@@ -348,6 +373,8 @@ export function MessageContent({ message, sources }: { message: Message; sources
       ? <ActivityGroup
           parts={layout.activity}
           streaming={message.status === 'streaming'}
+          startedAt={message.createdAt}
+          workedMs={message.workedMs}
           tail={rows.slice(tailFrom).map(renderRow)}
         >
           {rows.map(renderRow)}
@@ -383,6 +410,7 @@ function MessageRow({
   const [copied, setCopied] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [kept, setKept] = useState<"saving" | "saved" | null>(null);
   const [editingMessage, setEditingMessage] = useState(false);
   const [editDraft, setEditDraft] = useState("");
   const editLock = useRef(false);
@@ -402,6 +430,27 @@ function MessageRow({
     }
   };
   const copyMessage = () => copyPayload({ text: withSourceLinks(message.content, sources) });
+  /**
+   * A reply worth keeping becomes a Runbook chapter, its sources with it (user,
+   * 04.10, the second design audit: what a chat found was lost once it scrolled
+   * away, and the notebook stayed a storage afterthought).
+   */
+  const keepInRunbook = async () => {
+    setKept("saving");
+    setCopyError(null);
+    try {
+      await api.notebooks.save({ conversationId: message.conversationId, kind: "runbook", title: chapterTitle(message.content), body: withSourceLinks(message.content, sources) });
+      setKept("saved");
+    } catch (reason) {
+      setKept(null);
+      setCopyError(errorText(reason));
+    }
+  };
+  useEffect(() => {
+    if (kept !== "saved") return;
+    const timer = setTimeout(() => setKept(null), 1800);
+    return () => clearTimeout(timer);
+  }, [kept]);
   const saveEdit = () => {
     if (!editDraft.trim() || editLock.current) return;
     editLock.current = true;
@@ -420,6 +469,9 @@ function MessageRow({
     : message.runtimePhase === 'retrying' ? 'Retrying response…'
     : !hasVisibleContent ? message.runtimePhase === 'starting' ? 'Starting chat…' : 'Waiting for response…'
     : null;
+  // How long it has been waiting, beside the words: a slow local model reads as
+  // slow, not as stuck (user, 04.10). Kept out of the live region's words.
+  const waited = useElapsed(runtimeStatus !== null, undefined, runtimeStatus);
   return (
     <article
       tabIndex={0}
@@ -428,6 +480,25 @@ function MessageRow({
       aria-label={
         message.role === "user" ? "Your message" : "Assistant response"
       }
+      onKeyDown={event => {
+        // Only the message itself, focused: keys typed in a field inside it are that field's.
+        if (event.target !== event.currentTarget || event.altKey) return;
+        // ⌘C on a message with nothing selected copies the message, as its Copy button does.
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+          if (window.getSelection()?.toString()) return;
+          event.preventDefault();
+          void copyMessage();
+          return;
+        }
+        if (event.metaKey || event.ctrlKey) return;
+        // ↑/↓ move between messages, Home/End to the first and the last (user,
+        // 04.10, the design audit: the transcript is read with the keyboard too).
+        const next = messageInDirection(event.currentTarget, event.key);
+        if (!next) return;
+        event.preventDefault();
+        next.focus({ preventScroll: true });
+        next.scrollIntoView({ block: 'nearest' });
+      }}
       onContextMenu={event => {
         if (!event.currentTarget.contains(event.target as Node)) return;
         event.preventDefault();
@@ -437,6 +508,10 @@ function MessageRow({
         setContext({ ...snapshot, position: { x: event.clientX || bounds.left + 16, y: event.clientY || bounds.top + 16 } });
       }}
     >
+      {/* A reply Pi began on its own — a plugin woke it — says so, above it. */}
+      {message.role === "assistant" && message.startedBy && (
+        <p className="message-started-by" title={message.startedBy}>{message.startedBy}</p>
+      )}
       {message.role === "user" ? (
         <>
           {editingMessage ? (
@@ -490,7 +565,7 @@ function MessageRow({
         <>
           <MessageContent message={message} sources={sources} />
           <ErrorNote error={message.error} />
-          {runtimeStatus && <span className="waiting-response" role="status" aria-live="polite">{runtimeStatus}</span>}
+          {runtimeStatus && <span className="waiting-response"><span role="status" aria-live="polite">{runtimeStatus}</span>{waited >= 2000 && <span className="waiting-elapsed" aria-hidden="true"> {workDuration(waited)}</span>}</span>}
         </>
       )}
       {message.role === "assistant" && message.status !== "streaming" && (
@@ -502,6 +577,15 @@ function MessageRow({
           >
             {copied ? <Check size={15} /> : <Copy size={15} />}
           </IconButton>
+          {message.content.trim() && (
+            <IconButton
+              label={kept === "saved" ? "Saved to Runbook" : "Save to Runbook"}
+              disabled={kept === "saving"}
+              onClick={() => void keepInRunbook()}
+            >
+              {kept === "saved" ? <Check size={15} /> : <BookmarkPlus size={15} />}
+            </IconButton>
+          )}
           {last && (
             <IconButton
               label="Retry response"
@@ -633,6 +717,20 @@ export function ConversationView({
   const sticky = useRef(true);
   const generation = messages.some((message) => message.status === "streaming");
   const busy = sending || generation;
+  // What the chat's plugins show: their questions, notices, widgets and statuses.
+  const extensionUi = useExtensionUi({
+    conversationId: conversation.id, onError: reportError,
+    // A plugin's text for the composer never replaces words already written.
+    onEditorText: text => setDraft(current => current.trim() ? current : text),
+  });
+  const commands = useSkillCommands({
+    conversationId: conversation.id, draft, setDraft, onError: reportError,
+    focus: () => requestAnimationFrame(() => {
+      const input = field.current;
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    }),
+  });
   // The waiting list is main's, not this component's: it survives a reload, and
   // main decides when a held message is finally said.
   useEffect(() => {
@@ -823,18 +921,23 @@ export function ConversationView({
     // models disappeared here while Settings listed them fine).
     if (connection.error && !connection.models.length)
       return [{ id: `unreachable:${connection.endpointUrl}`, label: name, detail: connection.error, group, disabled: true }];
+    // The connection in use is the settings' one, now — not the list's, which is
+    // kept for minutes and was read before the last pick. Trusting the list
+    // saved an OpenRouter model alone, onto the local server picked a moment
+    // before, and every turn after failed with "model not found" (user, 01.10).
+    const inUse = endpointIdentity(connection.endpointUrl) === endpointIdentity(settings.endpointUrl);
     return connection.models.map((model) => ({
       id: `${connection.endpointUrl} ${model.id}`,
       label: modelName(model.id),
       detail: [several ? name : '', model.contextWindow ? `${model.contextWindow.toLocaleString('en')} tokens` : '']
         .filter(Boolean).join(' · ') || undefined,
       group,
-      checked: connection.active && model.id === settings.model,
+      checked: inUse && model.id === settings.model,
       action: () => {
         // Only the choice: main reads this model's published limits itself,
         // so a model reached any other way launches on the same numbers.
         void api.settings
-          .save(connection.active ? { model: model.id } : { endpointUrl: connection.endpointUrl, model: model.id })
+          .save(inUse ? { model: model.id } : { endpointUrl: connection.endpointUrl, model: model.id })
           .then(onSettingsChange)
           .catch(reportError);
       },
@@ -847,6 +950,14 @@ export function ConversationView({
         ? { id: "models-loading", label: "", leading: <Loader2 size={14} className="spin" aria-label="Reading models" />, disabled: true }
         : { id: "models-empty", label: "No models available", disabled: true },
     );
+  // Free first (user, 01.10): the picker opens on the models that cost nothing
+  // — the person's own servers, and those a provider prices at zero — and the
+  // rest come back with the pill switched off. Offered only where it chooses.
+  const freeModels = new Set(catalog.flatMap(connection =>
+    connection.models.filter(model => model.free).map(model => `${connection.endpointUrl} ${model.id}`)));
+  const freePill = freeModels.size && catalog.some(connection => connection.models.some(model => !model.free))
+    ? { label: "Free", title: "Free models only: your own servers, and models priced at zero", keeps: (item: MenuItem) => Boolean(item.disabled) || freeModels.has(item.id) }
+    : undefined;
   const workerItems: MenuItem[] = workers.map((worker) => ({
     id: worker.id,
     label: worker.label,
@@ -962,6 +1073,7 @@ export function ConversationView({
       )}
       <div className="composer-wrap">
         <ErrorNote error={error} />
+        {extensionUi.above}
         <form
           className="composer"
           onSubmit={(event) => {
@@ -1026,9 +1138,13 @@ export function ConversationView({
               </IconButton>
             </div>
           )}
+          {commands.popup}
           <textarea
             ref={field}
             aria-label="Message"
+            aria-autocomplete="list"
+            aria-controls={commands.expanded ? commands.listId : undefined}
+            aria-activedescendant={commands.activeId}
             // While it works, saying what Enter will do is the whole affordance:
             // steering is otherwise invisible until something is already queued.
             placeholder={busy ? "Say it now — it reaches this reply" : "Ask anything"}
@@ -1036,6 +1152,7 @@ export function ConversationView({
             rows={2}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              if (commands.onKeyDown(event)) return;
               if (
                 event.key === "Enter" &&
                 !event.shiftKey &&
@@ -1084,7 +1201,8 @@ export function ConversationView({
             <div className="composer-model">
               <MenuButton
                 label="Choose model"
-                searchPlaceholder={'search models try "free"'}
+                searchPlaceholder="Search models"
+                searchPill={freePill}
                 className="model-trigger"
                 items={modelItems}
                 onOpen={() => void loadModels()}
@@ -1115,7 +1233,8 @@ export function ConversationView({
             )}
           </div>
         </form>
-        <ContextMeter messages={messages} settings={settings} />
+        {extensionUi.below}
+        <ContextMeter messages={messages} settings={settings} conversationId={conversation.id} busy={busy} />
       </div>
     </div>
   );

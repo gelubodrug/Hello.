@@ -5,7 +5,7 @@ import { api } from "../api";
 import { ErrorNote, IconButton, MenuButton, MenuLayerAbove, errorText } from "../ui/primitives";
 import { ExtensionsSection } from "./ExtensionsSection";
 import { AppAuditSection } from "./AppAuditSection";
-import { ENDPOINT_PRESETS, modelName, presetFor, suggestedName } from "./presets";
+import { ENDPOINT_PRESETS, endpointIdentity, modelName, presetFor, suggestedName } from "./presets";
 
 const reasoningOptions = [
   { value: "off", label: "Provider default" },
@@ -24,7 +24,6 @@ const compatibilityOptions = [
   { value: 'qwen-chat-template', label: 'Local Qwen chat template', detail: 'For a local server that accepts Qwen chat-template parameters' },
 ] as const;
 const SAVED_KEY_MASK = "•".repeat(24);
-const endpointIdentity = (value: string) => value.trim().replace(/\/+$/, "");
 /** A server on this Mac rarely wants a key, so its key field waits to be asked for. */
 const isLocal = (value: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(value.trim());
 const compact = new Intl.NumberFormat("en", { notation: "compact" });
@@ -194,6 +193,7 @@ export function SettingsDialog({
     } : {}),
     modelCompatibility: draft.modelCompatibility ?? 'auto',
     approvals: draft.approvals ?? 'all',
+    subagentModel: (draft.subagentModel ?? '').trim(),
     ...(keyEdited ? { apiKey: key } : {}),
   });
   const save = () => run(async () => {
@@ -594,6 +594,35 @@ export function SettingsDialog({
                   }))
                 : [{ id: "empty", label: probe.state === 'checking' ? "Checking the server…" : "No models from this address", disabled: true }]
             }
+          >
+            <ChevronDown size={14} />
+          </MenuButton>
+        </div>
+        {/* The model a plugin's subagents run on (pi-subagents), on this same
+            connection: a quick one keeps a fan-out from waiting on a slow chat model. */}
+        <div className="settings-model-row">
+          <label>
+            Model for subagents
+            <input
+              value={draft.subagentModel ?? ""}
+              placeholder="Same as the chat"
+              onChange={(event) => setDraft((value) => ({ ...value, subagentModel: event.target.value }))}
+            />
+            <span className="muted">For plugins that start subagents, such as pi-subagents. Empty: they use the chat’s model.</span>
+          </label>
+          <MenuButton
+            label="Available models for subagents"
+            searchPlaceholder={'search models try "free"'}
+            className="pill"
+            items={[
+              { id: "same", label: "Same as the chat", checked: !draft.subagentModel?.trim(), action: () => setDraft(value => ({ ...value, subagentModel: "" })) },
+              ...models.map((model) => ({
+                id: `subagent:${model.id}`,
+                label: modelName(model.id),
+                checked: draft.subagentModel === model.id,
+                action: () => setDraft(value => ({ ...value, subagentModel: model.id })),
+              })),
+            ]}
           >
             <ChevronDown size={14} />
           </MenuButton>

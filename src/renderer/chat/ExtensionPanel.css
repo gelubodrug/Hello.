@@ -1,0 +1,151 @@
+/* What a chat's plugins show beside the composer (user, 29.09): quiet, the
+   plugin's own words, never mistaken for the model's reply. */
+.extension-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-8);
+  font-size: var(--fs-12);
+}
+
+.extension-panel-below {
+  margin: var(--sp-8) 0 0;
+}
+
+.extension-widget {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  font: var(--fs-12)/1.5 var(--font-mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.extension-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.extension-status {
+  max-width: 100%;
+  padding: 2px var(--sp-8);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extension-notice {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-8);
+  color: var(--ink-secondary);
+}
+
+.extension-notice[data-kind="warning"] { color: var(--color-warning, var(--ink-primary)); }
+.extension-notice[data-kind="error"] { color: var(--color-danger, var(--ink-primary)); }
+
+.extension-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
+  border: 1px solid var(--surface-edge-strong, var(--surface-edge));
+  border-radius: var(--r-12);
+  background: var(--surface-raised);
+}
+
+.extension-question header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+
+.extension-question h3 {
+  margin: 0;
+  color: var(--ink-primary);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.extension-question p {
+  margin: 0;
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.extension-question-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+}
+
+.extension-question-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.extension-question-form input,
+.extension-question-form textarea {
+  width: 100%;
+  padding: var(--sp-8);
+  border: 1px solid var(--surface-edge);
+  border-radius: var(--r-8);
+  background: var(--surface-base, transparent);
+  color: var(--ink-primary);
+  font: inherit;
+}
+
+.extension-question-expiry {
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+
+/* pi-subagents' runs, read from its status for hosts: a list, not its JSON. */
+.extension-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
+  background: var(--surface-raised);
+}
+.extension-run {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+  color: var(--ink-secondary);
+}
+.extension-run-state {
+  flex: none;
+  min-width: 64px;
+  color: var(--ink-tertiary);
+}
+.extension-run[data-state="running"] .extension-run-state { color: var(--color-accent, var(--ink-primary)); }
+.extension-run[data-state="complete"] .extension-run-state { color: var(--color-success); }
+.extension-run[data-state="failed"] .extension-run-state,
+.extension-run[data-state="rejected"] .extension-run-state { color: var(--color-danger, var(--ink-primary)); }
+.extension-run-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-primary);
+}
+.extension-run-detail {
+  flex: none;
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}

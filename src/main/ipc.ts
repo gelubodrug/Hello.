@@ -10,7 +10,8 @@ import type { BrowserManager } from './browser/manager';
 import type { PageModeController } from './browser/page-mode';
 import { WorkspaceFiles } from './files/service';
 import { resolveDropPaths } from './files/drop-paths';
-import { discoverMcpServers, discoverSkills, withoutSecrets } from './extensions/discovery';
+import { discoverMcpServers, discoverPiExtensions, discoverSkills, withoutSecrets } from './extensions/discovery';
+import { dshSkillRoots } from './dsh/skills';
 import type { NotebookKind, SettingsPatch, WorkerId, AgentControl, McpServerInput, PageRect } from '../shared/types';
 
 function str(value:unknown,label='ID',limit=500): string {
@@ -21,7 +22,7 @@ function record(value:unknown): Record<string,unknown> {
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid request.');
   return value as Record<string,unknown>;
 }
-function kind(value:unknown):NotebookKind {if(value!=='runbook'&&value!=='tasks')throw new Error('Unknown notebook.');return value;}
+function kind(value:unknown):NotebookKind {if(value!=='runbook'&&value!=='tasks'&&value!=='plan')throw new Error('Unknown notebook.');return value;}
 
 export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatService, terminal: MainTerminalService, browser: BrowserManager, revokePreviews: (id: string) => void = () => {}, deleteArtifacts: (id: string) => Promise<void> = async () => {}, announceExtensions: ()=>void = () => {}, pageModes?: PageModeController): ()=>void {
   const registered: string[]=[];
@@ -76,17 +77,16 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
       if(chat.isRunning(conversationId))throw new Error('Stop the current response before changing chat mode.');
       clean.chatMode=patch.chatMode;
     }
+    // A section switches while a reply runs too (user, 30.09: Plans would not
+    // turn on mid-reply). Its tools follow from the next step, a tool call
+    // checks the switch when it runs, and the next turn's instructions match.
     if(patch.planning!==undefined){
       if(typeof patch.planning!=='boolean')throw new Error('Planning is on or off.');
-      // The tool list and the instructions are decided when a turn starts.
-      if(chat.isRunning(conversationId))throw new Error('Stop the current response before turning Plan on or off.');
       clean.planning=patch.planning;
     }
     for(const page of ['runbook','tasks'] as const){
       if(patch[page]===undefined)continue;
       if(typeof patch[page]!=='boolean')throw new Error(`${page} is on or off.`);
-      // What the model may see is decided when a turn starts.
-      if(chat.isRunning(conversationId))throw new Error('Stop the current response before changing the shared pages.');
       clean[page]=patch[page] as boolean;
     }
     const previousFolder=store.getConversation(conversationId).folder;
@@ -115,6 +115,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.maxOutputTokens!==undefined)clean.maxOutputTokens=Number(patch.maxOutputTokens);
     if(patch.modelCompatibility!==undefined)clean.modelCompatibility=patch.modelCompatibility as SettingsPatch['modelCompatibility'];
     if(patch.approvals!==undefined)clean.approvals=patch.approvals as SettingsPatch['approvals'];
+    if(patch.subagentModel!==undefined){if(typeof patch.subagentModel!=='string'||patch.subagentModel.length>500)throw new Error('Invalid subagent model.');clean.subagentModel=patch.subagentModel;}
     const saved=store.saveSettings(clean);
     // A new selection asks the provider what this model holds, in the background:
     // saving must not wait on a network round trip, and the next turn awaits it.
@@ -126,6 +127,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.forgetConnection',(url)=>store.forgetConnection(str(url)));
   handle('settings.models',(url)=>chat.models(url===undefined?undefined:str(url,'endpoint',2000)));
   handle('settings.catalog',()=>chat.catalog());
+  handle('settings.usage',()=>store.usageSummary());
   handle('settings.localServers',()=>chat.localServers(true));
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
   handle('chat.previewAttachment',(id,attachmentId)=>chat.previewAttachment(str(id),str(attachmentId)));
@@ -150,11 +152,22 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('chat.stop',(id)=>chat.stop(str(id)));
   handle('chat.retry',(id)=>chat.retry(str(id)));
   handle('chat.approve',(id,allow)=>{if(typeof allow!=='boolean')throw new Error('Invalid approval.');return chat.approve(str(id),allow);});
+  handle('chat.extensionUi',(id)=>chat.extensionUiState(str(id)));
+  handle('chat.commands',(id)=>chat.pluginCommands(str(id)));
+  handle('chat.compact', id => chat.compact(str(id)));
+  handle('chat.answerExtension',(id,dialogId,value)=>{
+    const answer=record(value);
+    // Exactly one of the three shapes Pi takes back.
+    const shaped=answer.cancelled===true?{cancelled:true as const}:typeof answer.confirmed==='boolean'?{confirmed:answer.confirmed}:typeof answer.value==='string'&&answer.value.length<=100_000?{value:answer.value}:null;
+    if(!shaped)throw new Error('Invalid answer.');
+    return chat.answerExtension(str(id),str(dialogId,'question',200),shaped);
+  });
   handle('notebooks.list',(id,type)=>store.listNotebooks(str(id),kind(type)));
   handle('notebooks.save',(value)=>{const input=record(value);if(typeof input.body!=='string'||typeof input.title!=='string')throw new Error('Notebook title and body must be text.');
     if(input.expectedUpdatedAt!==undefined&&(!Number.isSafeInteger(input.expectedUpdatedAt)||Number(input.expectedUpdatedAt)<0))throw new Error('Invalid notebook version.');
     return store.saveNotebook({...(input.id?{id:str(input.id)}:{}),conversationId:str(input.conversationId),kind:kind(input.kind),title:input.title,body:input.body,...(input.expectedUpdatedAt===undefined?{}:{expectedUpdatedAt:Number(input.expectedUpdatedAt)})});});
   handle('notebooks.delete',(id)=>store.deleteNotebook(str(id)));
+  handle('notebooks.share',(id,shared)=>{if(typeof shared!=='boolean')throw new Error('Invalid notebook switch.');return store.shareNotebook(str(id),shared);});
   handle('notebooks.paths',(id)=>store.notebookPaths(str(id)));
   // ── Extensions: skills, plugins and MCP servers ───────────────────────────
   const resourceKind=(value:unknown):'skill'|'plugin'=>{
@@ -222,22 +235,32 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   // configuration without moving HOME, which would cut the app off from the
   // keychain that encrypts stored values.
   const discoveryHome=()=>process.env.HELLO_HOME_DIR||homedir();
+  // Pi's own agent folder: PI_CODING_AGENT_DIR moves it, unless a test home is set.
+  const piAgentHome=():[string,string?]=>process.env.HELLO_HOME_DIR||!process.env.PI_CODING_AGENT_DIR?[discoveryHome()]:[discoveryHome(),process.env.PI_CODING_AGENT_DIR.replace(/^~(?=$|\/)/,homedir())];
   // The folders this app's own chats are attached to are projects too.
   const discoveryProjects=()=>store.listConversations().map(item=>item.folder).filter((folder): folder is string=>Boolean(folder));
   handle('extensions.discover',async()=>{
-    const [mcp,skills]=await Promise.all([discoverMcpServers(discoveryHome(),discoveryProjects()),discoverSkills(discoveryHome(),discoveryProjects())]);
-    return {mcp:withoutSecrets(mcp),skills};
+    const [mcp,skills,plugins]=await Promise.all([discoverMcpServers(discoveryHome(),discoveryProjects()),discoverSkills(discoveryHome(),discoveryProjects(),dshSkillRoots(store.dataDir)),discoverPiExtensions(...piAgentHome())]);
+    return {mcp:withoutSecrets(mcp),skills,plugins};
   });
   handle('extensions.importDiscovered',async(kind,id)=>{
     const wanted=str(kind,'kind',20);const wantedId=str(id,'id',8192);
     if(wanted==='skill'){
-      const skill=(await discoverSkills(discoveryHome(),discoveryProjects())).find(item=>item.id===wantedId);
+      const skill=(await discoverSkills(discoveryHome(),discoveryProjects(),dshSkillRoots(store.dataDir))).find(item=>item.id===wantedId);
       if(!skill)throw new Error('That skill is no longer where it was found.');
       const imported=await chat.library.importPath('skill',skill.path);
       announceExtensions();
       return imported;
     }
-    if(wanted!=='mcp')throw new Error('Only skills and MCP servers are discovered.');
+    if(wanted==='plugin'){
+      // Imported like a chosen folder: copied, and bundled with its npm packages when it imports any.
+      const plugin=(await discoverPiExtensions(...piAgentHome())).find(item=>item.id===wantedId);
+      if(!plugin)throw new Error('That Pi extension is no longer where it was found.');
+      const imported=await chat.library.importPath('plugin',plugin.path);
+      announceExtensions();
+      return imported;
+    }
+    if(wanted!=='mcp')throw new Error('Only skills, Pi extensions and MCP servers are discovered.');
     const server=(await discoverMcpServers(discoveryHome(),discoveryProjects())).find(item=>item.id===wantedId);
     if(!server)throw new Error('That server is no longer in that tool’s configuration.');
     if(server.transport!=='stdio')throw new Error(server.unsupported??'Hello connects to MCP servers over stdio.');
@@ -341,7 +364,11 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   });
   handle('terminal.list',()=>terminal.list());
   handle('terminal.workers',()=>terminal.workers());
-  handle('terminal.create',(id,worker)=>terminal.create(str(id),worker===undefined?undefined:str(worker,'worker') as WorkerId));
+  handle('terminal.create',(id,worker,session)=>{
+    // A chat tab's CLI coming back after a restart continues its own conversation.
+    if(session!==undefined&&(typeof session!=='string'||!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(session)))throw new Error('Invalid CLI session.');
+    return terminal.create(str(id),worker===undefined||worker===null?undefined:str(worker,'worker') as WorkerId,session as string|undefined);
+  });
   handle('terminal.attach',(id)=>terminal.attach(str(id)));
   handle('terminal.write',(id,data)=>terminal.write(str(id),typeof data==='string'?data:(()=>{throw new Error('Invalid terminal input.');})()));
   handle('terminal.resize',(id,cols,rows)=>terminal.resize(str(id),cols,rows));

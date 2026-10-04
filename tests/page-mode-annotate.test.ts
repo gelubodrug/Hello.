@@ -185,6 +185,7 @@ describe('annotate in the controller', () => {
     extra: unknown = null;
     isDestroyed = () => false;
     isLoading = () => false;
+    isLoadingMainFrame = () => false;
     getURL = () => 'https://example.test/app#main';
     mainFrame = { executeJavaScript: vi.fn(async () => ({ component: 'Card › Button', file: 'src/Button.tsx:3' })) };
     capturePage = vi.fn(async () => ({ isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') }));

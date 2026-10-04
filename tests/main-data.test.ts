@@ -33,6 +33,34 @@ afterEach(() => {
 });
 
 describe('new application persistence', () => {
+  // User, 04.10 (the second design audit): cost lived only inside one chat's meter.
+  it('adds up what replies cost and moved, by model and by chat, the costliest first', () => {
+    const cheap = store.createConversation('Local work');
+    const dear = store.createConversation('Cloud research');
+    const reply = (id: string, conversationId: string, model: string, usage?: { input: number; output: number; cost?: number }) =>
+      store.saveMessage({ id, conversationId, role: 'assistant', content: 'x', createdAt: 1, status: 'complete', model, ...(usage ? { usage } : {}) });
+    reply('a', cheap.id, 'qwen-local', { input: 1000, output: 200 });
+    reply('b', dear.id, 'anthropic/claude-sonnet-4.5', { input: 5000, output: 800, cost: 0.03 });
+    reply('c', dear.id, 'anthropic/claude-sonnet-4.5', { input: 7000, output: 900, cost: 0.04 });
+    reply('d', cheap.id, 'qwen-local');
+    store.saveMessage({ id: 'u', conversationId: dear.id, role: 'user', content: 'q', createdAt: 1, status: 'complete' });
+    const summary = store.usageSummary();
+    expect(summary).toMatchObject({ replies: 3, input: 13_000, output: 1_900 });
+    expect(summary.cost).toBeCloseTo(0.07);
+    expect(summary.models.map(row => [row.model, row.replies])).toEqual([['anthropic/claude-sonnet-4.5', 2], ['qwen-local', 1]]);
+    expect(summary.chats.map(row => row.title)).toEqual(['Cloud research', 'Local work']);
+  });
+
+  // User, 04.10: a reply's activity says how long it worked, across retries.
+  it('keeps how long a reply worked, and keeps it through saves that do not say', () => {
+    const conversation = store.createConversation('Work time');
+    const reply = { id: 'r1', conversationId: conversation.id, role: 'assistant' as const, content: 'Done.', createdAt: 1, status: 'complete' as const };
+    store.saveMessage({ ...reply, workedMs: 42_000 });
+    expect(store.listMessages(conversation.id)[0].workedMs).toBe(42_000);
+    store.saveMessage({ ...reply, status: 'streaming' });
+    expect(store.listMessages(conversation.id)[0].workedMs).toBe(42_000);
+  });
+
   it('creates, updates and cascades conversations/messages/notebooks/browser metadata', () => {
     const conversation = store.createConversation('Test');
     store.updateConversation(conversation.id, {
@@ -471,7 +499,7 @@ describe('what a chat’s earlier visits learned about a site', () => {
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'read' }]);
     expect(store.getDomainNote(chat, 'shared.example')).toBeUndefined();
     const check = new Database(store.databasePath, { readonly: true });
-    expect(check.pragma('user_version', { simple: true }) as number).toBe(10);
+    expect(check.pragma('user_version', { simple: true }) as number).toBe(14);
     expect((check.prepare('SELECT COUNT(*) AS rows FROM browser_domain_notes').get() as { rows: number }).rows).toBe(0);
     check.close();
     // And the new shape works on that same file.
@@ -588,3 +616,117 @@ describe('searching messages', () => {
     expect(snippetAround('short text', 'absent')).toBe('short text');
   });
 });
+
+// One notebook, three sections, a switch per chapter (user, 29.09).
+describe('the notebook’s sections and chapter switches', () => {
+  it('moves the plan out of Tasks on a database the previous version wrote, and turns every chapter on', () => {
+    const chat = store.createConversation('Old').id;
+    store.close();
+    // Roll the file back to how version 10 left it: two kinds, no switch.
+    const raw = new Database(store.databasePath);
+    raw.exec(`DROP TABLE notebooks;
+      CREATE TABLE notebooks (
+        id TEXT PRIMARY KEY,
+        conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('runbook','tasks')),
+        title TEXT NOT NULL, body TEXT NOT NULL,
+        createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
+      );
+      CREATE INDEX notebooks_conversation ON notebooks(conversationId, kind, createdAt);
+      INSERT INTO notebooks VALUES ('plan-1','${chat}','tasks','Plan','- [ ] **In progress** — Wire it',1,5);
+      INSERT INTO notebooks VALUES ('tasks-1','${chat}','tasks','Sprint','- [ ] Ship',2,6);
+      INSERT INTO notebooks VALUES ('runbook-1','${chat}','runbook','Setup','Use pnpm.',3,7);
+      PRAGMA user_version = 10;`);
+    raw.close();
+    store = createDataStore(directory, codec);
+    expect(store.listNotebooks(chat, 'plan')).toMatchObject([{ id: 'plan-1', title: 'Plan', updatedAt: 5, shared: true }]);
+    expect(store.listNotebooks(chat, 'tasks').map(row => row.id)).toEqual(['tasks-1']);
+    expect(store.listNotebooks(chat, 'runbook')).toMatchObject([{ id: 'runbook-1', shared: true }]);
+  });
+
+  it('switches a chapter without touching its words or revision, and a save never moves the switch', () => {
+    const chat = store.createConversation('Chat').id;
+    const saved = store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Setup', body: 'Use pnpm.' });
+    expect(saved.shared).toBe(true);
+    const off = store.shareNotebook(saved.id, false);
+    expect(off).toMatchObject({ id: saved.id, shared: false, updatedAt: saved.updatedAt, body: 'Use pnpm.' });
+    // A draft opened before the switch still saves against the same revision.
+    const edited = store.saveNotebook({ id: saved.id, conversationId: chat, kind: 'runbook', title: 'Setup', body: 'Use pnpm 10.', expectedUpdatedAt: saved.updatedAt });
+    expect(edited.shared).toBe(false);
+    expect(store.listNotebooks(chat, 'runbook')[0]).toMatchObject({ body: 'Use pnpm 10.', shared: false });
+    expect(() => store.shareNotebook('missing', true)).toThrow('Notebook entry not found.');
+  });
+
+  it('empties a section’s export while it is off, and forgets every export with the chat', () => {
+    const chat = store.createConversation('Chat').id;
+    store.saveNotebook({ conversationId: chat, kind: 'tasks', title: 'Sprint', body: '- [ ] Ship' });
+    store.updateConversation(chat, { planning: true });
+    store.saveNotebook({ conversationId: chat, kind: 'plan', title: 'Plan', body: '- [ ] Step' });
+    const paths = store.notebookPaths(chat);
+    store.updateConversation(chat, { tasks: false });
+    expect(readFileSync(paths.tasks, 'utf8')).toBe('');
+    store.updateConversation(chat, { tasks: true });
+    expect(readFileSync(paths.tasks, 'utf8')).toBe('# Sprint\n\n- [ ] Ship\n');
+    const heard: string[] = [];
+    store.subscribeNotebooks(change => heard.push(change.kind));
+    store.resetConversation(chat, { notes: true });
+    expect(heard.sort()).toEqual(['plan', 'runbook', 'tasks']);
+    store.saveNotebook({ conversationId: chat, kind: 'plan', title: 'Plan', body: '- [ ] Again' });
+    store.deleteConversation(chat);
+    for (const file of Object.values(paths)) expect(() => readFileSync(file)).toThrow();
+  });
+
+  it('exports for workers only the chapters that are on, the plan included', () => {
+    const chat = store.createConversation('Chat').id;
+    store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Shared', body: 'Visible.' });
+    store.updateConversation(chat, { planning: true });
+    const hidden = store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Private', body: 'Not for workers.' });
+    store.saveNotebook({ conversationId: chat, kind: 'plan', title: 'Plan', body: '- [ ] Step' });
+    store.shareNotebook(hidden.id, false);
+    const paths = store.notebookPaths(chat);
+    expect(readFileSync(paths.runbook, 'utf8')).toBe('# Shared\n\nVisible.\n');
+    expect(readFileSync(paths.plan, 'utf8')).toBe('# Plan\n\n- [ ] Step\n');
+  });
+});
+
+describe('the model for subagents, in Settings', () => {
+  it('is kept for its connection, cleared with an empty value, and dropped when the connection changes', () => {
+    store.saveSettings({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-27b' });
+    expect(store.saveSettings({ subagentModel: ' google/gemini-3-flash:free ' }).subagentModel).toBe('google/gemini-3-flash:free');
+    expect(store.saveSettings({ model: 'another/model' }).subagentModel).toBe('google/gemini-3-flash:free');
+    expect(store.saveSettings({ subagentModel: '' }).subagentModel).toBeUndefined();
+    store.saveSettings({ subagentModel: 'google/gemini-3-flash:free' });
+    expect(store.saveSettings({ endpointUrl: 'http://127.0.0.1:18090/v1' }).subagentModel).toBeUndefined();
+  });
+});
+
+// The marks an agent left stay with their tab, page by page (user, 30.09).
+describe('marks kept with a tab', () => {
+  it('come back with the tab, each page its own — and the first version, one page, is read too', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'hello-marks-'));
+    try {
+      const codec = { encrypt: (text: string) => Buffer.from(text), decrypt: (bytes: Buffer) => bytes.toString() };
+      let marksStore = createDataStore(dir, codec);
+      const chat = marksStore.createConversation('Marks');
+      const pages = [
+        { url: 'https://www.ebay.com/sch/i.html?_nkw=ipad', marks: [{ n: 1, note: 'Cheapest: $499.95', x: 40, y: 1300, width: 320, height: 90, path: '#item1' }] },
+        { url: 'https://www.ebay.com/itm/1', marks: [{ n: 1, note: 'Seller rating', x: 10, y: 400, width: 100, height: 20 }] },
+      ];
+      marksStore.saveBrowserTab({ id: 'ebay', conversationId: chat.id, title: 'eBay', url: pages[1].url, control: 'off', loading: false, progress: null, canGoBack: false, canGoForward: false, marks: pages });
+      marksStore.close();
+      // One page, as the first version of the column wrote it.
+      const raw = new Database(path.join(dir, 'hello.sqlite'));
+      raw.prepare("INSERT INTO browser_tabs(id,conversationId,title,url,control,marks) VALUES ('old',?,'Old','https://example.test/','off',?)")
+        .run(chat.id, JSON.stringify({ url: 'https://example.test/', marks: [{ n: 1, note: 'here', x: 1, y: 2, width: 3, height: 4 }] }));
+      raw.close();
+      marksStore = createDataStore(dir, codec);
+      const tabs = marksStore.listBrowserTabs();
+      expect(tabs.find(tab => tab.id === 'ebay')?.marks).toEqual(pages);
+      expect(tabs.find(tab => tab.id === 'old')?.marks).toEqual([{ url: 'https://example.test/', marks: [{ n: 1, note: 'here', x: 1, y: 2, width: 3, height: 4 }] }]);
+      marksStore.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

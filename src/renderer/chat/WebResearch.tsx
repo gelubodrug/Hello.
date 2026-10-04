@@ -4,7 +4,8 @@ import { readWebResult, type WebSource } from '../../shared/web';
 import { api } from '../api';
 import { ErrorNote, MenuButton } from '../ui/primitives';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { activitySummary, stepLabel } from './activity';
+import { activitySummary, stepLabel, workDuration } from './activity';
+import { useElapsed } from './useElapsed';
 import { ChatDisclosure } from './ChatDisclosure';
 
 const host = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
@@ -19,12 +20,20 @@ function SourceIcon({ url }: { url: string }) {
   </span>;
 }
 
-export function ActivityGroup({ parts, streaming, tail, children }: {
+export function ActivityGroup({ parts, streaming, tail, children, startedAt, workedMs }: {
   parts: readonly MessagePart[]; streaming: boolean; tail?: ReactNode; children: ReactNode;
+  /** When the reply began, and how long it has worked so far: the header says how long the work took. */
+  startedAt?: number; workedMs?: number;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const id = useId();
   const summary = activitySummary(parts);
+  // How long the work took, live while it runs (user, 04.10: where one piece
+  // of work ends and the next begins should read at a glance).
+  // A first run counts from the reply's start; a retry from when it resumed here.
+  const running = useElapsed(streaming, workedMs === undefined ? startedAt : undefined);
+  const took = streaming ? (workedMs ?? 0) + running : workedMs ?? 0;
+  const counts = [summary.counts, took >= 1000 ? workDuration(took) : ''].filter(Boolean).join(' · ');
   // Anything that wants the reader opens the whole list. Otherwise, while the
   // reply is still arriving, only the tail shows: the list unrolling in full is
   // what made this ugly, and the work happening now is what is worth seeing.
@@ -37,7 +46,7 @@ export function ActivityGroup({ parts, streaming, tail, children }: {
     <button type="button" className="disclosure-button activity-summary" aria-expanded={open} aria-controls={id}
       onClick={() => setOverride(!open)}>
       <span className="activity-summary-copy"><span>{summary.title}</span>
-        {summary.counts && <span className="activity-counts">{summary.counts}</span>}</span>
+        {counts && <span className="activity-counts">{counts}</span>}</span>
       <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
       {states && <small className="activity-state" data-running={streaming && summary.unfinished > 0 || undefined}>{states}</small>}
     </button>

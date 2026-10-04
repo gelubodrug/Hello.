@@ -18,7 +18,7 @@ import {
   ToolPart,
 } from "../src/renderer/chat/ConversationView";
 import { Notebook } from "../src/renderer/notebook/Notebook";
-import { MenuButton } from "../src/renderer/ui/primitives";
+import { MenuButton, type MenuItem } from "../src/renderer/ui/primitives";
 import { SettingsDialog } from "../src/renderer/settings/SettingsDialog";
 import { ExtensionsPicker } from "../src/renderer/chat/ExtensionsPicker";
 
@@ -913,6 +913,37 @@ describe("menus and notebook persistence", () => {
     await click(menuItem("Codex CLI"));
     expect(launch).toHaveBeenCalledWith("codex");
   });
+  // Free first (user, 01.10): a pill inside the search field, on at every
+  // opening; switched off, the rest of the list comes back.
+  it("opens on what its search pill keeps, lists everything with it off, and starts on it again at the next opening", async () => {
+    const keeps = (item: MenuItem) => item.id.endsWith(":free");
+    await render(createElement(MenuButton, {
+      label: "Choose model",
+      searchPlaceholder: "Search models",
+      searchPill: { label: "Free", title: "Free models only", keeps },
+      items: [
+        { id: "a:free", label: "Qwen Coder", group: "OpenRouter", action: () => {} },
+        { id: "b", label: "Claude Sonnet", group: "OpenRouter", action: () => {} },
+        { id: "c", label: "GPT", group: "OpenAI", action: () => {} },
+      ],
+      children: "Model",
+    }));
+    const listed = () => [...document.querySelectorAll('[role="menuitem"] .menu-item-copy')].map(node => node.textContent);
+    const pill = () => document.querySelector<HTMLButtonElement>(".menu-search-field > .menu-search-pill")!;
+    await click(button("Choose model"));
+    expect(pill().getAttribute("aria-pressed")).toBe("true");
+    expect(listed()).toEqual(["Qwen Coder"]);
+    // A kind with nothing left in it is not offered while the pill is on.
+    expect(document.querySelector(".menu-filters")).toBeNull();
+    await click(pill());
+    expect(pill().getAttribute("aria-pressed")).toBe("false");
+    expect(listed()).toEqual(["Qwen Coder", "Claude Sonnet", "GPT"]);
+    expect([...document.querySelectorAll(".menu-filter")].map(node => node.textContent)).toEqual(["", "OpenRouter", "OpenAI"]);
+    await click(button("Choose model"));
+    await click(button("Choose model"));
+    expect(pill().getAttribute("aria-pressed")).toBe("true");
+    expect(listed()).toEqual(["Qwen Coder"]);
+  });
   it("supports keyboard menu navigation and Escape returns focus to its trigger", async () => {
     await render(
       createElement(MenuButton, {
@@ -941,6 +972,7 @@ describe("menus and notebook persistence", () => {
     expect(document.activeElement).toBe(button("Actions"));
     expect(document.querySelector('[role="menu"]')).toBeNull();
   });
+  const notebookProps = () => ({ conversation, onConversationChange: vi.fn(), reportError: vi.fn() });
   it("flushes an edited entry before changing selection and restores its own title when returning", async () => {
     const rows: NotebookEntry[] = [
       {
@@ -951,6 +983,7 @@ describe("menus and notebook persistence", () => {
         body: "Old text",
         createdAt: 1,
         updatedAt: 1,
+        shared: true,
       },
       {
         id: "n2",
@@ -960,21 +993,17 @@ describe("menus and notebook persistence", () => {
         body: "Other task",
         createdAt: 2,
         updatedAt: 2,
+        shared: true,
       },
     ];
-    mocks.notebookList.mockImplementation(async () => [...rows]);
+    mocks.notebookList.mockImplementation(async (_id: string, kind: string) => rows.filter(row => row.kind === kind));
     mocks.notebookSave.mockImplementation(async input => {
       const index = rows.findIndex(row => row.id === input.id);
       const saved = { ...rows[index], ...input, updatedAt: rows[index].updatedAt + 1 };
       rows[index] = saved;
       return saved;
     });
-    await render(
-      createElement(Notebook, {
-        conversationId: conversation.id,
-        kind: "tasks",
-      }),
-    );
+    await render(createElement(Notebook, notebookProps()));
     const field = document.querySelector<HTMLInputElement>('[aria-label="Entry title"]')!;
     await fill(field, "Updated first");
     await click(button("Second"));
@@ -987,12 +1016,12 @@ describe("menus and notebook persistence", () => {
   });
   it("keeps a stale draft after a CLI change and can save it separately without reverting completion", async () => {
     const original: NotebookEntry = { id: 'conflict-note', conversationId: conversation.id,
-      kind: 'tasks', title: 'Audit', body: '- [ ] Check entry points', createdAt: 1, updatedAt: 10 };
+      kind: 'tasks', title: 'Audit', body: '- [ ] Check entry points', createdAt: 1, updatedAt: 10, shared: true };
     let latest = original;
-    mocks.notebookList.mockImplementation(async () => [latest]);
+    mocks.notebookList.mockImplementation(async (_id: string, kind: string) => kind === 'tasks' ? [latest] : []);
     let rejectSave!: (reason: Error) => void;
     mocks.notebookSave.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
-    await render(createElement(Notebook, { conversationId: conversation.id, kind: 'tasks' }));
+    await render(createElement(Notebook, notebookProps()));
     const field = document.querySelector<HTMLInputElement>('[aria-label="Entry title"]')!;
     await fill(field, 'My draft title');
     await act(async () => { field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
@@ -1018,12 +1047,12 @@ describe("menus and notebook persistence", () => {
   });
   it("refreshes a CLI update arriving after our commit but before the save response", async () => {
     const original: NotebookEntry = { id: 'racing-note', conversationId: conversation.id,
-      kind: 'tasks', title: 'Audit', body: '- [ ] Check entry points', createdAt: 1, updatedAt: 10 };
+      kind: 'tasks', title: 'Audit', body: '- [ ] Check entry points', createdAt: 1, updatedAt: 10, shared: true };
     let latest = original;
-    mocks.notebookList.mockImplementation(async () => [latest]);
+    mocks.notebookList.mockImplementation(async (_id: string, kind: string) => kind === 'tasks' ? [latest] : []);
     let finishSave!: (saved: NotebookEntry) => void;
     mocks.notebookSave.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
-    await render(createElement(Notebook, { conversationId: conversation.id, kind: 'tasks' }));
+    await render(createElement(Notebook, notebookProps()));
     const field = document.querySelector<HTMLInputElement>('[aria-label="Entry title"]')!;
     await fill(field, 'My saved title');
     await act(async () => { field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
@@ -1034,7 +1063,8 @@ describe("menus and notebook persistence", () => {
     await act(async () => { finishSave({ ...original, title: 'My saved title', updatedAt: 11 }); });
     expect(field.value).toBe('Updated by CLI');
     expect(localStorage.getItem(`hello.notebook.${original.id}`)).toBeNull();
-    expect(mocks.notebookList).toHaveBeenCalledTimes(3);
+    // Load, the CLI's change, and once more after our save settled: each reads every section.
+    expect(mocks.notebookList.mock.calls.filter(call => call[1] === 'tasks')).toHaveLength(3);
   });
 });
 
@@ -1062,6 +1092,96 @@ describe("the model picker across kept connections", () => {
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ endpointUrl: "http://localhost:8081/v1", model: "/Users/q/Models/Nex-N2.5-mini-Q8_0.gguf" }),
     );
+  });
+});
+
+// User, 04.10 (the design audit, point 3): the transcript is read with the
+// keyboard too — arrows between messages, ⌘C on one copies it.
+describe("the transcript from the keyboard", () => {
+  const said = (id: string, role: "user" | "assistant", content: string): Message =>
+    ({ id, conversationId: conversation.id, role, content, status: "complete", createdAt: 1 });
+  const key = (target: Element, init: KeyboardEventInit) =>
+    act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+
+  it("moves between messages with the arrows, Home and End, and copies the one focused", async () => {
+    // jsdom lays nothing out; Chromium scrolls the message into view.
+    Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+    await render(view([said("u1", "user", "First question"), said("a1", "assistant", "First answer"), said("u2", "user", "Second question")]));
+    const articles = [...document.querySelectorAll<HTMLElement>("article.message")];
+    articles[0].focus();
+    await key(articles[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(articles[1]);
+    await key(articles[1], { key: "End" });
+    expect(document.activeElement).toBe(articles[2]);
+    await key(articles[2], { key: "Home" });
+    expect(document.activeElement).toBe(articles[0]);
+    await key(articles[0], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(articles[0]);
+    articles[1].focus();
+    await key(articles[1], { key: "c", metaKey: true });
+    expect(mocks.copy).toHaveBeenCalledWith(expect.objectContaining({ text: "First answer" }));
+  });
+
+  // User, 04.10 (the second design audit): what a chat found was lost once it
+  // scrolled away; a reply worth keeping becomes a Runbook chapter.
+  it("keeps a reply as a Runbook chapter, titled by its heading", async () => {
+    mocks.notebookSave.mockResolvedValue({});
+    await render(view([said("a1", "assistant", "## Weather in Bucharest\n\nSunny, 24°C.")]));
+    await click(button("Save to Runbook"));
+    expect(mocks.notebookSave).toHaveBeenCalledWith({ conversationId: conversation.id, kind: "runbook", title: "Weather in Bucharest", body: expect.stringContaining("Sunny, 24°C.") });
+    expect(button("Saved to Runbook")).toBeDefined();
+  });
+});
+
+// User, 01.10: the list is kept for minutes, so its "active" connection can be
+// the one in use before the last pick; a model picked there was saved alone,
+// onto the local server, and every turn after failed with "model not found".
+describe("the model picker after switching connections", () => {
+  it("saves the model with its connection whenever that connection is not the one in use now", async () => {
+    mocks.catalog.mockResolvedValue([
+      { name: "OpenRouter", endpointUrl: "https://openrouter.ai/api/v1", active: true, models: [{ id: "dots-studio/dots-3-note-preview:free", free: true }] },
+      { name: "oMLX", endpointUrl: "http://localhost:8000/v1", active: false, models: [{ id: "Qwen3-Coder-Next-6bit", free: true }] },
+    ]);
+    // The settings already point at oMLX; the list still says OpenRouter.
+    await render(createElement(ConversationView, { ...view().props, settings: { ...settings, endpointUrl: "http://localhost:8000/v1", model: "Qwen3-Coder-Next-6bit" } }));
+    await click(button("Choose model"));
+    expect(menuItem("Qwen3-Coder-Next-6bit").querySelector("svg")).not.toBeNull();
+    await click(menuItem("dots-studio/dots-3-note-preview:free"));
+    expect(mocks.settingsSave).toHaveBeenCalledWith({ endpointUrl: "https://openrouter.ai/api/v1", model: "dots-studio/dots-3-note-preview:free" });
+  });
+});
+
+// Free first (user, 01.10): the picker opens on the models that cost nothing —
+// the person's own servers and those priced at zero — and the rest come back
+// with the pill switched off.
+describe("the model picker's Free pill", () => {
+  it("opens on free models and shows the others with Free switched off", async () => {
+    mocks.catalog.mockResolvedValue([
+      { name: "OpenRouter", endpointUrl: "https://openrouter.ai/api/v1", active: true,
+        models: [{ id: "qwen/qwen3-coder:free", free: true }, { id: "anthropic/claude-sonnet-4.5" }] },
+      { name: "oMLX", endpointUrl: "http://localhost:8000/v1", active: false, models: [{ id: "Qwen3-Coder-Next", free: true }] },
+    ]);
+    await render(view());
+    await click(button("Choose model"));
+    const pill = document.querySelector<HTMLButtonElement>(".menu-search-pill")!;
+    expect(pill.textContent).toBe("Free");
+    expect(pill.getAttribute("aria-pressed")).toBe("true");
+    expect(document.body.textContent).toContain("qwen/qwen3-coder:free");
+    expect(document.body.textContent).toContain("Qwen3-Coder-Next");
+    expect(document.body.textContent).not.toContain("anthropic/claude-sonnet-4.5");
+    await click(pill);
+    await click(menuItem("anthropic/claude-sonnet-4.5"));
+    expect(mocks.settingsSave).toHaveBeenCalledWith({ endpointUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5" });
+  });
+
+  it("is not offered where it would choose nothing", async () => {
+    mocks.catalog.mockResolvedValue([
+      { name: "oMLX", endpointUrl: "http://localhost:8000/v1", active: true, models: [{ id: "Qwen3-Coder-Next", free: true }] },
+    ]);
+    await render(view());
+    await click(button("Choose model"));
+    expect(document.querySelector(".menu-search-pill")).toBeNull();
+    expect(menuItem("Qwen3-Coder-Next")).toBeDefined();
   });
 });
 

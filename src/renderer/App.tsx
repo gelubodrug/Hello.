@@ -8,10 +8,11 @@ import {
   type ReactNode,
 } from "react";
 import {
-  BookOpen,
+  Blocks,
+  Cpu,
+  Package,
+  Store,
   Eraser,
-  ListChecks,
-  ListTodo,
   MessageCircle,
   MoreHorizontal,
   PanelLeft,
@@ -33,7 +34,7 @@ import type {
   TerminalSession,
   WorkerId,
 } from "../shared/types";
-import type { MessageMatch, QueuedMessage } from "../shared/types";
+import type { MarketKind, MessageMatch, QueuedMessage } from "../shared/types";
 import type { FindJump } from "./chat/ChatFind";
 import { api } from './api';
 import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, strongest, type AttentionKind, type Seen } from "./attention";
@@ -51,13 +52,19 @@ import {
 } from "./ui/layout-motion";
 import { animateSurface } from "./ui/surface-motion";
 import { SidebarChrome } from './ui/SidebarChrome';
+import { EngineRow, usePiEngine } from './EngineRow';
 import { SettingsDialog } from "./settings/SettingsDialog";
+import { DshView, useDshStatus } from "./dsh/DshView";
+import { MarketDialog } from "./market/MarketDialog";
 import {
   Workspace,
   defaultWorkspacePrefs,
+  normalizeChatTab,
+  type ChatTerminalTab,
   type WorkspacePrefs,
   type WorkspaceUpdate,
 } from "./workspace/Workspace";
+import { hasExpandedPane, navigationShown } from "./workspace/navigation";
 import { filesTabId } from '../shared/files';
 
 interface ShellState {
@@ -88,6 +95,13 @@ function initialShell(): ShellState {
             : 0.35,
           // These are permanent sections; older closed-tab preferences cannot hide them.
           notebookTabs: ["runbook", "tasks"],
+          // Runbook and Tasks were pages of their own; both open the notebook now.
+          chatTab: normalizeChatTab(value.chatTab),
+          // A chat tab outlives its terminal (user, 30.09): the chat, opened
+          // again, is given its CLIs again (relaunchChatTabs).
+          chatTerminals: Array.isArray(value.chatTerminals)
+            ? value.chatTerminals.filter((tab): tab is ChatTerminalTab => Boolean(tab) && typeof tab === "object" && typeof tab.id === "string")
+            : [],
         };
       }
       return {
@@ -108,12 +122,6 @@ function put<T extends { id: string }>(rows: T[], value: T): T[] {
   return rows.some((row) => row.id === value.id)
     ? rows.map((row) => (row.id === value.id ? value : row))
     : [...rows, value];
-}
-
-function hasExpandedPane(ui: WorkspacePrefs): boolean {
-  // Solo Chat expands inside its original right-hand stage. Full-workspace
-  // focus mode belongs to the two-pane Tools layout only.
-  return ui.toolsOpen && ((ui.chatOpen && ui.expanded) || ui.toolsExpanded);
 }
 
 /** The snippet with each place the words occur marked. */
@@ -155,6 +163,33 @@ function Application() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [visited, setVisited] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The DSH surface: opened from the sidebar, then kept mounted so its page
+  // is never reloaded by closing and reopening the view.
+  const [dshOpen, setDshOpen] = useState(false);
+  const [dshMounted, setDshMounted] = useState(false);
+  useEffect(() => { if (dshOpen) setDshMounted(true); }, [dshOpen]);
+  const dshStatus = useDshStatus();
+  const piEngine = usePiEngine();
+  // Two markets, each in its own window made the same way (user, 29.09).
+  const [market, setMarket] = useState<{ open: MarketKind | null; addByName?: string; addFromFolder?: boolean }>({ open: null });
+  useEffect(() => {
+    // A name alone is the DSH market's, as Settings has always sent it; `{ kind, name }` picks one.
+    const onAdd = (event: Event) => {
+      const detail = (event as CustomEvent<string | { kind?: MarketKind; name?: string }>).detail;
+      if (typeof detail === "string") setMarket({ open: "dsh", addByName: detail });
+      else if (detail && typeof detail.name === "string") setMarket({ open: detail.kind === "pi" ? "pi" : "dsh", addByName: detail.name });
+    };
+    const onFolder = () => setMarket({ open: "dsh", addFromFolder: true });
+    const onOpen = (event: Event) => setMarket({ open: (event as CustomEvent<MarketKind>).detail === "pi" ? "pi" : "dsh" });
+    window.addEventListener("hello:market-add", onAdd);
+    window.addEventListener("hello:market-add-folder", onFolder);
+    window.addEventListener("hello:market-open", onOpen);
+    return () => {
+      window.removeEventListener("hello:market-add", onAdd);
+      window.removeEventListener("hello:market-add-folder", onFolder);
+      window.removeEventListener("hello:market-open", onOpen);
+    };
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [noticeOpen, setNoticeOpen] = useState(false);
@@ -219,9 +254,7 @@ function Application() {
     (conversation) => conversation.id === shell.activeId,
   );
   const ui = shell.workspaces[shell.activeId ?? ""] ?? defaultWorkspacePrefs();
-  const sidebarVisible =
-    !hasExpandedPane(ui) && (shell.sidebar === "shown" ||
-    (shell.sidebar === "auto" && width >= (ui.toolsOpen ? 1280 : 720)));
+  const sidebarVisible = navigationShown(shell.sidebar, ui, width, dshOpen);
   // Hidden navigation keeps only a narrow pointer edge and the native lights.
   const compact = width - (sidebarVisible ? 272 : 4) - 2 < 728;
   const appMessage = error || (launching ? "Opening tool…" : notice);
@@ -450,7 +483,7 @@ function Application() {
       };
     });
   }, []);
-  const updateUI = (id: string, patch: WorkspaceUpdate) =>
+  const updateUI = (id: string, patch: WorkspaceUpdate, motion?: "instant" | "animate") =>
     request((current) => {
       const previous = {
         ...defaultWorkspacePrefs(),
@@ -467,21 +500,60 @@ function Application() {
           },
         },
       };
-    }, typeof patch !== "function" &&
+    }, motion ?? (typeof patch !== "function" &&
       // `split` is a resize the pointer already performed: the splitter writes
       // --chat-share live, so animating the commit replays a reveal over
       // geometry that never changed. Selection is not a layout transition either.
-      Object.keys(patch).every(key => ["chatTab", "toolId", "focus", "split"].includes(key))
-      ? "instant" : "animate");
+      Object.keys(patch).every(key => ["chatTab", "chatTerminal", "toolId", "focus", "split"].includes(key))
+      ? "instant" : "animate"));
+  /**
+   * A chat tab outlives its terminal (user, 30.09: "trebuie să persiste
+   * cli-urile setate ca main chat"). When a chat is shown whose tab has no
+   * running terminal — the app was restarted — it is given one again: the
+   * same CLI, continuing its conversation where that CLI can (Claude Code, Pi).
+   */
+  // Once per tab and app run: an animated layout update is written only after
+  // its animation, and a tab that still named its old terminal meanwhile was
+  // given a new one on every render — eight copies of one Pi session (user,
+  // 30.09). The new name is written at once, and a tab is never relaunched twice.
+  const relaunched = useRef(new Set<string>());
+  const activeTabs = shell.activeId ? shell.workspaces[shell.activeId]?.chatTerminals : undefined;
+  useEffect(() => {
+    const conversationId = shell.activeId;
+    if (!boot || !conversationId || !activeTabs?.length) return;
+    const live = new Set(boot.terminals.map(session => session.id));
+    for (const tab of activeTabs) {
+      if (live.has(tab.id) || relaunched.current.has(tab.id)) continue;
+      relaunched.current.add(tab.id);
+      // The same conversation of that CLI already running: that one, not another.
+      const running = tab.session
+        ? boot.terminals.find(session => session.conversationId === conversationId && session.session === tab.session && session.status === "running")
+        : undefined;
+      void (running ? Promise.resolve(running) : api.terminal.create(conversationId, tab.workerId, tab.session)).then(session => {
+        if (!running) setBoot(current => current ? { ...current, terminals: put(current.terminals, session) } : current);
+        updateUI(conversationId, current => ({
+          chatTerminals: (current.chatTerminals ?? []).map(item => item.id === tab.id
+            ? { ...item, id: session.id, ...(session.session ? { session: session.session } : {}) } : item),
+          ...(current.chatTerminal === tab.id ? { chatTerminal: session.id } : {}),
+        }), "instant");
+      }, reason => {
+        // A CLI that cannot come back (uninstalled, say) leaves the chat pane.
+        updateUI(conversationId, current => ({
+          chatTerminals: (current.chatTerminals ?? []).filter(item => item.id !== tab.id),
+          ...(current.chatTerminal === tab.id ? { chatTerminal: null } : {}),
+        }), "instant");
+        reportError(reason);
+      });
+    }
+  }, [boot?.terminals, shell.activeId, activeTabs]);
   const toggleSidebarPin = () => request(current => {
     const id = current.activeId;
     const currentUI = current.workspaces[id ?? ""] ?? defaultWorkspacePrefs();
-    const expanded = hasExpandedPane(currentUI);
-    const visible = !expanded && (current.sidebar === "shown" ||
-      (current.sidebar === "auto" && width >= (currentUI.toolsOpen ? 1280 : 720)));
+    // Over the DSH surface, the chat's focus mode is not what hides the sidebar.
+    const expanded = !dshOpen && hasExpandedPane(currentUI);
     return {
       ...current,
-      sidebar: visible ? "hidden" : "shown",
+      sidebar: navigationShown(current.sidebar, currentUI, width, dshOpen) ? "hidden" : "shown",
       // Pinning navigation exits focus mode; ordinary Restore keeps
       // the previous sidebar preference because expanding never overwrites it.
       workspaces: expanded && id ? {
@@ -492,6 +564,9 @@ function Application() {
   });
   const select = (id: string) => {
     setError(null);
+    // Asking for a chat — from the list, New chat, a notification — is
+    // leaving the DSH surface for it; behind the surface it would not show.
+    setDshOpen(false);
     request((current) => ({ ...current, activeId: id }));
   };
   // Who is looking at what, for the moment something becomes news.
@@ -554,6 +629,19 @@ function Application() {
   const selectRef = useRef(select);
   selectRef.current = select;
   useEffect(() => api.system.onFocusConversation?.((id) => selectRef.current(id)) ?? (() => {}), []);
+  // A web link from the DSH surface opens in a browser tab of the chat on
+  // screen, as any link the person follows would; with no chat, in the system browser.
+  const openLinkRef = useRef<(url: string) => void>(() => {});
+  openLinkRef.current = (url: string) => {
+    const conversation = active;
+    if (!conversation) { void api.system.openExternal(url).catch(reportError); return; }
+    void api.browser.create(conversation.id, url).then((tab) => {
+      setBoot((current) => current ? { ...current, browsers: put(current.browsers, tab) } : current);
+      updateUI(conversation.id, { toolsOpen: true, toolsMinimized: false, expanded: false, toolId: tab.id, focus: "tools" });
+      setDshOpen(false);
+    }).catch(reportError);
+  };
+  useEffect(() => api.dsh?.onOpenLink((url) => openLinkRef.current(url)) ?? (() => {}), []);
   const newChat = async () => {
     try {
       const conversation = await api.conversations.create();
@@ -570,6 +658,11 @@ function Application() {
       reportError(reason);
     }
   };
+  // ⌘N and ⌘B from the app menu (user, 04.10, the design audit): what the
+  // New chat button and the sidebar's pin do, wherever focus is.
+  const menuRef = useRef<(action: 'new-chat' | 'toggle-sidebar') => void>(() => {});
+  menuRef.current = (action) => { if (action === 'new-chat') void newChat(); else toggleSidebarPin(); };
+  useEffect(() => api.system.onMenu?.((action) => menuRef.current(action)) ?? (() => {}), []);
   const launch = async (
     conversation: Conversation,
     kind: "browser" | "terminal",
@@ -579,13 +672,10 @@ function Application() {
     setLaunching(true);
     setError(null);
     try {
-      if (kind === "terminal" && !conversation.folder) {
-        const folder = await api.system.chooseFolder();
-        if (!folder) return;
-        changeConversation(
-          await api.conversations.update(conversation.id, { folder }),
-        );
-      }
+      // A terminal or CLI starts in the chat's folder, or in the home folder
+      // when the chat has none (main decides, terminal/service.ts). It never
+      // asks for a folder first: a dialog in the way of every launch read as a
+      // launch that did not happen (user, 29.09). The folder button sets one.
       const tool =
         kind === "browser"
           ? await api.browser.create(conversation.id)
@@ -639,19 +729,26 @@ function Application() {
             }
           : current,
       );
+      // A chat tab leaves the chat pane; what Tools shows is not its business.
+      const inChat = (shell.workspaces[tool.conversationId]?.chatTerminals ?? []).map(tab => tab.id);
       const remaining = [
         ...(boot?.browsers ?? []),
         ...(boot?.terminals ?? []),
         ...(shell.workspaces[tool.conversationId]?.filesOpen ? [{ id: filesTabId(tool.conversationId), conversationId: tool.conversationId }] : []),
       ].filter(
         (row) =>
-          row.conversationId === tool.conversationId && row.id !== tool.id,
+          row.conversationId === tool.conversationId && row.id !== tool.id && !inChat.includes(row.id),
       );
-      updateUI(tool.conversationId, {
-        toolId: ("url" in tool && tool.openerId
-          ? remaining.find(row => row.id === tool.openerId)?.id : undefined) ?? remaining[0]?.id ?? null,
-        ...(remaining.length ? {} : { toolsOpen: false, toolsMinimized: false, toolsExpanded: false }),
-      });
+      updateUI(tool.conversationId, inChat.includes(tool.id)
+        ? current => ({
+            chatTerminals: (current.chatTerminals ?? []).filter(tab => tab.id !== tool.id),
+            ...(current.chatTerminal === tool.id ? { chatTerminal: null } : {}),
+          })
+        : {
+            toolId: ("url" in tool && tool.openerId
+              ? remaining.find(row => row.id === tool.openerId)?.id : undefined) ?? remaining[0]?.id ?? null,
+            ...(remaining.length ? {} : { toolsOpen: false, toolsMinimized: false, toolsExpanded: false }),
+          });
       setEnding(null);
     } catch (reason) {
       reportError(reason);
@@ -825,12 +922,12 @@ function Application() {
                 <div
                   className="chat-list-row"
                   key={conversation.id}
-                  data-selected={shell.activeId === conversation.id}
+                  data-selected={!dshOpen && shell.activeId === conversation.id}
                 >
                   <button
                     className="chat-list-select"
                     aria-current={
-                      shell.activeId === conversation.id ? "page" : undefined
+                      !dshOpen && shell.activeId === conversation.id ? "page" : undefined
                     }
                     onClick={() => open(conversation.id)}
                   >
@@ -854,27 +951,8 @@ function Application() {
                   <MenuButton
                     label={`Actions for ${conversation.title}`}
                     items={[
-                      // The shared pages are switched here, in the menu, not on
-                      // the pages themselves: a page that is off is gone from
-                      // the UI, so it cannot carry its own switch (user, 20.09).
-                      ...([
-                        { id: 'runbook' as const, label: 'Runbook', on: conversation.runbook !== false },
-                        { id: 'tasks' as const, label: 'Tasks', on: conversation.tasks !== false },
-                        { id: 'planning' as const, label: 'Plan', on: conversation.planning === true },
-                      ]).map(page => ({
-                        id: `page:${page.id}`,
-                        label: `${page.label}: ${page.on ? 'on' : 'off'}`,
-                        icon: page.id === 'runbook' ? BookOpen : page.id === 'tasks' ? ListTodo : ListChecks,
-                        checked: page.on,
-                        stayOpen: true,
-                        action: () => {
-                          void api.conversations
-                            .update(conversation.id, { [page.id]: !page.on })
-                            .then(changeConversation)
-                            .catch(reportError);
-                        },
-                      })),
-                      { id: 'pages-separator', label: '', separator: true },
+                      // Runbooks, Tasks and Plans are switched in the notebook
+                      // itself, where they stay visible when off (user, 29.09).
                       {
                         id: "rename",
                         label: "Rename",
@@ -931,6 +1009,29 @@ function Application() {
             )}
           </nav>
           <div className="sidebar-footer">
+            {(api.market || (api as Partial<typeof api>).piMarket) && (
+              <MenuButton className="sidebar-settings" label="Plugin Market" menuLabel="Plugin Market" align="start"
+                items={[
+                  { id: "dsh", label: "DSH", icon: Blocks, detail: "DeepSeek Harness plugins, from sources you choose", disabled: !api.market, action: () => setMarket({ open: "dsh" }) },
+                  { id: "pi", label: "Pi", icon: Package, detail: "Pi packages: extensions, skills and prompt templates", disabled: !(api as Partial<typeof api>).piMarket, action: () => setMarket({ open: "pi" }) },
+                ]}>
+                <Store size={16} aria-hidden /> Plugin Market
+              </MenuButton>
+            )}
+            {api.dsh && (
+              <EngineRow icon={Blocks} name="DSH" mark={<span className="dsh-dot" data-state={dshStatus?.state} aria-hidden />}
+                open={{ pressed: dshOpen, title: "DeepSeek Harness plugins, in Hello.", onClick: () => setDshOpen((value) => !value) }}
+                version={dshStatus?.installedVersion ? dshStatus.version : undefined} bundled={dshStatus?.bundledVersion}
+                latest={dshStatus?.latest} updating={dshStatus?.state === "installing"} error={dshStatus?.updateError}
+                onUpdate={() => void api.dsh?.update?.().catch(reportError)}
+                onBack={() => void api.dsh?.useBundled?.().catch(reportError)} />
+            )}
+            {api.piEngine && piEngine && (
+              <EngineRow icon={Cpu} name="Pi" version={piEngine.version} bundled={piEngine.bundled} latest={piEngine.latest}
+                updating={piEngine.state === "updating"} error={piEngine.state === "failed" ? piEngine.message : undefined}
+                onUpdate={() => void api.piEngine?.update().catch(reportError)}
+                onBack={() => void api.piEngine?.useBundled().catch(reportError)} />
+            )}
             <button type="button" className="sidebar-settings" onClick={() => setSettingsOpen(true)}>
               <Settings size={16} /> Settings
             </button>
@@ -944,7 +1045,7 @@ function Application() {
             .map((conversation) => (
               <Workspace
                 key={conversation.id}
-                active={shell.activeId === conversation.id}
+                active={!dshOpen && shell.activeId === conversation.id}
                 conversation={conversation}
                 ui={
                   shell.workspaces[conversation.id] ?? defaultWorkspacePrefs()
@@ -995,6 +1096,7 @@ function Application() {
                     minimized: false,
                     toolsExpanded: false,
                     chatTab: "chat",
+                    chatTerminal: null,
                     focus: "chat",
                   });
                 }}
@@ -1012,6 +1114,7 @@ function Application() {
           <section
             className="workspace empty-workspace"
             data-surface-rim="top-right"
+            hidden={dshOpen}
           >
             <div className="welcome">
               <MessageCircle size={28} />
@@ -1034,6 +1137,14 @@ function Application() {
             </div>
           </section>
         )}
+        {dshMounted && <DshView open={dshOpen} onClose={() => setDshOpen(false)} onOpenMarket={() => setMarket({ open: "dsh" })}
+          sidebarHidden={!sidebarVisible} onShowSidebar={toggleSidebarPin} />}
+        {(["dsh", "pi"] as const).map(kind => (
+          <MarketDialog key={kind} kind={kind} open={market.open === kind}
+            addByName={market.open === kind ? market.addByName : undefined}
+            addFromFolder={market.open === kind && market.addFromFolder}
+            onClose={() => setMarket({ open: null })} />
+        ))}
       </main>
       <Dialog
         open={noticeOpen && !!appMessage}
@@ -1138,7 +1249,7 @@ function Application() {
             checked={resetNotes}
             onChange={(event) => setResetNotes(event.target.checked)}
           />
-          Also delete its Runbook and Tasks
+          Also delete its notebook (Runbooks, Tasks and Plans)
         </label>
         <ErrorNote error={error} />
         <div className="dialog-actions">

@@ -71,7 +71,10 @@ vi.mock("electron", async () => {
     downloadURL = vi.fn();
     setWindowOpenHandler = vi.fn();
     isDestroyed = () => this.destroyed;
-    isLoading = () => this.loading;
+    /** Frames still loading after the page itself has (an ad's). */
+    framesLoading = false;
+    isLoading = () => this.loading || this.framesLoading;
+    isLoadingMainFrame = () => this.loading;
     getURL = () => this.url;
     getTitle = () => this.title;
     loadURL = vi.fn(async (url: string) => {
@@ -138,6 +141,7 @@ type FakeGuest = EventEmitter & {
   hostWebContents: unknown;
   destroyed: boolean;
   loading: boolean;
+  framesLoading: boolean;
   url: string;
   mainFrame: {
     executeJavaScript: ReturnType<typeof vi.fn<(code: string) => Promise<unknown>>>;
@@ -622,6 +626,61 @@ describe("native browser lifecycle and grants", () => {
     expect(guest.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/preview");
     expect(guest.mainFrame.executeJavaScript).not.toHaveBeenCalled();
     await expect(f.manager.read(opened.id, "chat")).rejects.toThrow(/Off/);
+  });
+
+  // The model does not open a page just to have it open; it opens it to read
+  // it and act in it (user, 29.09: "fă-l AI mode Full … read-write").
+  it("starts a tab the model opens for its work at Full, readable at once", async () => {
+    const f = fixture();
+    const opening = f.manager.agentOpen("chat", "https://example.com/work", undefined, { grant: true });
+    f.attach(f.manager.list("chat")[0].id);
+    const opened = await opening;
+    expect(opened).toMatchObject({ control: "full", agentGranted: true });
+    expect(f.lifecycle).toHaveBeenCalledWith(expect.objectContaining({ type: "opened", tab: expect.objectContaining({ control: "full" }) }));
+    // The human changing the control makes it theirs.
+    expect(f.manager.control(opened.id, "read")).toMatchObject({ control: "read", agentGranted: undefined });
+  });
+
+  it("keeps a preview the model opened at Full through an anchor and as it navigates, like any tab it opened", async () => {
+    const f = fixture();
+    const opening = f.manager.agentOpen("chat", "http://127.0.0.1:4321/token/report.html", undefined,
+      { sessionOnly: true, isolated: true, source: "docs/report.html", grant: true });
+    const id = f.manager.list("chat")[0].id;
+    f.attach(id);
+    expect(await opening).toMatchObject({ control: "full", source: "docs/report.html" });
+    await f.manager.navigate(id, "http://127.0.0.1:4321/token/report.html#part-2");
+    expect(f.manager.list("chat")[0]).toMatchObject({ control: "full", source: "docs/report.html" });
+    await f.manager.navigate(id, "http://127.0.0.1:4321/token/other.html");
+    expect(f.manager.list("chat")[0].control).toBe("full");
+    await f.manager.navigate(id, "https://example.com/away");
+    expect(f.manager.list("chat")[0].control).toBe("full");
+  });
+
+  it("keeps the model's Full out of the database, so a restart brings that tab back Off", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "hello-browser-grant-"));
+    const store = createDataStore(directory, codec);
+    try {
+      const chat = store.createConversation("Chat").id;
+      const persist = { save: (tab: BrowserTab) => store.saveBrowserTab(tab), remove: (id: string) => store.deleteBrowserTab(id), exists: (id: string) => id === chat };
+      const first = fixture({ persist });
+      const opening = first.manager.agentOpen(chat, "https://example.com/work", undefined, { grant: true });
+      const modelTab = first.manager.list(chat)[0].id;
+      first.attach(modelTab);
+      await opening;
+      const human = first.manager.create(chat, "https://example.com/mine");
+      first.attach(human.id);
+      first.manager.control(human.id, "full");
+      expect(first.manager.list(chat).find(tab => tab.id === modelTab)?.control).toBe("full");
+      const rows = store.listBrowserTabs();
+      expect(rows.find(row => row.id === modelTab)?.control).toBe("off");
+      expect(rows.find(row => row.id === human.id)?.control).toBe("full");
+      const next = fixture({ initial: rows, persist });
+      expect(next.manager.list(chat).find(tab => tab.id === modelTab)?.control).toBe("off");
+      expect(next.manager.list(chat).find(tab => tab.id === human.id)?.control).toBe("full");
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("opens a new Off tab without changing an existing tab's URL or grant", async () => {
@@ -1343,6 +1402,24 @@ describe("agent pointer and screenshot", () => {
 // where that is — a DOM click left a menu that opens on pointerdown shut, and
 // the model went on to guess pixels (user, 24.09: Neon's invoice menu).
 describe("an element named by its words or its ref", () => {
+  it("acts on a page whose frames an ad keeps loading: the page itself has loaded", async () => {
+    // eBay (user, 30.09): its ads never stopped loading frames, so every click,
+    // scroll and wait for the load was refused as "still loading".
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "full");
+    const guest = guestAt();
+    guest.framesLoading = true;
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'button "Decline all"', x: 320, y: 437 });
+    await expect(f.manager.agentAction("chat", tab.id, "click", { label: "Decline all" }))
+      .resolves.toBe('Clicked button "Decline all" at (320, 437).');
+    await expect(f.manager.agentWait("chat", tab.id, { load: true, timeoutMs: 2_000 }))
+      .resolves.toMatch(/^Waited 0\.0 s: the page to finish loading — there now/);
+    // The page's own load still holds everything back.
+    guest.loading = true;
+    await expect(f.manager.agentAction("chat", tab.id, "click", { label: "Decline all" })).rejects.toThrow(/finish loading/);
+  });
+
   it("asks the page where the control is, then clicks there for real, and says so", async () => {
     const f = fixture();
     const tab = f.open();
@@ -1788,5 +1865,247 @@ describe("a page offering a download", () => {
     expect(safeFileName("...")).toBe("download");
     expect(safeFileName("")).toBe("download");
     expect(safeFileName("bad\u0000name\u001f.txt")).toBe("badname.txt");
+  });
+});
+
+// "A pointer for agents" (user, 30.09): after finding something, the agent
+// marks where the person should look. It reads and draws over: Read is enough.
+describe("marks for the person", () => {
+  it("draws where the elements are at Read, scrolls only at Full, and clears with an empty list", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'link "Mac Studio M3 Ultra"', left: 40, top: 300, width: 320, height: 90, inView: true });
+    const said = await f.manager.agentMark("chat", tab.id, [{ target: { label: "Mac Studio M3 Ultra" }, note: "Cheapest: $3,500" }]);
+    expect(said).toContain('#1 link "Mac Studio M3 Ultra" — Cheapest: $3,500');
+    expect(said).not.toContain("out of view");
+    const measured = String(guest.mainFrame.executeJavaScript.mock.calls.at(-1)?.[0]);
+    expect(measured).toContain('find({"label":"Mac Studio M3 Ultra"})');
+    expect(measured).not.toContain("scrollIntoView");
+    const drawn = () => guest.executeJavaScriptInIsolatedWorld.mock.calls.at(-1) as unknown as [number, Array<{ code: string }>];
+    expect(drawn()[0]).toBe(1207);
+    expect(drawn()[1][0].code).toContain('.hints([{"n":1,"left":40,"top":300,"width":320,"height":90,"note":"Cheapest: $3,500"}])');
+    // Off: nothing is measured or drawn.
+    const before = guest.mainFrame.executeJavaScript.mock.calls.length;
+    f.manager.control(tab.id, "off");
+    await expect(f.manager.agentMark("chat", tab.id, [{ target: { label: "Buy" }, note: "here" }])).rejects.toThrow(/Off/);
+    expect(guest.mainFrame.executeJavaScript.mock.calls.length).toBe(before);
+    // Full: the first one is scrolled into view; one out of view is said.
+    f.manager.control(tab.id, "full");
+    guest.mainFrame.executeJavaScript
+      .mockResolvedValueOnce({ what: 'button "Buy It Now"', left: 10, top: 200, width: 90, height: 30, inView: true })
+      .mockResolvedValueOnce({ what: 'link "Seller"', left: 10, top: 2400, width: 60, height: 20, inView: false });
+    const two = await f.manager.agentMark("chat", tab.id, [
+      { target: { label: "Buy It Now" }, note: "Buy here" }, { target: { label: "Seller" }, note: "Seller rating" },
+    ]);
+    const calls = guest.mainFrame.executeJavaScript.mock.calls.slice(-2).map(call => String(call[0]));
+    expect(calls[0]).toContain("scrollIntoView");
+    expect(calls[1]).not.toContain("scrollIntoView");
+    expect(two).toContain("#2 is out of view");
+    await expect(f.manager.agentMark("chat", tab.id, [])).resolves.toBe("Cleared your marks on this page.");
+    expect(drawn()[1][0].code).toContain(".clearHints()");
+  });
+});
+
+// Marks belong to the page that made them (user, 30.09: "tie them to the link
+// that generated them, until reset"): saved with the tab page by page, shown
+// again when the tab comes back to that page, gone at the person's reload or reset.
+describe("marks kept with their page", () => {
+  type Script = Array<{ code: string }>;
+  const calls = (guest: FakeGuest, piece: string) =>
+    guest.executeJavaScriptInIsolatedWorld.mock.calls.filter(call => String((call[1] as Script)[0].code).includes(piece)).length;
+  /** A page that draws what it is asked to and answers the watch when told. */
+  function page(guest: FakeGuest) {
+    const state: { answer: (value: unknown) => void } = { answer: () => {} };
+    guest.executeJavaScriptInIsolatedWorld.mockImplementation((async (_world: number, scripts: Script) => {
+      const code = scripts[0].code;
+      if (code.includes(".hintsWait(")) return new Promise(resolve => { state.answer = resolve; });
+      const drawn = /\.hints\((\[[\s\S]*\])\)/.exec(code);
+      if (drawn) return (JSON.parse(drawn[1]) as Array<Record<string, unknown>>).map((mark, index) => ({
+        n: mark.n ?? index + 1, note: mark.note, x: mark.x ?? mark.left, y: mark.y ?? mark.top, width: mark.width, height: mark.height, ...(mark.path ? { path: mark.path } : {}),
+      }));
+      return guest.viewport;
+    }) as never);
+    return state;
+  }
+  async function marked(f: ReturnType<typeof fixture>, tabId: string, guest: FakeGuest) {
+    guest.mainFrame.executeJavaScript
+      .mockResolvedValueOnce({ what: 'link "Mac"', left: 40, top: 300, width: 320, height: 90, inView: true, path: "#mac" })
+      .mockResolvedValueOnce({ what: 'link "Seller"', left: 40, top: 500, width: 100, height: 20, inView: true, path: "#seller" });
+    await f.manager.agentMark("chat", tabId, [{ target: { label: "Mac" }, note: "Cheapest" }, { target: { label: "Seller" }, note: "Seller" }]);
+  }
+
+  it("are kept for their page, follow what the person keeps, and come back when the tab returns to it", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    const watch = page(guest);
+    await marked(f, tab.id, guest);
+    const pages = () => f.manager.list().find(item => item.id === tab.id)?.marks;
+    const first = pages()![0];
+    expect(first.marks.map(mark => [mark.n, mark.note, mark.path])).toEqual([[1, "Cheapest", "#mac"], [2, "Seller", "#seller"]]);
+    expect(f.save.mock.calls.at(-1)?.[0].marks).toEqual(pages());
+    // The person puts #1 away; #2's element has moved since.
+    await vi.waitFor(() => expect(calls(guest, ".hintsWait(")).toBeGreaterThan(0));
+    watch.answer([{ n: 2, x: 40, y: 620, width: 100, height: 20 }]);
+    await vi.waitFor(() => expect(pages()![0].marks).toEqual([{ ...first.marks[1], y: 620 }]));
+    // Another page: the first keeps its marks for later.
+    guest.url = "https://example.com/other";
+    guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false, url: guest.url });
+    guest.emit("dom-ready");
+    expect(pages()!.map(item => item.url)).toEqual([first.url]);
+    // Back to it: they are drawn there again.
+    const drawnBefore = calls(guest, ".hints(");
+    guest.url = first.url;
+    guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false, url: first.url });
+    guest.emit("dom-ready");
+    await vi.waitFor(() => expect(calls(guest, ".hints(")).toBe(drawnBefore + 1));
+    expect(pages()![0].marks.map(mark => mark.path)).toEqual(["#seller"]);
+  });
+
+  it("go at the person's reload, or when the page reports none left", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    const watch = page(guest);
+    await marked(f, tab.id, guest);
+    const pages = () => f.manager.list().find(item => item.id === tab.id)?.marks;
+    // A double click on the bubble: the page has none left.
+    await vi.waitFor(() => expect(calls(guest, ".hintsWait(")).toBeGreaterThan(0));
+    watch.answer([]);
+    await vi.waitFor(() => expect(pages()).toBeUndefined());
+    await marked(f, tab.id, guest);
+    expect(pages()).toHaveLength(1);
+    f.manager.action(tab.id, "reload");
+    expect(pages()).toBeUndefined();
+  });
+
+  it("give way to an address's own in a page that does not reload, and stay for a #section", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    page(guest);
+    await marked(f, tab.id, guest);
+    const pages = () => f.manager.list().find(item => item.id === tab.id)?.marks;
+    const url = pages()![0].url;
+    const cleared = () => calls(guest, ".clearHints()");
+    guest.emit("did-navigate-in-page", {}, `${url}#reviews`, true);
+    expect(cleared()).toBe(0);
+    guest.emit("did-navigate-in-page", {}, "https://example.com/next-result", true);
+    expect(cleared()).toBe(1);
+    // Kept for when the page comes back to that address.
+    expect(pages()!.map(item => item.url)).toEqual([url]);
+    const drawnBefore = calls(guest, ".hints(");
+    guest.emit("did-navigate-in-page", {}, url, true);
+    await vi.waitFor(() => expect(calls(guest, ".hints(")).toBe(drawnBefore + 1));
+  });
+
+  it("come back with a restored tab, on their page", async () => {
+    const url = "https://www.ebay.com/sch/i.html?_nkw=ipad";
+    const saved: BrowserTab = {
+      id: "restored", conversationId: "chat", title: "eBay", url, control: "off", loading: false, progress: null, canGoBack: false, canGoForward: false,
+      marks: [{ url, marks: [{ n: 1, note: "Cheapest", x: 40, y: 1300, width: 320, height: 90, path: "#mac" }] }],
+    };
+    const f = fixture([saved]);
+    const { guest } = f.attach("restored");
+    page(guest);
+    guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false, url });
+    guest.emit("dom-ready");
+    await vi.waitFor(() => expect(calls(guest, '"path":"#mac"')).toBeGreaterThan(0));
+    expect(f.manager.list().find(item => item.id === "restored")?.marks).toEqual(saved.marks);
+  });
+});
+
+describe("a mark on what moves by itself", () => {
+  it("is refused, with where to mark instead", async () => {
+    const f = fixture();
+    const tab = f.open();
+    f.manager.control(tab.id, "read");
+    const guest = guestAt();
+    guest.mainFrame.executeJavaScript.mockResolvedValueOnce({ what: 'link "Emil Design Engineering"', left: 600, top: 110, width: 177, height: 21, inView: true, moving: true });
+    await expect(f.manager.agentMark("chat", tab.id, [{ target: { label: "Emil Design Engineering" }, note: "Top 2" }]))
+      .rejects.toThrow(/#1 link "Emil Design Engineering" moves by itself[\s\S]*where it stands still/);
+    expect(guest.executeJavaScriptInIsolatedWorld.mock.calls.some(call => String((call[1] as Array<{ code: string }>)[0].code).includes(".hints("))).toBe(false);
+  });
+});
+
+
+// A letter short of the site, "smarbill.ro" ended in "Could not load
+// smarbill.ro." — where any browser would have searched it (user, 30.09).
+describe("a typed name no site answers to", () => {
+  const search = "https://www.google.com/search?q=smarbill.ro";
+  /** What Chromium reports for a name DNS does not know: the event, then the load's rejection. */
+  const unknownName = (guest: FakeGuest, url: string) => {
+    guest.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", url, true);
+    return Object.assign(new Error(`ERR_NAME_NOT_RESOLVED (-105) loading '${url}'`), { errno: -105, code: "ERR_NAME_NOT_RESOLVED" });
+  };
+  /** A page whose history is like Chromium's, where a failed load leaves an entry of its own. */
+  const opened = async () => {
+    const f = fixture();
+    const tab = f.open();
+    await flush();
+    const guest = guestAt();
+    const entries = [guest.url];
+    const unknown = new Set(["smarbill.ro"]);
+    let active = 0;
+    Object.assign(guest, { navigationHistory: {
+      canGoBack: () => active > 0,
+      canGoForward: () => active < entries.length - 1,
+      goBack: vi.fn(),
+      goForward: vi.fn(),
+      getActiveIndex: () => active,
+      getEntryAtIndex: (index: number) => ({ url: entries[index], title: "" }),
+      removeEntryAtIndex: (index: number) => {
+        if (index === active) return false;
+        entries.splice(index, 1);
+        if (index < active) active--;
+        return true;
+      },
+    } });
+    guest.loadURL.mockImplementation(async (url: string) => {
+      guest.url = url;
+      entries.splice(active + 1, Infinity, url);
+      active = entries.length - 1;
+      if (unknown.has(new URL(url).hostname)) throw unknownName(guest, url);
+    });
+    guest.loadURL.mockClear();
+    f.emit.mockClear();
+    return { f, tab, guest, entries, unknown };
+  };
+  const loads = (guest: FakeGuest) => guest.loadURL.mock.calls.map(([url]) => url);
+  const errors = (f: ReturnType<typeof fixture>) => f.emit.mock.calls.map(([tab]) => (tab as BrowserTab).error).filter(Boolean);
+
+  it("is searched for instead, and Back skips the name that failed", async () => {
+    const { f, tab, guest, entries } = await opened();
+    await f.manager.navigate(tab.id, "smarbill.ro");
+    expect(loads(guest)).toEqual(["https://smarbill.ro/", search]);
+    expect(f.manager.list()[0]).toMatchObject({ url: search, error: null, canGoBack: true });
+    // No error on the way to the results, not even for a frame.
+    expect(errors(f)).toEqual([]);
+    expect(entries).toEqual(["https://example.com/", search]);
+  });
+
+  it("fails as before for the model, for an address given with its scheme, and when the search cannot load either", async () => {
+    const { f, tab, guest, unknown } = await opened();
+    await expect(f.manager.navigate(tab.id, "smarbill.ro", undefined, "chat")).rejects.toThrow("Could not load smarbill.ro.");
+    await expect(f.manager.navigate(tab.id, "https://smarbill.ro")).rejects.toThrow("Could not load smarbill.ro.");
+    expect(loads(guest)).toEqual(["https://smarbill.ro/", "https://smarbill.ro/"]);
+    // The load reports its own failure, once, in words — not Chromium's code first.
+    expect(errors(f)).toEqual(["Could not load smarbill.ro.", "Could not load smarbill.ro."]);
+    unknown.add("www.google.com");
+    guest.loadURL.mockClear();
+    await expect(f.manager.navigate(tab.id, "smarbill.ro")).rejects.toThrow("Could not load www.google.com.");
+    expect(loads(guest)).toEqual(["https://smarbill.ro/", search]);
+  });
+
+  it("leaves a failure the page itself ran into to the page's own error", async () => {
+    const { f, guest } = await opened();
+    guest.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "https://gone.example.org/", true);
+    expect(f.manager.list()[0]).toMatchObject({ url: "https://gone.example.org/", error: "ERR_NAME_NOT_RESOLVED" });
+    expect(guest.loadURL).not.toHaveBeenCalled();
   });
 });

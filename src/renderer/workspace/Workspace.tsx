@@ -1,12 +1,13 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import {
+  ArrowRightToLine,
   BookOpen,
   Bot,
   ChevronUp,
   CodeXml,
   Globe,
   FolderOpen,
-  ListTodo,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -30,7 +31,6 @@ import type {
 } from "../../shared/types";
 import { ConversationView } from "../chat/ConversationView";
 import { Notebook } from "../notebook/Notebook";
-import { PlanSwitch } from "./PlanSwitch";
 import { BrowserPane } from "../browser/BrowserPane";
 import type { FindJump } from "../chat/ChatFind";
 import { TerminalPane } from "../terminal/TerminalPane";
@@ -39,22 +39,34 @@ import { FilesPane, type FileRequest } from '../files/FilesPane';
 import { FileNavigation } from '../files/navigation';
 import { filesTabId, type FileLink, type FilesTab } from '../../shared/files';
 import {
+  ContextMenu,
   IconButton,
   MenuButton,
   type MenuItem,
 } from "../ui/primitives";
 import { api } from '../api';
 
-const CHAT_PAGES = ["chat", "runbook", "tasks"] as const;
 /**
- * Which pages this chat shows. A shared page the human switched off is gone
- * from the UI entirely — it is switched back on from the chat's menu, not from
- * a tab that is no longer there (user, 20.09).
+ * A chat has two pages: the conversation and its notebook — one pill beside
+ * Chat, not one per section (user, 29.09). The notebook's sections (Runbooks,
+ * Tasks, Plans) and their chapters are switched inside it, never by hiding it.
  */
-export function chatPagesFor(
-  conversation: { runbook?: boolean; tasks?: boolean },
-): ReadonlyArray<(typeof CHAT_PAGES)[number]> {
-  return CHAT_PAGES.filter(kind => kind === "chat" || conversation[kind] !== false);
+export const CHAT_PAGES = ["chat", "notebook"] as const;
+export type ChatPage = (typeof CHAT_PAGES)[number];
+/** A page saved before the notebook was one: Runbook and Tasks open the notebook. */
+export function normalizeChatTab(value: unknown): ChatPage {
+  return value === "runbook" || value === "tasks" || value === "notebook" ? "notebook" : "chat";
+}
+
+/**
+ * A terminal moved into the chat pane: the one running now, and what brings
+ * it back after a restart (user, 30.09: "trebuie să persiste") — which CLI,
+ * and the conversation of it to continue where the CLI can.
+ */
+export interface ChatTerminalTab {
+  id: string;
+  workerId?: WorkerId;
+  session?: string;
 }
 
 export interface WorkspacePrefs {
@@ -67,7 +79,19 @@ export interface WorkspacePrefs {
   expanded: boolean;
   toolsMinimized: boolean;
   toolsExpanded: boolean;
-  chatTab: "chat" | "runbook" | "tasks";
+  chatTab: ChatPage;
+  /**
+   * Terminals moved into the chat pane (user, 30.09: "Set as chat tab", a CLI
+   * as the chat), each a page beside Chat and Notebook. A terminal lives as
+   * long as the app; its tab does not, and is given a new one after a restart.
+   *
+   * One truth for where a terminal is: listed here it is the chat's, and the
+   * Tools strip leaves it out (`dockedIds`); "Move to tools" takes it off this
+   * list. A restart brings back what is listed here, in the chat pane.
+   */
+  chatTerminals?: ChatTerminalTab[];
+  /** Which of them the chat pane shows now; unset, it shows `chatTab`. Never a list of its own. */
+  chatTerminal?: string | null;
   // Retained for saved-preference compatibility; notebook sections are permanent.
   notebookTabs: Array<"runbook" | "tasks">;
   toolId: string | null;
@@ -121,39 +145,67 @@ export function Workspace(props: WorkspaceProps) {
   const { conversation, ui, active, compact, onUI } = props;
   const modeLabel = conversation.chatMode === 'coder' ? 'Coder' : 'Chat';
   const ModeIcon = conversation.chatMode === 'coder' ? CodeXml : MessageCircle;
-  const pageLabels = { chat: modeLabel, runbook: 'Runbook', tasks: 'Tasks' };
+  const pageLabels = { chat: modeLabel, notebook: 'Notebook' };
   const body = useRef<HTMLDivElement>(null);
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
   const [choosingWorker, setChoosingWorker] = useState(false);
-  // A page tab carries a dot while its notebook holds something, so a plan the
-  // agent wrote is visible without opening the page.
-  const [filledPages, setFilledPages] = useState<Record<NotebookKind, boolean>>({ runbook: false, tasks: false });
+  // The Notebook pill carries a dot while a section holds something, so a plan
+  // the agent wrote is visible without opening the notebook.
+  const [filled, setFilled] = useState<Record<NotebookKind, boolean>>({ runbook: false, tasks: false, plan: false });
   useEffect(() => {
     let alive = true;
     const refresh = (kind: NotebookKind) => void api.notebooks.list(conversation.id, kind).then(rows => {
       if (!alive) return;
-      const filled = rows.some(row => row.title.trim() !== '' || row.body.trim() !== '');
-      setFilledPages(current => current[kind] === filled ? current : { ...current, [kind]: filled });
+      const has = rows.some(row => row.title.trim() !== '' || row.body.trim() !== '');
+      setFilled(current => current[kind] === has ? current : { ...current, [kind]: has });
     }, () => undefined);
-    setFilledPages({ runbook: false, tasks: false });
+    setFilled({ runbook: false, tasks: false, plan: false });
     refresh('runbook');
     refresh('tasks');
+    refresh('plan');
     const unsubscribe = api.notebooks.onChange?.(event => {
       if (event.conversationId === conversation.id) refresh(event.kind);
     });
     return () => { alive = false; unsubscribe?.(); };
   }, [conversation.id]);
-  const planning = conversation.planning === true;
-  const pages = chatPagesFor(conversation);
-  useEffect(() => {
-    // A page that has just gone cannot stay the one being read.
-    if (ui.chatTab !== "chat" && !pages.includes(ui.chatTab)) onUI({ chatTab: "chat" });
-  }, [pages.join(), ui.chatTab]);
+  const hasEntries = filled.runbook || filled.tasks || filled.plan;
+  const pages = CHAT_PAGES;
   const fileNonce = useRef(0);
   const choosingFolder = useRef(false);
   const dragSplit = useRef<number | null>(null);
   const filesTool: FilesTab = { id: filesTabId(conversation.id), conversationId: conversation.id, kind: 'files', title: 'Files' };
-  const allTools = [...props.browsers, ...props.terminals, ...(ui.filesOpen ? [filesTool] : [])];
+  // A terminal is in one pane at a time: a chat tab has left the Tools strip.
+  const docked = (ui.chatTerminals ?? []).flatMap(tab => props.terminals.filter(session => session.id === tab.id));
+  const dockedIds = new Set(docked.map(session => session.id));
+  const shownPage: string = docked.find(session => session.id === ui.chatTerminal)?.id ?? ui.chatTab;
+  const pageKeys: string[] = [...pages, ...docked.map(session => session.id)];
+  const [pageMenu, setPageMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const menuSession = docked.find(session => session.id === pageMenu?.id);
+  const allTools = [...props.browsers, ...props.terminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : [])];
+  /**
+   * Each terminal is rendered once, into a node of its own that is moved to
+   * whichever pane holds it. Rendering it in the other pane instead would
+   * build a new xterm on the same PTY and replay its output, which a TUI
+   * does not survive whole. React never manages the node itself, only what
+   * is inside it, so moving it is safe.
+   */
+  const slots = useRef(new Map<string, HTMLDivElement>());
+  const slotFor = (id: string) => {
+    let slot = slots.current.get(id);
+    if (!slot) {
+      slot = document.createElement('div');
+      slot.className = 'terminal-slot';
+      slots.current.set(id, slot);
+    }
+    return slot;
+  };
+  const outlet = (id: string) => (node: HTMLDivElement | null) => {
+    if (node && slotFor(id).parentNode !== node) node.appendChild(slotFor(id));
+  };
+  useEffect(() => {
+    const live = new Set(props.terminals.map(session => session.id));
+    for (const id of slots.current.keys()) if (!live.has(id)) slots.current.delete(id);
+  }, [props.terminals]);
   const chooseFilesFolder = async () => {
     if (choosingFolder.current) return false;
     choosingFolder.current = true;    try {
@@ -176,6 +228,38 @@ export function Workspace(props: WorkspaceProps) {
       onUI({ filesOpen: false, ...(ui.toolId === tool.id ? { toolId: remaining[0]?.id ?? null } : {}),
         ...(!remaining.length ? { toolsOpen: false, toolsMinimized: false, toolsExpanded: false } : {}) });
     } else props.onCloseTool(tool);
+  };
+  /** A terminal becomes a chat tab, and the chat pane shows it. */
+  const dock = (session: TerminalSession) => {
+    const remaining = allTools.filter(tool => tool.id !== session.id);
+    onUI(current => ({
+      chatTerminals: [...(current.chatTerminals ?? []).filter(tab => tab.id !== session.id), {
+        id: session.id, ...(session.workerId ? { workerId: session.workerId } : {}), ...(session.session ? { session: session.session } : {}),
+      }],
+      chatTerminal: session.id, chatOpen: true, minimized: false, toolsExpanded: false, focus: 'chat',
+      ...(current.toolId === session.id || !current.toolId ? { toolId: remaining[0]?.id ?? null } : {}),
+      ...(!remaining.length ? { toolsOpen: false, toolsMinimized: false } : {}),
+    }));
+  };
+  /** And goes back to Tools, selected there. */
+  const undock = (session: TerminalSession) => onUI(current => ({
+    chatTerminals: (current.chatTerminals ?? []).filter(tab => tab.id !== session.id),
+    ...(current.chatTerminal === session.id ? { chatTerminal: null } : {}),
+    toolsOpen: true, toolsMinimized: false, expanded: false, toolId: session.id, focus: 'tools',
+  }));
+  const showPage = (key: string) => onUI({
+    ...(key === 'chat' || key === 'notebook' ? { chatTab: key, chatTerminal: null } : { chatTerminal: key }),
+    focus: 'chat', ...(minimized ? { minimized: false } : {}),
+  });
+  const pageKeyDown = (event: KeyboardEvent<HTMLButtonElement>, key: string): boolean => {
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return false;
+    event.preventDefault();
+    const index = pageKeys.indexOf(key);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? pageKeys.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : -1) + pageKeys.length) % pageKeys.length;
+    showPage(pageKeys[next]);
+    event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+    return true;
   };
   const currentTool =
     allTools.find((tool) => tool.id === ui.toolId) ?? allTools[0];
@@ -371,75 +455,74 @@ export function Workspace(props: WorkspaceProps) {
                     <div
                       className="tab-pill"
                       key={kind}
-                      data-active={ui.chatTab === kind}
-                      data-plan={kind === "tasks" ? (planning ? "on" : "off") : undefined}
+                      data-active={shownPage === kind}
                     >
                       <button
                         type="button"
                         className="chat-page-tab"
                         role="tab"
-                        aria-label={kind !== "chat" && filledPages[kind] ? `${pageLabels[kind]} (has entries)` : pageLabels[kind]}
-                        tabIndex={ui.chatTab === kind ? 0 : -1}
-                        aria-selected={ui.chatTab === kind}
+                        aria-label={kind === "notebook" && hasEntries ? `${pageLabels[kind]} (has entries)` : pageLabels[kind]}
+                        tabIndex={shownPage === kind ? 0 : -1}
+                        aria-selected={shownPage === kind}
                         aria-controls={`${conversation.id}-${kind}`}
-                        onClick={() => onUI({ chatTab: kind, focus: "chat", ...(minimized ? { minimized: false } : {}) })}
-                        onKeyDown={(event) => {
-                          if (
-                            event.key === "ArrowRight" ||
-                            event.key === "ArrowLeft" ||
-                            event.key === "Home" ||
-                            event.key === "End"
-                          ) {
-                            event.preventDefault();
-                            const nextIndex = event.key === "Home"
-                              ? 0
-                              : event.key === "End"
-                                ? pages.length - 1
-                                : (pages.indexOf(kind) +
-                                    (event.key === "ArrowRight" ? 1 : -1) +
-                                    pages.length) % pages.length;
-                            onUI({
-                              ...(minimized ? { minimized: false } : {}),
-                              focus: "chat",
-                              chatTab: pages[nextIndex],
-                            });
-                            event.currentTarget
-                              .closest('[role="tablist"]')
-                              ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]
-                              ?.focus();
-                          }
-                        }}
+                        onClick={() => showPage(kind)}
+                        onKeyDown={(event) => { pageKeyDown(event, kind); }}
                       >
                         {kind === "chat" ? (
                           <ModeIcon size={14} aria-hidden />
-                        ) : kind === "runbook" ? (
-                          <BookOpen size={14} aria-hidden />
                         ) : (
-                          <ListTodo size={14} aria-hidden />
+                          <BookOpen size={14} aria-hidden />
                         )}
-                        {kind !== "chat" && filledPages[kind] && (
+                        {kind === "notebook" && hasEntries && (
                           <span className="chat-page-tab__dot" aria-hidden="true" />
                         )}
                         <span className="chat-page-tab__label" aria-hidden="true">
                           <span>{pageLabels[kind]}</span>
                         </span>
                       </button>
-                      {/* Plan is switched where its steps would land, and
-                        *  nowhere else (user, 18.09). */}
-                      {kind === "tasks" && (
-                        <PlanSwitch
-                          planning={planning}
-                          onChange={next => {
-                            void api.conversations
-                              .update(conversation.id, { planning: next })
-                              .then(props.onConversationChange)
-                              .catch(props.reportError);
-                          }}
-                        />
-                      )}
+                    </div>
+                  ))}
+                  {docked.map(session => (
+                    <div
+                      className="tab-pill"
+                      key={session.id}
+                      data-active={shownPage === session.id}
+                      onContextMenu={event => { event.preventDefault(); setPageMenu({ id: session.id, x: event.clientX, y: event.clientY }); }}
+                    >
+                      <button
+                        type="button"
+                        className="chat-page-tab"
+                        role="tab"
+                        aria-label={`${session.title || 'Terminal'}${session.status === 'exited' ? ' — Session ended' : ''}`}
+                        tabIndex={shownPage === session.id ? 0 : -1}
+                        aria-selected={shownPage === session.id}
+                        aria-controls={`${conversation.id}-terminal-${session.id}`}
+                        onClick={() => showPage(session.id)}
+                        onKeyDown={event => {
+                          if (pageKeyDown(event, session.id)) return;
+                          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                            event.preventDefault();
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setPageMenu({ id: session.id, x: rect.left, y: rect.bottom });
+                          }
+                        }}
+                      >
+                        {session.kind === 'worker' ? <Bot size={14} aria-hidden /> : <Terminal size={14} aria-hidden />}
+                        <span className="chat-page-tab__label" aria-hidden="true">
+                          <span>{session.title || 'Terminal'}</span>
+                        </span>
+                        {session.status === 'exited' && <span className="session-ended" aria-hidden="true" />}
+                      </button>
                     </div>
                   ))}
                 </div>
+                <ContextMenu position={pageMenu && menuSession ? { x: pageMenu.x, y: pageMenu.y } : null}
+                  ariaLabel={menuSession ? `Actions for ${menuSession.title || 'terminal'}` : 'Page actions'}
+                  items={menuSession ? [
+                    { id: 'undock', label: 'Move to tools', icon: ArrowRightToLine, action: () => undock(menuSession) },
+                    { id: 'close', label: 'Close tab', icon: X, action: () => props.onCloseTool(menuSession) },
+                  ] : []}
+                  onClose={() => setPageMenu(null)} />
                 <div className="pane-actions">
                   {controlsHost === 'chat' && header}
                   <MenuButton label={`Add ${modeLabel.toLowerCase()} tool`} items={toolsMenu}>
@@ -472,7 +555,7 @@ export function Workspace(props: WorkspaceProps) {
                 className="chat-page"
                 role="tabpanel"
                 id={`${conversation.id}-chat`}
-                hidden={ui.chatTab !== "chat"}
+                hidden={shownPage !== "chat"}
               >
                 <ConversationView
                   conversation={conversation}
@@ -487,20 +570,32 @@ export function Workspace(props: WorkspaceProps) {
                   onQuoteConsumed={props.onQuoteConsumed}
                   reportError={props.reportError}
                   onEditMessage={props.onEditMessage}
-                  active={active && ui.chatTab === "chat"}
+                  active={active && shownPage === "chat"}
                   jump={props.jump}
                 />
               </div>
-              {(["runbook", "tasks"] as const).map((kind) => (
+              <div
+                className="chat-page"
+                role="tabpanel"
+                id={`${conversation.id}-notebook`}
+                hidden={shownPage !== "notebook"}
+              >
+                <Notebook
+                  conversation={conversation}
+                  onConversationChange={props.onConversationChange}
+                  reportError={props.reportError}
+                />
+              </div>
+              {docked.map(session => (
                 <div
+                  key={session.id}
                   className="chat-page"
                   role="tabpanel"
-                  key={kind}
-                  id={`${conversation.id}-${kind}`}
-                  hidden={ui.chatTab !== kind}
-                >
-                  <Notebook conversationId={conversation.id} kind={kind} />
-                </div>
+                  id={`${conversation.id}-terminal-${session.id}`}
+                  data-tool-host={session.id}
+                  hidden={shownPage !== session.id}
+                  ref={outlet(session.id)}
+                />
               ))}
             </div>
           </section>
@@ -580,7 +675,7 @@ export function Workspace(props: WorkspaceProps) {
           <header className="panel-header pane-tab-header">
             <ToolTabStrip tools={allTools} selectedId={currentTool?.id}
               onSelect={id => onUI({ toolId: id, focus: 'tools', ...(toolsMinimized ? { toolsMinimized: false } : {}) })}
-              onClose={closeTool} />
+              onClose={closeTool} onDock={dock} />
             <div className="pane-actions">
               {controlsHost === 'tools' && header}
               <MenuButton label="Add tool" items={toolsMenu}>
@@ -631,28 +726,35 @@ export function Workspace(props: WorkspaceProps) {
                 />
               </div>
             ))}
-            {props.terminals.map((session) => (
+            {props.terminals.filter(session => !dockedIds.has(session.id)).map((session) => (
               <div
                 key={session.id}
                 className="tool-host"
                 id={`tool-host-${session.id}`}
                 data-tool-host={session.id}
                 hidden={currentTool?.id !== session.id}
-              >
-                <TerminalPane
-                  session={session}
-                  visible={toolsVisible && !toolsMinimized && currentTool?.id === session.id}
-                  currentFolder={conversation.folder}
-                  onOpenInCurrentFolder={session.workerId
-                    ? () => props.onLaunch("terminal", session.workerId)
-                    : undefined}
-                />
-              </div>
+                ref={outlet(session.id)}
+              />
             ))}
           </div>
         </section>
       </div>
     </section>
+    {props.terminals.map(session => createPortal(
+      <TerminalPane
+        session={session}
+        visible={dockedIds.has(session.id)
+          ? chatVisible && !minimized && shownPage === session.id
+          : toolsVisible && !toolsMinimized && currentTool?.id === session.id}
+        placement={dockedIds.has(session.id) ? "chat" : "tools"}
+        currentFolder={conversation.folder}
+        onOpenInCurrentFolder={session.workerId
+          ? () => props.onLaunch("terminal", session.workerId)
+          : undefined}
+      />,
+      slotFor(session.id),
+      session.id,
+    ))}
     </FileNavigation.Provider>
   );
 }

@@ -33,6 +33,7 @@ class Contents extends EventEmitter {
   armResult: unknown = true;
   isDestroyed = () => this.destroyed;
   isLoading = () => this.loading;
+  isLoadingMainFrame = () => this.loading;
   getURL = () => this.url;
   mainFrame = { executeJavaScript: vi.fn(async () => ({ component: 'Card › Button', file: 'src/Button.tsx:3' })) };
   capturePage = vi.fn(async () => new Image(1600, 1200));

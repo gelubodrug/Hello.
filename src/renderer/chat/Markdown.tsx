@@ -143,6 +143,25 @@ function headingAnchors() {
   };
 }
 
+/**
+ * `<br>` in a model's Markdown is a line break, not text: it is the only way
+ * to break a line inside a table cell, and models use it there. No other HTML
+ * is rendered.
+ */
+function lineBreakTags() {
+  return (root: any) => {
+    const visit = (node: any) => {
+      if (!node.children || node.type === 'code' || node.type === 'inlineCode') return;
+      node.children = node.children.map((child: any) => {
+        if (child.type === 'html' && /^<br\s*\/?>$/i.test(String(child.value).trim())) return { type: 'break' };
+        visit(child);
+        return child;
+      });
+    };
+    visit(root);
+  };
+}
+
 function fileReferences() {
   return (root: any) => {
     const visit = (node: any) => {
@@ -168,7 +187,7 @@ export function Markdown({ text, sources = [], onOpenFile, filePath }: { text: s
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, citationPlugin(sources), ...(filePath ? [headingAnchors] : openFile ? [fileReferences] : [])]}
+        remarkPlugins={[remarkGfm, lineBreakTags, citationPlugin(sources), ...(filePath ? [headingAnchors] : openFile ? [fileReferences] : [])]}
         urlTransform={url => openFile && fileLink(url, filePath) ? url : defaultUrlTransform(url)}
         components={{
           pre: ({ children }) => {

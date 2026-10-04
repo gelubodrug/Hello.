@@ -1,0 +1,40 @@
+/* The composer's / menu: the menu material, opened above the message. */
+.composer { position: relative; }
+.skill-commands {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--sp-8));
+  z-index: 30;
+  max-height: min(360px, 50dvh);
+  overflow-y: auto;
+  padding: var(--menu-padding);
+  border: 1px solid var(--menu-edge);
+  border-radius: var(--menu-radius);
+  background: var(--menu-fill);
+  box-shadow: var(--menu-shadow);
+  color: var(--menu-ink);
+}
+.skill-commands__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-height: var(--menu-row-height);
+  padding: 6px var(--sp-12);
+  border-radius: var(--menu-row-radius);
+  font-size: var(--fs-14);
+  cursor: default;
+}
+.skill-commands__row[data-active="true"]:not([aria-disabled]) { background: var(--menu-hover); }
+.skill-commands__row > svg { flex: none; color: var(--menu-muted); }
+.skill-commands__row .menu-item-copy small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.skill-commands__note {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-12);
+  color: var(--menu-muted);
+  font-size: var(--fs-12);
+}

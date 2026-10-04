@@ -28,11 +28,14 @@ function folderName(path: string): string {
 export function TerminalPane({
   session,
   visible,
+  placement,
   currentFolder,
   onOpenInCurrentFolder,
 }: {
   session: TerminalSession;
   visible: boolean;
+  /** Which pane holds it: Tools, or the chat pane as a chat tab. */
+  placement?: "tools" | "chat";
   currentFolder?: string | null;
   onOpenInCurrentFolder?: () => void;
 }): JSX.Element {
@@ -54,12 +57,14 @@ export function TerminalPane({
     if (!visible) { dropDepth.current = 0; setDropActive(false); }
   }, [visible]);
 
+  // Moved between panes, it is the same terminal in a new place: fitted
+  // there, and given the keys back that the move took away.
   useEffect(() => {
     if (!visible || !host || !mounted.current) return;
     if (host.clientWidth > 0 && host.clientHeight > 0)
       mounted.current.fit.fit();
     mounted.current.terminal.focus();
-  }, [visible, host]);
+  }, [visible, host, placement]);
 
   useEffect(() => {
     if (!host) return;
@@ -276,11 +281,11 @@ export function TerminalPane({
           </span>
           {!exited && (
             <span className="hello-terminal-tasks" title={session.notebookContext === true
-              ? 'Connected to this chat’s Runbook (read-only) and Tasks (read and status updates).'
+              ? 'Connected to this chat in Hello: its notebook (the Runbooks, Tasks and Plans sections and chapters that are on; Runbooks read-only, Tasks and Plans read and status updates) and its browser tabs, each as far as its Agent control allows.'
               : session.workerId === 'aider'
-                ? 'This Aider version does not support the Hello notebook connection.'
-                : 'Open a new CLI from Hello to connect this chat’s Runbook and Tasks.'}>
-              {session.notebookContext === true ? 'Runbook · Tasks connected' : 'Notebooks not connected'}
+                ? 'This Aider version does not support the Hello connection.'
+                : 'Open a new CLI from Hello to connect it to this chat’s notebook and browser.'}>
+              {session.notebookContext === true ? 'Hello connected' : 'Not connected to Hello'}
             </span>
           )}
           {folderChanged && (

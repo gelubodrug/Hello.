@@ -65,8 +65,8 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 [hidden] {
   display: none !important;
@@ -247,6 +247,31 @@ svg {
   border: 0; border-radius: var(--r-8); background: transparent; color: var(--ink-secondary); text-align: left;
 }
 .sidebar-settings:hover { background: var(--surface-hover); color: var(--ink-primary); }
+/* An engine in the footer — DSH, Pi: the version running at the row's end and,
+   only when npm has a newer one, "update" beside it. */
+.sidebar-engine { display: flex; align-items: center; gap: var(--sp-4); }
+.sidebar-engine > .sidebar-settings { flex: 1; min-width: 0; }
+.sidebar-engine-static { cursor: default; }
+.sidebar-engine > .sidebar-engine-static:hover,
+.sidebar-engine > .sidebar-engine-static:active { background: transparent; color: var(--ink-secondary); }
+.sidebar-engine .sidebar-settings .dsh-dot { margin-left: 0; }
+.engine-version { margin-left: auto; font-size: var(--fs-11); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.engine-version[data-error] { color: var(--color-error); }
+.engine-update {
+  flex: none;
+  height: var(--control-sm);
+  padding: 0 var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--fs-11);
+  font-weight: 500;
+}
+.engine-update:hover { background: var(--color-accent); color: var(--surface-sidebar); }
+.engine-back { width: var(--control-sm); height: var(--control-sm); }
+.engine-busy { flex: none; margin: 0 var(--sp-8); color: var(--ink-tertiary); }
 .sidebar-section-label {
   margin: 0 var(--sp-12) var(--sp-8);
   font-size: var(--fs-12);
@@ -385,8 +410,15 @@ svg {
   color: var(--ink-primary);
   background: var(--surface-hover);
 }
+/* Every control that answers the pointer's hover answers its press too
+   (user, 04.10, the design audit): the same fill one step deeper, never a
+   lift or a shadow — the app stays native. */
 .icon-button:active,
-.pill:active {
+.pill:active,
+.text-button:active,
+.sidebar-settings:active,
+.tab-pill > button:active,
+.menu-filter:active {
   background: var(--surface-active);
 }
 .icon-button[aria-expanded="true"],
@@ -398,39 +430,6 @@ svg {
 .composer-controls .icon-button[aria-pressed="true"] {
   background: var(--surface-active);
   color: var(--ink-primary);
-}
-/* Plan is switched on the Tasks tab, where its steps would land. A switch is
-   drawn as a switch: the track says on or off at a glance, and the tab itself
-   goes quiet while nothing is being written into it. */
-.plan-switch {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: var(--control-sm);
-  height: var(--control-sm);
-  margin-right: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--r-pill);
-  background: transparent;
-  color: var(--ink-tertiary);
-  cursor: pointer;
-  transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease;
-}
-.plan-switch:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--ink-primary);
-}
-.plan-switch[aria-checked="true"] {
-  color: var(--color-success);
-}
-.plan-switch:focus-visible {
-  outline: var(--focus-ring-width) solid var(--color-focus-ring);
-  outline-offset: -2px;
-}
-.tab-pill[data-plan="off"] > .chat-page-tab {
-  color: var(--ink-tertiary);
 }
 .pill {
   display: inline-flex;
@@ -466,6 +465,7 @@ svg {
   background: var(--ink-secondary);
   color: var(--surface-sidebar);
 }
+.primary-button:active { background: var(--ink-tertiary); }
 .danger-button {
   background: var(--color-error-subtle);
   color: var(--color-error);
@@ -1007,7 +1007,12 @@ svg {
   font-size: var(--fs-15);
   line-height: var(--lh-relaxed);
   overflow-wrap: anywhere;
+  border-radius: var(--r-8);
 }
+/* A message reached with the keyboard carries the app's ring, set out from its
+   words; a click on it marks nothing. */
+.message:focus { outline: none; }
+.message:focus-visible { outline: var(--focus-ring-width) solid var(--color-focus-ring); outline-offset: var(--sp-8); }
 .message-user {
   position: relative;
   display: flex;
@@ -1091,7 +1096,13 @@ svg {
 .context-meter[data-level="warn"] .context-meter-note { color: var(--color-warning); }
 .context-meter[data-level="full"] .context-meter-note { color: var(--color-error); }
 .context-meter-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-meter-error { color: var(--color-error); }
+/* The one thing to do about a filling window, beside the words that say so. */
+.context-meter-action { flex: none; padding: 1px var(--sp-4); border: 0; border-radius: var(--r-6); background: transparent; color: var(--ink-secondary); font: inherit; }
+.context-meter-action:hover { background: var(--surface-hover); color: var(--ink-primary); }
+.context-meter-action:active { background: var(--surface-active); }
 @media (prefers-reduced-motion: reduce) { .context-meter-fill { transition: none; } }
+.waiting-elapsed { font-variant-numeric: tabular-nums; }
 .waiting-response {
   font-size: var(--fs-13);
   color: var(--ink-tertiary);
@@ -1240,6 +1251,11 @@ svg {
   padding: var(--sp-8) var(--sp-12);
   border-bottom: 1px solid var(--surface-edge);
   text-align: left;
+  /* A message wraps anywhere; a cell must not: `anywhere` lets a column
+     shrink to one letter a line. Cells break between words, and the table
+     scrolls sideways when it is wider than the chat. */
+  overflow-wrap: break-word;
+  vertical-align: top;
 }
 .markdown-image-link {
   display: inline-flex;
@@ -1358,7 +1374,8 @@ svg {
 .tool-part[data-status="error"] > .disclosure-button {
   color: var(--color-error);
 }
-.tool-part[data-status="approval"] > .disclosure-button .activity-state { color: var(--color-warning); }
+/* The word that says a step waits for the person carries the colour too. */
+.tool-part[data-status="approval"] > .disclosure-button .tool-status { color: var(--color-warning); }
 .approval-actions p {
   color: var(--ink-secondary);
 }
@@ -1668,6 +1685,30 @@ svg {
   font-size: var(--fs-12);
 }
 .menu-search input::placeholder { color: var(--menu-muted); }
+/* The search pill sits inside the field, at its right end, drawn like the
+   kind pills below it. */
+.menu-search-field { position: relative; flex: 1; min-width: 0; display: flex; }
+.menu-search-field:has(> .menu-search-pill) > input { padding-right: 56px; }
+.menu-search-pill {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  bottom: 3px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--menu-muted);
+  font: inherit;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
+}
+.menu-search-pill:hover { color: var(--menu-ink); background: var(--menu-hover); }
+.menu-search-pill[aria-pressed="true"] { color: var(--menu-ink); background: var(--menu-active); }
+.menu-search-pill:focus-visible { outline: var(--focus-ring-width) solid var(--color-focus-ring); outline-offset: -2px; }
 .menu-empty { margin: 0; padding: var(--sp-12); color: var(--menu-muted); font-size: var(--fs-13); }
 .menu-item[data-active="true"]:not(:disabled) {
   background: var(--menu-hover);
@@ -2040,7 +2081,9 @@ svg {
   .chat-disclosure-content,
   .disclosure-chevron { transition: none !important; }
   .chat-disclosure-content { transform: none; }
-  .thinking-part[data-active="true"] .thinking-label {
+  .thinking-part[data-active="true"] .thinking-label,
+  .tool-part[data-status="running"] .tool-action-title,
+  .activity-group .activity-state[data-running="true"] {
     animation: none;
     background: none;
     color: var(--ink-secondary);
@@ -2056,7 +2099,9 @@ svg {
 [data-reduced-motion="true"] .chat-disclosure-content,
 [data-reduced-motion="true"] .disclosure-chevron { transition: none !important; }
 [data-reduced-motion="true"] .chat-disclosure-content { transform: none; }
-[data-reduced-motion="true"] .thinking-part[data-active="true"] .thinking-label {
+[data-reduced-motion="true"] .thinking-part[data-active="true"] .thinking-label,
+[data-reduced-motion="true"] .tool-part[data-status="running"] .tool-action-title,
+[data-reduced-motion="true"] .activity-group .activity-state[data-running="true"] {
   animation: none;
   background: none;
   color: var(--ink-secondary);
@@ -2149,6 +2194,12 @@ svg {
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+.audit-card-wide { grid-column: 1 / -1; }
+.audit-usage { width: 100%; margin-top: var(--sp-8); border-collapse: collapse; table-layout: fixed; font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+.audit-usage th { padding: var(--sp-4) 0; color: var(--ink-tertiary); font-weight: 500; text-align: right; }
+.audit-usage td { padding: var(--sp-4) 0; border-top: var(--border-hairline) solid var(--surface-edge); color: var(--ink-secondary); text-align: right; }
+.audit-usage th:first-child, .audit-usage td:first-child { width: 50%; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-usage td:first-child { color: var(--ink-primary); }
 .audit-actions {
   display: flex;
   gap: var(--sp-4);
@@ -2528,6 +2579,8 @@ svg {
 /* Find in chat: a small bar over the transcript; matches painted, not wrapped. */
 .chat-find { position: absolute; top: var(--sp-8); right: var(--sp-16); z-index: 6; display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-12); border: 1px solid var(--menu-edge); border-radius: var(--r-pill); background: var(--menu-fill); box-shadow: var(--menu-shadow); color: var(--menu-muted); }
 .chat-find input { width: min(220px, 40vw); border: 0; background: transparent; color: var(--menu-ink); font: inherit; font-size: var(--fs-13); outline: none; }
+/* The field has no ring of its own; the pill around it carries it. */
+.chat-find:has(input:focus-visible) { outline: var(--focus-ring-width) solid var(--color-focus-ring); outline-offset: 0; }
 .chat-find-count { min-width: 5.5em; text-align: right; font-size: var(--fs-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
 ::highlight(hello-find) { background-color: color-mix(in srgb, var(--color-warning) 32%, transparent); color: inherit; }
 ::highlight(hello-find-current) { background-color: var(--color-warning); color: #111; }
@@ -2535,3 +2588,18 @@ svg {
 .chat-list-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .chat-list-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-11); color: var(--ink-tertiary); }
 .chat-list-snippet mark { background: color-mix(in srgb, var(--color-warning) 30%, transparent); color: var(--ink-secondary); border-radius: 2px; }
+/* A reply Pi began on its own, woken by a plugin: one quiet line above it. */
+.message-started-by {
+  margin: 0 0 var(--sp-8);
+  color: var(--ink-tertiary);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* A terminal's own node, moved between Tools and the chat pane: no box of its
+   own, so the terminal lays out in whichever pane holds it (user, 30.09). */
+.terminal-slot { display: contents; }

@@ -1,7 +1,11 @@
+import { useEffect, useState } from 'react';
 import type { AppSettings, Message } from '../../shared/types';
+import { api } from '../api';
 import { modelName } from '../settings/presets';
+import { workDuration } from './activity';
+import { useElapsed } from './useElapsed';
 
-/** From here the runtime is close to compacting; from here it compacts on the next turn. */
+/** From here the runtime is close to compacting; from here it compacts soon (it decides by its own estimate). */
 export const CONTEXT_WARN = 0.75;
 export const CONTEXT_FULL = 0.9;
 
@@ -47,28 +51,62 @@ export function dollars(amount: number): string {
 /**
  * Under the composer: how full the window is, what the chat has cost when the
  * provider says, and which model wrote the latest reply when that is not the
- * one selected now. Amber from three quarters, red from nine tenths: past
- * that, the runtime summarises the conversation to make room.
+ * one selected now. Amber from three quarters, red from nine tenths, where
+ * the runtime soon summarises the conversation by itself — and from amber
+ * on, "Summarise now" does it at once (user, 04.10, both design audits: the
+ * meter showed the worry and offered nothing to do about it).
  */
-export function ContextMeter({ messages, settings }: { messages: readonly Message[]; settings: AppSettings }): JSX.Element | null {
+export function ContextMeter({ messages, settings, conversationId, busy = false }: {
+  messages: readonly Message[];
+  settings: AppSettings;
+  /** The chat a summary is asked for; without it the meter only reads. */
+  conversationId?: string;
+  /** A reply is running: a summary waits for it. */
+  busy?: boolean;
+}): JSX.Element | null {
   const reading = contextReading(messages, settings);
+  const latest = messages.at(-1)?.id;
+  const [summary, setSummary] = useState<{ state: 'running' } | { state: 'done'; before: number; after?: number; at?: string } | { state: 'failed'; error: string } | null>(null);
+  const summarising = summary?.state === 'running';
+  const elapsed = useElapsed(summarising);
+  // What a summary freed holds until the next reply reads the window again.
+  useEffect(() => { setSummary(current => current?.state === 'done' && current.at !== latest ? null : current); }, [latest]);
   if (!reading) return null;
   const percent = Math.min(100, Math.round(reading.share * 100));
   const other = reading.model && reading.model !== settings.model ? modelName(reading.model) : null;
-  const said = reading.level === 'full' ? ' — the next turn summarises the conversation to make room'
+  const said = reading.level === 'full' ? ' — the conversation is summarised soon, by itself or with Summarise now'
     : reading.level === 'warn' ? ' — close to the point where the conversation is summarised' : '';
+  const canSummarise = Boolean(conversationId && api.chat.compact) && reading.level !== 'ok' && !busy && summary?.state !== 'done';
+  const summarise = () => {
+    if (!conversationId || !api.chat.compact) return;
+    setSummary({ state: 'running' });
+    api.chat.compact(conversationId).then(
+      result => setSummary({ state: 'done', before: result.tokensBefore, ...(result.tokensAfter !== undefined ? { after: result.tokensAfter } : {}), at: latest }),
+      (error: unknown) => setSummary({ state: 'failed', error: error instanceof Error ? error.message : String(error) }),
+    );
+  };
   return (
-    <div className="context-meter" data-level={reading.level}
+    <div className="context-meter" data-level={summary?.state === 'done' ? 'ok' : reading.level}
       title={`The latest reply held ${reading.used.toLocaleString()} of ${reading.window.toLocaleString()} tokens${said}.`}>
       <span className="context-meter-bar" role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-        <span className="context-meter-fill" style={{ width: `${percent}%` }} />
+        <span className="context-meter-fill" style={{ width: `${summary?.state === 'done' && summary.after !== undefined ? Math.min(100, Math.round((summary.after / reading.window) * 100)) : percent}%` }} />
       </span>
       <span className="context-meter-text">
-        {percent}% of {tokens(reading.window)}
-        {reading.level !== 'ok' && <span className="context-meter-note">{reading.level === 'full' ? ' · summarises next turn' : ' · filling up'}</span>}
+        {summary?.state === 'done'
+          ? <>Summarised{summary.after !== undefined ? `: ${tokens(summary.before)} → about ${tokens(summary.after)}` : ''}</>
+          : <>{percent}% of {tokens(reading.window)}</>}
+        {summary?.state !== 'done' && reading.level !== 'ok' && !summarising && <span className="context-meter-note">{reading.level === 'full' ? ' · summarises soon' : ' · filling up'}</span>}
+        {summarising && <span className="context-meter-note"> · summarising{elapsed >= 2000 ? ` ${workDuration(elapsed)}` : '…'}</span>}
+        {summary?.state === 'failed' && <span className="context-meter-error" title={summary.error}> · could not summarise</span>}
         {reading.cost > 0 && <> · {dollars(reading.cost)}</>}
         {other && <> · last reply: {other}</>}
       </span>
+      {canSummarise && !summarising && (
+        <button type="button" className="context-meter-action" onClick={summarise}
+          title="Summarise the conversation now: the model keeps a summary and the recent turns; the transcript stays whole">
+          Summarise now
+        </button>
+      )}
     </div>
   );
 }

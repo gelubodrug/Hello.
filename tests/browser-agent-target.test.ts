@@ -2,7 +2,7 @@
 // The page scripts behind browser_click, browser_type and browser_read, run
 // against a real DOM: an element is named by the words on it, not only by CSS.
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { ANNOTATION_ID, ERASE_SCRIPT, FRAME_BOXES_SCRIPT, READ_CONTROLS, READ_HEADER, hitScript, locateScript, matchesUrl, scanScript, typeScript, waitScript } from '../src/main/browser/agent-target';
+import { ANNOTATION_ID, ERASE_SCRIPT, FRAME_BOXES_SCRIPT, READ_CONTROLS, READ_HEADER, boxScript, hitScript, locateScript, matchesUrl, pageScriptError, scanScript, typeScript, waitScript } from '../src/main/browser/agent-target';
 
 // jsdom lays nothing out: here an element is as big as its data-box says and
 // invisible without one — the same visibility test the scripts apply.
@@ -164,7 +164,7 @@ describe('browser_read lists controls with a ref, a role, their words, state and
       'e1 button "enable this API" @ (65, 318)',
       'e2 textbox "Search" (empty) @ (350, 25)',
       'e3 checkbox "Remember me" (checked) @ (10, 60)',
-      'e4 link "Pay invoice" (→ /pay) @ (40, 90)',
+      'e4 link "Pay invoice" (→ /pay?x=1) @ (40, 90)',
       'e5 button "More" (disabled, expanded) @ (20, 120)',
       'e6 combobox "Plan" (= "Pro") @ (50, 150)',
     ]);
@@ -173,6 +173,13 @@ describe('browser_read lists controls with a ref, a role, their words, state and
     expect(READ_HEADER).toContain('after a click that opened or changed something, read again');
     // A frame's centres are moved to where the frame sits on the page.
     expect(scan(1, { x: 100, y: 200 }).lines[0]).toBe('e1 button "enable this API" @ (165, 518)');
+    // Another site's link keeps its scheme and whole path; one too long to list
+    // is visibly shortened, never silently cut into an address that 404s.
+    page(`<a href="https://blog.conan.io/cpp/conan/gamedev/godot/cmake/2026/09/29/Using-Any-Cpp-Library-In-Godot.html" data-box="0,0,80,20">Godot</a>
+      <a href="https://example.com/${'a'.repeat(200)}/end.html" data-box="0,30,80,20">Long</a>`);
+    const links = scan().lines;
+    expect(links[0]).toBe('e1 link "Godot" (→ https://blog.conan.io/cpp/conan/gamedev/godot/cmake/2026/09/29/Using-Any-Cpp-Library-In-Godot.html) @ (40, 10)');
+    expect(links[1]).toMatch(/→ https:\/\/example\.com\/a+…a+\/end\.html\)/);
   });
 
   // agent-browser's --annotate: the refs written on the page for the picture,
@@ -295,3 +302,78 @@ describe('what a read lists when a dialog is open, and in what order', () => {
     }
   });
 });
+
+describe('what a page script’s exception says', () => {
+  it('keeps its words and drops the stack of Hello’s injected script', () => {
+    const thrown = new Error('Error: No visible element shows "Decline All". browser_read lists the visible controls with their words.\n    at find (<anonymous>:147:28)\n    at <anonymous>:158:12\n    at <anonymous>:170:3');
+    expect((pageScriptError(thrown) as Error).message).toBe('No visible element shows "Decline All". browser_read lists the visible controls with their words.');
+    // As Electron hands it over — the stack as text, not an Error — it becomes one, with its words.
+    const handed = pageScriptError('Error: No visible element shows "Apple iPad Air 11 M4". browser_read lists the visible controls with their words.\n    at find (<anonymous>:167:28)\n    at <anonymous>:3:12');
+    expect(handed).toBeInstanceOf(Error);
+    expect((handed as Error).message).toBe('No visible element shows "Apple iPad Air 11 M4". browser_read lists the visible controls with their words.');
+    // Anything else is left exactly as it was.
+    const navigation = new Error('ERR_ABORTED (-3) loading https://example.test/');
+    expect(pageScriptError(navigation)).toBe(navigation);
+    expect((pageScriptError('text') as Error).message).toBe('text');
+    expect(pageScriptError(undefined)).toBeUndefined();
+  });
+});
+
+describe('where a mark goes', () => {
+  it('measures the element it names without touching it, and scrolls to it only when asked', async () => {
+    page('<a id="cheap" href="/itm/1" data-box="40,1300,320,90">Apple Mac Studio M3 Ultra</a>');
+    let scrolled = 0;
+    document.getElementById('cheap')!.scrollIntoView = () => { scrolled += 1; };
+    expect(await run(boxScript({ label: 'apple mac studio m3 ultra' }))).toEqual({
+      what: 'link "Apple Mac Studio M3 Ultra"', left: 40, top: 1300, width: 320, height: 90, inView: false, path: '#cheap',
+    });
+    expect([scrolled, clicks]).toEqual([0, []]);
+    await run(boxScript({ label: 'apple mac studio m3 ultra' }, true));
+    expect(scrolled).toBe(1);
+    expect(clicks).toEqual([]);
+  });
+
+  it('names the element itself by a path that finds it again, not a place on the screen', async () => {
+    page(`<main><ul><li><a href="/itm/1" data-box="40,300,320,90">First listing</a></li>
+      <li><a href="/itm/2" data-box="40,420,320,90">Second listing</a></li></ul></main>`);
+    const { path } = await run(boxScript({ label: 'second listing' })) as unknown as { path: string };
+    expect(path).toBe('body > main > ul > li:nth-of-type(2) > a');
+    expect(document.querySelector(path)?.textContent).toBe('Second listing');
+  });
+});
+
+// What Hello calls visible is what the person can see (user, 30.09: a nav for
+// screen readers repeated the cards' names, the marks went on it, and the
+// cards' own links — inline, no width of their own — counted as not there).
+describe('visible as the person sees it', () => {
+  it('leaves out what a screen-reader-only block or a closed menu clips away', async () => {
+    page(`<nav style="position:absolute;overflow:hidden" data-box="0,0,1,1"><a id="hidden" href="/skills/emil" data-box="0,169,177,21">Emil Design Engineering</a></nav>
+      <div style="overflow:hidden" data-box="0,40,300,0"><button id="menu" data-box="0,40,120,30">Emil Design Engineering</button></div>
+      <a id="card" href="/skills/emil" data-box="40,2600,320,400">Featured Emil Design Engineering by Emil Kowalski</a>`);
+    // The card is the one visible element with those words.
+    const read = scan();
+    expect(read.lines.some(line => line.includes('#hidden') || line.includes('"Emil Design Engineering"'))).toBe(false);
+    expect(await run(boxScript({ label: 'emil design engineering' }))).toMatchObject({ what: expect.stringContaining('Featured Emil Design Engineering') });
+  });
+
+  it('measures a link around a whole card by its content', async () => {
+    page('<a id="card" href="/skills/taste" data-box="33,2207,0,401"><div data-box="0,2207,167,550">Featured Taste Skill</div></a>');
+    const range = Range.prototype as unknown as { getBoundingClientRect?: () => DOMRect };
+    const had = range.getBoundingClientRect;
+    range.getBoundingClientRect = function () { return { x: 0, y: 2207, left: 0, top: 2207, width: 167, height: 550, right: 167, bottom: 2757, toJSON: () => ({}) } as DOMRect; };
+    try {
+      expect(await run(boxScript({ label: 'featured taste skill' }))).toMatchObject({ left: 0, top: 2207, width: 167, height: 550 });
+    } finally {
+      if (had) range.getBoundingClientRect = had; else delete range.getBoundingClientRect;
+    }
+  });
+
+  it('says when what it names moves by itself', async () => {
+    page('<a id="ticker" href="/skills/emil" data-box="600,110,177,21">Emil Design Engineering</a>');
+    const ticker = document.getElementById('ticker')!;
+    let calls = 0;
+    ticker.getBoundingClientRect = () => { const left = 600 - 40 * calls++; return { x: left, y: 110, left, top: 110, width: 177, height: 21, right: left + 177, bottom: 131, toJSON: () => ({}) } as DOMRect; };
+    expect(await run(boxScript({ label: 'emil design engineering' }))).toMatchObject({ moving: true });
+  });
+});
+

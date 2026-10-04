@@ -1,17 +1,42 @@
 import type { AgentControl, BrowserTab, ViewBounds } from '../../shared/types';
 
+const SCHEME = /^[a-z][a-z\d+.-]*:/i;
+/** An address typed without its scheme: a name with a dot, a port, a path. */
+const bareAddress = (value: string) => /^[\w.-]+(?::\d+)?(?:\/[^\s]*)?$/.test(value) && value.includes('.');
+/** Names of the person's own network rather than of the web. */
+const OWN_NETWORK = /(?:^|\.)(?:localhost|local|lan|home|corp|internal|intranet|test|example|invalid|arpa)$/;
+
+/** The web search for words typed in the address bar. */
+function searchURL(words: string): string {
+  return `https://www.google.com/search?q=${encodeURIComponent(words)}`;
+}
+
 export function browserURL(input: string): string {
   const value = input.trim();
   if (value === 'about:blank' || value === '') return 'about:blank';
-  const candidate = /^[a-z][a-z\d+.-]*:/i.test(value) ? value
-    : /^[\w.-]+(?::\d+)?(?:\/[^\s]*)?$/.test(value) && value.includes('.')
-      ? `https://${value}` : `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  const candidate = SCHEME.test(value) ? value : bareAddress(value) ? `https://${value}` : searchURL(value);
   const url = new URL(candidate);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
     throw new Error('Use a web address beginning with https:// or http://.');
   }
   if (url.href.length > 8192) throw new Error('This address is too long.');
   return url.href;
+}
+
+/**
+ * The search a typed address becomes when no site answers to its name, as in
+ * any browser (user, 30.09: "smarbill.ro", a letter short of the site, ended
+ * in an error). Only a bare name: an address typed with its scheme asks for
+ * exactly that address. And only a name on the web: a port, an IP or a name
+ * of the person's own network points at a machine of theirs, which a search
+ * engine could not find and has no business hearing of.
+ */
+export function searchInstead(input: string): string | null {
+  const value = input.trim();
+  if (SCHEME.test(value) || !bareAddress(value)) return null;
+  const host = value.split('/')[0].toLowerCase().replace(/\.$/, '');
+  if (host.includes(':') || /^[\d.]+$/.test(host) || OWN_NETWORK.test(host)) return null;
+  return searchURL(value);
 }
 
 export function checkAgentOwnership(tab: BrowserTab, conversationId: string): void {

@@ -122,6 +122,9 @@ export function modelName(id: string): string {
   return id.startsWith('/') ? id.split('/').filter(Boolean).pop() ?? id : id;
 }
 
+/** The same server, however its address was spelled: a trailing slash does not make another one. */
+export const endpointIdentity = (value: string) => value.trim().replace(/\/+$/, "");
+
 /** A name to offer when remembering a connection the presets do not cover. */
 export function suggestedName(endpointUrl: string): string {
   const preset = presetFor(endpointUrl);

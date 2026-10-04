@@ -77,19 +77,24 @@ Chromium vulnerabilities.
 | Operation | Gate enforced by the main process |
 | --- | --- |
 | Search/read public internet directly | Bounded HTTP(S) GET, public-IP/DNS and redirect checks; no browser grant needed |
-| Read this conversation's Runbook | Conversation ownership; read-only for the main-chat agent |
-| Read/create/update this conversation's Tasks | Conversation ownership; a task status update must quote the task's exact current source (its line is only where to look first) |
+| Read this conversation's Runbook | Conversation ownership and the Runbook section on; read-only for the main-chat agent |
+| Read/create/update this conversation's Tasks | Conversation ownership and the Tasks section on; a task status update must quote the task's exact current source (its line is only where to look first) |
+| Write or read the plan (`plan_write`, Plans) | Conversation ownership and Plan on; one plan chapter replaced whole |
+| Any notebook chapter, in any tool or CLI connection | The chapter's own switch: one the human switched off is neither listed, updated nor exported, and is answered as not found |
 | List/read attached-folder files | Attached folder, resolved-path containment, bounded text reads and common secret-path exclusions |
 | Write a file | The same path checks plus **Allow once** for that exact requested path/content |
 | Edit part of a file (`file_edit`) | The same path checks and approval; the exact text must occur once (or `all`); refused if the file changed during the approval wait |
 | Run a shell command | **Allow once** for the exact command; executes with the chat folder as working directory |
 | List owned browser-tab metadata | Conversation ownership, including metadata for Off tabs |
 | Read page content | That tab's Agent control **Read** or **Full** grant |
-| Open a requested page/dev URL in Hello | Owned conversation; new tab starts **Off**, no implicit read or control grant |
-| Open a local HTML preview | Attached-folder containment; bounded read-only loopback static route; new sandboxed tab starts **Off** |
+| Mark a page for the person (`browser_mark`) | **Read** or **Full**: it measures elements and draws pins over the page in Hello's isolated world, changing nothing in it; only at **Full** is the first mark scrolled into view. The marks are kept with the tab page by page, until the person reloads that page or clears them (× on one, a double click on the bubble for all); the tab shows a page's own again when it comes back to it (Back, Forward, a restart), whatever its control now: Hello's own layer finds each marked element by its saved CSS path, and nothing of the page reaches the model |
+| A launched CLI using Hello's browser | Its session's loopback token and conversation — by shell client, Pi extension or MCP server (Claude Code, Codex), whose files never hold the token: this chat's tabs only, each call through the same Agent control check as the chat's; no pointer, note or download. A CLI runs as the human, so its guide's rule against scripting the human's other browsers is guidance — macOS Automation permission is the wall |
+| Open a requested page/dev URL in Hello | Owned conversation; a tab the model opens starts **Full** (user decision, 29.09); that Full is not saved and the tab returns Off after a restart |
+| Open a local HTML preview | Attached-folder containment; bounded read-only loopback static route; new sandboxed tab starts **Full** when the model opens it, and drops to Off when it leaves the preview |
 | Navigate an existing owned tab to a requested HTTP(S) URL | Conversation ownership; independent of Off/Read/Full; no implicit page read |
 | Click/type/scroll through agent tools | That tab's Agent control **Full** grant |
 | Load a skill's instructions or reference file | Skill activated for that conversation; real-path containment inside the imported copy; text only, bounded size |
+| Find a skill and turn it on (`skills_find`, `skill_load` by id, the composer's `/` menu) | Only ids the catalog handed out: a library row that still verifies, a folder discovery reports, or a skills.sh `owner/repo/skill` that skills.sh itself listed (from a search in the last hour, else asked again) — no segment may be `.`, `..` or hidden. The skill is copied into the library like a manual import and activated for that one conversation; an existing same-name library skill is used instead, never replaced. **No per-call approval**: a skill is text, and it grants no permission |
 | Call a tool from an MCP server | Server activated for that conversation, re-checked at call time; Hello's own stdio client; **no per-call approval gate** |
 | Run a tool registered by an activated plugin extension | Explicit activation of that plugin; the extension is Node code inside the Pi child and is **not** gated per call |
 | Interactive terminal/CLI client | Explicit user launch; subsequent commands follow that process/client's authority |
@@ -125,12 +130,37 @@ before sending a model request.
 Skills and plugins the human imported and activated for that conversation are
 passed as explicit paths (`--skill`, `-e`, `--prompt-template`); nothing else on
 disk is discovered.
+
+The Pi binary is the bundled one unless the person updates it from the
+sidebar: Hello then asks npm's registry for the package's `latest` (one request,
+nothing of the person's in it) and installs exactly that version with its own
+pnpm into its data folder, install scripts off. The model never triggers an
+update, and going back to the bundled Pi is one click. dsh updates the same way.
 **A plugin's extension is Node code running inside the Pi child**, so it shares
 that child's environment — which contains the current endpoint's key and the
 per-process bridge token — and can call the bridge directly. It is not
-sandboxed, and activating a plugin is the trust decision. Skills carry no code
+sandboxed, and activating a plugin is the trust decision. An extension that
+imports npm packages is bundled at import from the folder the person chose;
+bundling only parses (no plugin code or install script runs), the packages it
+took are listed on the library row, and the bundle is part of the approved copy
+that verification recomputes. In a chat with a folder, Hello's own extension
+moves the Pi process into that folder before the plugins load (their
+`process.cwd()`); Pi's settings and session were already read from the chat's
+private directory, so a project's `.pi` files are not loaded, and Pi's own
+`ctx.cwd` stays there. Skills carry no code
 authority: they are text the model reads through `skill_load`, which is confined
 to the imported copy of a skill active in that conversation.
+
+Online skills are someone else's instructions. `skills_find` searches skills.sh
+only through the market's restricted HTTP client (HTTPS on port 443 to the
+exact origin, pinned DNS that refuses private addresses, size and time caps);
+a chosen skill is read from `api.github.com` (its repository tree) and
+`raw.githubusercontent.com` the same way, at most 200 files and 5 MB, with no
+path that leaves its folder or enters `.git`. Nothing is executed: the files go
+through the library's import, which copies text and records a fingerprint. The
+tool results and the prompt tell the model to follow a found skill for the
+task only, and that it never overrides the person or Hello's rules. The chat
+transcript shows each skill the model looked for and loaded.
 
 MCP servers are separate child processes started by Hello's own stdio client,
 never by Pi. They receive only platform variables plus the values configured for
@@ -237,7 +267,20 @@ no referrer. That service receives the source hostname, not its page path, query
 chat content or model credential. CSP permits this image origin specifically;
 arbitrary remote Markdown images still do not render.
 
-Every new tab starts **Off** (grey). The mode the person sets on a page is saved
+The address bar sends words that are not an address to Google search, as
+browsers do, and a bare name that no site answers to as well. Never a name that
+points at the person's own machines: an address typed with its scheme, a port,
+an IP address or a local name (localhost, `.local`, `.lan`, `.internal`,
+`.home.arpa` …) fails as typed. No navigation the model makes becomes a search.
+
+A tab the person opens starts **Off** (grey). A tab the model opens with
+`browser_open` starts **Full**: the model opens a page to read it and act in it,
+not to have it open (user decision, 29.09). That Full is the model's for the
+session's work — it is not saved, the tab comes back Off after a restart, and the
+person changing the control makes it theirs. Because tabs share one website
+session, a model-opened Full tab on a site the person is signed into can act as
+that person: clicks and typing there can post, buy or send. The person lowers it
+from AI Mode at any time. The mode the person sets on a page is saved
 with the tab and comes back with it after a restart; a generated document or
 previewed file is the exception and returns Off until it is served again.
 Opening a requested page/dev URL or HTML preview is available in every mode. **Read** (orange) permits page
@@ -268,7 +311,7 @@ are local capabilities, not isolation from another process under the same OS use
 Generated HTML has a separate, explicit output capability: `browser_show_html`
 writes at most 512 KiB of supplied UTF-8 HTML to a fresh private artifact directory
 under this conversation's hashed app-data namespace, then opens that directory's
-HTML entry in a sandboxed Off tab. It cannot choose a destination path, overwrite
+HTML entry in a sandboxed tab at Full (the model wrote every word of it). It cannot choose a destination path, overwrite
 a workspace file or grant access to the rest of app data. UUID handles are resolved
 only in the calling conversation; private-directory, symlink and regular-file
 checks apply. The artifact persists until conversation deletion; its loopback
@@ -295,9 +338,10 @@ a draft pill excludes it from that message but its snapshot remains until chat
 deletion. CLI drops only paste quoted paths; control characters are rejected and
 no Enter is sent. The CLI's own file/model permissions govern subsequent use.
 
-Grants are per tab, **not per origin**, and last only for the app session. A tab
-with Full access retains that grant when navigating to another website until it
-is changed or the app restarts. Full is not a confirmation for each click; clicks
+Grants are per tab, **not per origin**. A grant the person sets is saved with the
+tab; the Full a tab got because the model opened it lasts only for the app
+session. A tab with Full access retains that grant when navigating to another
+website until it is changed or the app restarts. Full is not a confirmation for each click; clicks
 and input events can submit information or trigger authenticated site actions.
 Use Off or Read when that authority is not intended.
 
@@ -407,7 +451,8 @@ does not encrypt this content. Browser cookies/storage also persist through
 Electron's browser session. Use OS account protections and full-disk encryption
 as appropriate for the sensitivity of the workspace.
 
-Runbook and Tasks exports stay in the app-private data directory. Compatibility
+Runbook, Tasks and plan exports stay in the app-private data directory and hold
+only the chapters that are on. Compatibility
 paths remain in `HELLO_RUNBOOK_PATH` and `HELLO_RUNBOOK_TASKS_PATH`, but exported
 Markdown is a one-way snapshot: writing it does not update the app.
 
@@ -436,6 +481,109 @@ sessions and known notebook export files, not the attached repository. It is not
 a secure-erasure operation: SQLite/WAL pages, backups, renderer recovery state or
 third-party CLI state can retain prior content. Terminal replay is memory-only
 within Hello.; independently launched clients may keep their own transcripts.
+
+## DSH surface and third-party plugins
+
+- **The host runs third-party code.** dsh plugins run in the DSH host, an Electron
+  utility process, with the person's user permissions: they can read files and use
+  the network like any program. Hello's guards are consent and containment, not a
+  sandbox. Before every install, the market shows the exact package and version and
+  warns about local code; the profile is saved as a restore point first. pnpm 11
+  installs nothing published less than a day ago; only the exact version the person
+  confirmed is exempted (`--config.minimum-release-age-exclude=<name>@<version>`),
+  so its dependencies still wait out that day. The same holds for an update from
+  the market's Installed list.
+- **What the host gets.** An environment built from an allowlist (path, home,
+  locale, proxy settings), plus `DSH_HOME`, `DSH_TELEMETRY_DISABLED=1`,
+  `DO_NOT_TRACK=1` and a per-start proxy token. It never gets Hello's model key,
+  MCP secrets or other environment variables. Its profile is named `hello`: the
+  `desktop` name would switch on DeepSeek's desktop telemetry rows.
+- **Loopback only.** The host listens on 127.0.0.1 on a free port. Its one-time
+  login token is exchanged by main, in the surface's own partition
+  (`persist:hello-dsh`). The page receives an HttpOnly, SameSite=Strict cookie; the
+  token never reaches the renderer or a log, and host output is redacted before it is
+  written.
+- **The surface's page.** It has no preload, Node or popups, and no permissions but
+  clipboard writes and full screen. It cannot navigate off the host's origin; web
+  links go to a browser tab of the person's (AI Mode Off). Hello's agent has no tool
+  that reads or drives it.
+- **The model key.** Sessions in the surface reach Hello's active connection
+  through a loopback proxy that accepts only the per-start token and adds the real
+  key upstream. The key is not in the host's environment, the profile or any file.
+- **Plugin tools in chats.** The tool bridge listens on 127.0.0.1 with a token
+  minted for each start, which the host entry reads and removes from its
+  environment before dsh boots, so a shell a dsh tool spawns does not inherit it.
+  It lists and runs only tools a plugin registered globally, never dsh's own or the
+  reserved `run_code`, and caps a call's body at 1 MiB and its text at 60,000
+  characters. In Hello the tools are the MCP server `dsh-plugins`: a library row
+  the person adds from Settings and switches on per chat, whose descriptions and
+  results are framed as untrusted content like any MCP server's.
+- **The market's network.** HTTPS on 443 only, at most three redirects, every name
+  pinned and refused when any address is private, loopback, link-local, multicast or
+  a tunnel prefix, 2 MiB per answer, 8/12/30 s deadlines (ported from
+  dsh-community-market). Catalog text is data. The one thing taken from a
+  displayed install command is an npm package name, from one exact inert shape;
+  commands are never run. Icons are fetched by main from three hosts, re-encoded
+  as PNG and handed to the page as data. A standard source is added only from an
+  https manifest whose endpoint is on the manifest's own origin and ends in
+  `/v1/plugins`; its manifest and every page are checked against the market's
+  schemas, the list file is checked again on every read, and its pages take the
+  same network rules. Only an item's `package` field can make it installable.
+- **What is installed.** npm `latest` with the same name, an exact stable version
+  and a safe `dsh.bundle.patch`, confirmed by a one-shot token bound to that version
+  and to the profile as it was, installed with `pnpm add --save-exact`. The profile
+  runs no plugin install scripts (`strictDepBuilds: false` with no allowlist). The
+  runtime allows exactly three (`node-pty`, `@deepseek-ai/dsh-subprocess-local`,
+  `koffi`).
+- **What leaves the machine** when the surface is used: npm registry requests,
+  1024Store catalog requests, GitHub avatar images, the model provider's traffic
+  through the proxy, and whatever network use a plugin the person installed makes on
+  its own.
+
+## What plugins do while Pi runs headless
+
+- **A turn Pi begins on its own** (a plugin wakes it, as pi-subagents does when a
+  background run finishes) is followed as a reply of the chat's: it has Hello's
+  tools and approvals, Stop, and the waiting list, and is marked "A plugin started
+  this reply", with the plugin's own line as it said it.
+- **Extension UI over RPC** is shown beside the composer: text widgets, status
+  lines, notices, and questions (select, confirm, input, editor). Questions are no
+  longer declined automatically: the person answers them, and the answer goes only
+  to the Pi process that asked. Everything is the plugin's text, rendered as plain
+  text and bounded; a question with a timeout goes when Pi answers it itself; all of
+  it goes with the Pi process that drew it. Terminal components never leave Pi.
+- **Subagents** a plugin starts are Pi processes of their own, with Pi's built-in
+  tools (read, bash, edit, write) in the chat's folder or home, and are **not**
+  gated by Hello's approvals. They read the chat's private Pi folder: its
+  connection, key and, when set in Settings, the model for subagents.
+
+## Pi package market
+
+The Pi market (user, 29.09) lists pi.dev/packages, the official gallery, by
+reading its page through the market's restricted HTTP client (HTTPS on port
+443 to that exact origin, pinned DNS, size and time caps). Only data leaves the
+page: names, descriptions, authors, counts and links, never markup. When the
+gallery cannot be read, npm's search stands in. An install comes from npm alone:
+
+- **Preview.** npm's `latest` for the package must name it, carry an exact stable
+  version, mark itself a Pi package, and point to a registry tarball with a sha512
+  integrity. Its Pi ranges must admit the Pi Hello runs; Node, platform and size
+  (100 MB, 5000 files) are checked; a package with only themes or gallery media is
+  refused. The confirmation is a one-shot token bound to that version and, for an
+  update or removal, to the library row as it was.
+- **Install.** Hello's pnpm installs that version and its production dependencies
+  into a staging project of its own: `--ignore-scripts`, the registry pinned, the
+  person's `.npmrc` replaced by an empty one, packages copied rather than
+  hard-linked, git and tarball dependencies refused. The lockfile must name the
+  integrity the preview saw, or nothing is installed. The project then becomes the
+  package's folder in Hello's library in one rename.
+- **Trust.** The package is a library plugin like any other: off in every chat
+  until turned on there, and its extension code is not sandboxed inside that
+  chat's Pi. Its fingerprint covers the package's own files and the lockfile that
+  pins its dependencies; the dependencies' files are not re-hashed on every run.
+- **Update and removal.** From the market's Installed list, or Settings' update,
+  which fetches npm's newest version again; removal deletes the folder and every
+  chat's activation of it.
 
 ## Trust and verification limits
 

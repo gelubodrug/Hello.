@@ -1,5 +1,5 @@
 import { describe,it,expect } from 'vitest';
-import {browserURL,checkAgentAccess,checkAgentOwnership,safeBounds} from '../src/main/browser/policy';
+import {browserURL,checkAgentAccess,checkAgentOwnership,safeBounds,searchInstead} from '../src/main/browser/policy';
 import type { BrowserTab } from '../src/shared/types';
 const tab:BrowserTab={id:'one',conversationId:'chat',title:'Page',url:'https://example.com',control:'off',loading:false,progress:null,canGoBack:false,canGoForward:false};
 describe('browser safety boundary',()=>{
@@ -8,6 +8,11 @@ describe('browser safety boundary',()=>{
     expect(browserURL('hello workspace')).toContain('search?q=hello%20workspace');
     expect(browserURL('http://127.0.0.1:8000')).toBe('http://127.0.0.1:8000/');
     for(const url of ['javascript:alert(1)','file:///etc/passwd','data:text/html,hello','https://user:secret@example.com'])expect(()=>browserURL(url)).toThrow();
+  });
+  it('searches for a bare name no site answers to, never for a machine of the person\'s own',()=>{
+    expect(searchInstead(' smarbill.ro ')).toBe('https://www.google.com/search?q=smarbill.ro');
+    expect(searchInstead('smarbill.ro/facturi')).toBe('https://www.google.com/search?q=smarbill.ro%2Ffacturi');
+    for(const input of ['https://smarbill.ro','hello workspace','localhost','app.localhost','printer.local','nas.lan','db.internal','site.test','router.home.arpa','shop.example.com:8080','192.168.1.10','10.0.0.1/admin'])expect(searchInstead(input)).toBeNull();
   });
   it('gates reads and actions per chat, not a global mode',()=>{
     expect(()=>checkAgentAccess(tab,'chat')).toThrow('Off');

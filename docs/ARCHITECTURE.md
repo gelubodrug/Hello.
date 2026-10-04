@@ -17,6 +17,8 @@ boundary is recorded in
 | Web content | Remote pages in `<webview>` guests, separately sandboxed and without the app preload; every preference written by main at attach | [`browser/manager.ts`](../src/main/browser/manager.ts) |
 | Chat child (manual validation pending) | Pinned Pi 0.85.1 in persistent RPC mode; agent execution and session context | [`chat/pi-rpc.ts`](../src/main/chat/pi-rpc.ts), [`chat/pi-extension.ts`](../src/main/chat/pi-extension.ts) |
 | Terminal children | Interactive shells and explicitly launched CLI clients; separate from the chat engine | [`terminal/`](../src/main/terminal/) |
+| DSH host (utility process) | One DeepSeek Harness profile (`hello`), booted like dsh's own desktop host; runs dsh plugins, third-party code | [`dsh/host-entry.ts`](../src/main/dsh/host-entry.ts), [`dsh/service.ts`](../src/main/dsh/service.ts) |
+| DSH surface (web content) | dsh's own web client in one `<webview>` of partition `persist:hello-dsh`, no preload; src and every preference from main | [`dsh/surface.ts`](../src/main/dsh/surface.ts), [`renderer/dsh/DshView.tsx`](../src/renderer/dsh/DshView.tsx) |
 
 The main window uses context isolation, Electron sandboxing and no Node
 integration. Production app files are served through `hello://app`; development
@@ -26,12 +28,19 @@ and validates arguments again before delegating to services.
 ## Conversation workspace
 
 The left sidebar contains conversations. Each conversation owns its messages,
-optional working folder, Runbook and Tasks entries, browser tabs and current
+optional working folder, notebook (Runbooks, Tasks and Plans), browser tabs and current
 terminal/worker sessions. Settings, including the selected model endpoint, are
 application-wide.
 
-The chat area contains permanent Chat/Runbook/Tasks switch pills without close
-buttons; legacy closed-notebook preferences cannot hide a section. The tool area
+The chat area contains two permanent pills without close buttons: Chat and
+Notebook (user, 29.09: one button beside Chat, not one per section). The
+notebook is one pane: a tree of three sections — Runbooks, Tasks and Plans —
+each with its chapters, beside the editor. A section's switch is the chat's own
+Runbook, Tasks or Plan setting (Plans holds the plan `plan_write` keeps and is
+on while Plan is); each chapter has a switch of its own. The model and CLI
+workers see only the chapters that are on, in sections that are on; what is off
+stays visible and editable, quieter. A saved Runbook or Tasks page opens the
+notebook. The tool area
 contains browser, terminal and CLI-worker session pills. Only one tool surface
 is visible at a time. With
 tools open, chat is pinned beside them; closing the chat area gives tools the
@@ -122,6 +131,7 @@ The default macOS data directory is:
   notebooks/<conversation-id>/
     runbook.md
     tasks.md
+    plan.md
   cli-workers/                  app-created private configuration homes for applicable clients
   …                             Electron-managed browser storage and renderer local storage
 ```
@@ -140,12 +150,16 @@ prompt. The sibling app transcripts and credentials are outside this migration. 
 a session permits an explicit next prompt; it does not automatically repeat
 interrupted tool effects or restore a previously running process.
 
-SQLite is authoritative for notebooks. Saving or deleting an entry refreshes two
-separate Markdown exports in the app's data directory; requesting paths refreshes
-them too. Each export is replaced atomically. Empty notebooks produce empty files.
+SQLite is authoritative for notebooks. Saving, deleting or switching an entry
+refreshes three separate Markdown exports in the app's data directory, one per
+section, holding the chapters that are on; requesting paths refreshes them too.
+Each export is replaced atomically. Empty notebooks produce empty files. A
+chapter's switch (`notebooks.shared`, schema version 11) changes neither its
+words nor its revision, so a draft open on it still saves; version 11 also moved
+the Tasks entry titled "Plan" — the one `plan_write` replaced whole — to Plans.
 No export is written into the attached repository automatically.
 
-The Runbook and Tasks views use the same entry-list/rich-editor module, based on
+The three sections share one tree and one rich-editor module, based on
 Tiptap/ProseMirror. Markdown remains the authoritative body format; opening a
 document does not itself serialize or save it. Formatting uses editor selections,
 not string-prefix insertion. Unsupported Markdown has an explicit source-editing
@@ -176,6 +190,20 @@ conversational prompt; Coder appends Hello capability guidance to Pi's coding
 prompt. Both share the same JSONL history and main-process tool gates. IPC rejects
 mode changes while a response is active. The next request restarts a warm process
 whose mode/configuration changed, reopening its existing session.
+
+**Engine updates.** The sidebar's footer shows the Pi that runs and, only when
+npm's `latest` is newer, `update` (`chat/pi-engine.ts`, asked a moment after
+start and every six hours). Updating installs that version with Hello's pnpm
+into `<data>/pi/runtime` (a staging folder renamed into place); chats start Pi
+from it while it is newer than the bundled one, and the engine is part of the
+session fingerprint, so a chat moves at its next message. Going back removes the
+folder and the bundled Pi runs again; a Hello that brings a newer Pi of its own
+outgrows an older update. The DSH row does the same for dsh: the version chosen
+lives in `<data>/dsh/version.json`, the runtime is reinstalled at it and the host
+restarted, and a failed install keeps the version that ran. The terminal's Pi tab
+runs this same engine (`cli.js` beside the chats' `rpc-entry.js`, by Electron as
+Node), not a `pi` found on PATH, so one update moves both; its private agent
+folder carries a theme of its own as the current one.
 
 Flow: renderer → typed preload → ChatService → persistent Pi RPC child. Pi calls
 the Hello extension → authenticated loopback bridge → existing main-process
@@ -233,9 +261,87 @@ Hello's own stdio client, and its tools are offered through the same tool bridge
 as Hello's built-in ones. `src/main/extensions/library.ts` owns import,
 verification and the imported copies under `<data>/library/`.
 
+A plugin extension that imports npm packages is bundled once, at import, by
+`src/main/extensions/bundle.ts` (esbuild): its code and exactly the packages it
+reaches, from the folder the person chose, into `<entry>.hello-bundle.mjs`
+beside the entry, which is what `-e` loads. Modules Pi hands every extension
+(`@earendil-works/pi-*`, `typebox`) and Node built-ins stay external. A package
+that is not installed in the folder stops the import and is named; the approved
+copy never holds a `node_modules`. Any import the copy would not hold — a
+package in node_modules, a hoisted or linked one elsewhere on disk, a skipped
+folder — makes the entry bundled. A folder with a root `index.ts`/`index.js`
+and no `pi` section or other resources is one extension, and a lone `.ts`/`.js`
+file is one too: Pi's own rules for its extensions folder. A re-import builds the
+new copy beside the old one and swaps it in only once it verifies.
+
+Pi starts in the chat's private directory (`<data>/pi-chat/<hash>/work`), where
+it reads its settings and keeps its session, so a project's own `.pi` files never
+load. When the chat has a folder, `HELLO_CHAT_FOLDER` carries it and Hello's
+extension, which Pi loads first, moves the process into it: `process.cwd()` —
+relative paths, and processes an extension spawns without a cwd of its own — is
+the project for the extensions a person activated, as it would be if Pi ran
+there (OpenViking's memory scopes itself by the folder's git remote). Pi's own
+`ctx.cwd` and `pi.exec`'s default stay the private directory; an extension that
+wants the folder explicitly reads `HELLO_CHAT_FOLDER`.
+
+Tools are prompt-context driven (`src/main/chat/tool-groups.ts`). A request
+carries a core set — `web_search`, `fetch_url`, `tools_find`, `skills_find` /
+`skill_load`, and `plan_write` when the chat turned it on; in Coder mode also the coding group —
+and every other area is a group the model loads with `tools_find` when its work
+gets there: `coding` (files and shell), `browser`, `workers`, `notebook`, one per
+MCP server and one per plugin extension (grouped in the Pi child by the
+extension that registered each tool). Loading activates the group for the next
+step through `pi.setActiveTools()` and returns its manual — the rules that used
+to sit in every system prompt (browser, panes, notebooks, MCP). Loaded groups
+are read back from the session transcript when Pi restarts, and a group that
+appears mid-chat is announced once. Pi appends each tool change to the
+transcript, so a loaded group does not throw away the cached prompt prefix.
+
+A turn Pi begins on its own — a plugin woke it, as pi-subagents does when a
+background run finishes — is adopted as a reply (`ChatService.watchTurn`): a new
+assistant message marked `startedBy`, followed like any reply, and waiting for a
+reply of Hello's that is still ending. Pi's extension UI over RPC (text widgets,
+statuses, notices, questions) is kept per chat for the Pi process that drew it
+and shown beside the composer (`src/renderer/chat/ExtensionPanel.tsx`); the
+person answers questions there. Settings' model for subagents is written into
+the chat's private Pi folder as a second model of the same provider and as
+pi-subagents' `subagents.defaultModel`.
+
+Stopping a chat's Pi aborts the reply in progress, ends its input and waits up
+to 1.5 s: that is Pi's own shutdown, which runs extensions' `session_shutdown`
+handlers (a memory plugin's final commit) before it exits. SIGTERM, then SIGKILL, follow only for a Pi that
+is still there. A Pi that cannot load an activated extension is reported with
+the plugin's library name and Pi's reason; a plugin handler that throws during a
+reply is shown as a warning naming the plugin and no longer ends the reply —
+only Hello's own tool extension failing does.
+
+Skills are found the same way (`src/main/extensions/skill-catalog.ts`). One
+catalog holds Hello's library, every skill another agent on this Mac keeps
+(discovery below, plus Pi's `~/.pi/agent/skills` and dsh plugins' skills) and,
+on request, the skills.sh registry, which also lists Anthropic's own skills.
+The model calls `skills_find` with a few words about the task and
+`skill_load` with an id it returned; the person types `/` in the composer
+(`src/renderer/chat/SkillCommands.tsx`) to pick a skill by name, or
+`/find-skills <task>` to search. Either way the skill is copied into the
+library when it is not there — a same-name library skill is always the one
+used, and a same-name skill already on in the chat (a plugin's) answers
+instead — turned on for that chat, and, from the composer, written as
+`/skill:<name>` at the start of the message. Hello expands that prefix into
+the skill's instructions itself, before the text reaches Pi, for a new
+message, a steer, a wrapped follow-up and a Retry alike; the transcript keeps
+what the person typed. Uses run one at a time. A skills.sh skill is read from
+its GitHub repository — the folder named after it in the repository tree, else
+the one whose `SKILL.md` carries its name; for a repository too large to list,
+`skills/<id>`, `<id>` or `.claude/skills/<id>` listed alone — into a staging
+folder removed after the import; a skill GitHub will not list is an error,
+never a partial copy. Re-importing such a skill downloads it again
+(`ResourceLibrary.remote`).
+
 `src/main/extensions/discovery.ts` reads the configuration other agent tools
-write (JSON, TOML and YAML shapes) and the skill folders they keep, so a server
-or skill can be adopted without retyping it; it returns entries to the renderer
+write (JSON, TOML and YAML shapes), the skill folders they keep and the
+extensions installed for Pi itself (`~/.pi/agent/extensions`, where installers
+such as OpenViking's put theirs), so a server, skill or Pi extension can be
+adopted without retyping it; it returns entries to the renderer
 without their environment values, and importing goes through the same library
 paths as a manual add.
 
@@ -288,8 +394,10 @@ selected tab's ownership and grant in main; no automatic privilege escalation
 or silent retargeting is introduced.
 
 Opening a result is separate from reading/controlling its page. `browser_open`
-creates a new Off tab in Hello for a requested HTTP(S) URL (including a running
-local dev server) or an HTML file in the attached folder. `browser_navigate`
+creates a new tab in Hello for a requested HTTP(S) URL (including a running
+local dev server) or an HTML file in the attached folder, at Full: the model
+opens a page to work in it (user, 29.09). That Full is not saved and the tab
+returns Off after a restart; a tab the person opens starts Off. `browser_navigate`
 can navigate an explicitly targeted owned tab in every mode. Reads still require
 Read/Full; DOM actions require Full. Tool descriptions and the Pi prompt encode
 this distinction and prefer the in-app browser over shell `open`/`xdg-open`.
@@ -315,6 +423,35 @@ guards to prevent late publication. `html-input.ts` converts bounded UTF-8 HTML
 data URLs at the tool boundary for compatibility; native navigation still rejects
 `data:` and `file:`. Tool results report `contentVerified: false`: a loaded tab
 is not evidence of a correct visualization.
+
+## The two design audits (04.10)
+
+What the audits asked for and the code lacked, done in Hello's own terms:
+
+- **Work time.** A reply keeps how long it worked (`messages.workedMs`,
+  database version 14), added up across its retries, never the pause before
+  one; the activity header shows it, live while the reply runs. A running step
+  says how long it has run, and "Waiting for response…" how long it has waited
+  (the number stays out of the live region's words).
+- **Summarise now.** From amber, the context meter offers Pi's own compaction
+  (`ChatService.compact`, RPC `compact`), on the chat's warm Pi or one started
+  for it; nothing is sent into the chat meanwhile, and the meter then reads what
+  the summary freed until the next reply reads the window again.
+- **Keys.** The app menu holds ⌘N (New Chat) and ⌘B (Toggle Sidebar), so they
+  work with a page or a terminal focused; a page that takes ⌘B for itself (bold
+  in an editor) keeps it. In the transcript, ↑/↓/Home/End move between messages
+  and ⌘C on a focused message with nothing selected copies it.
+- **States.** Every control that answers hover answers press with one deeper
+  fill — no lifts, no shadows; a message reached by keyboard carries the app's
+  ring; fields that dropped their outline have it on the pill around them.
+- **Keeping and spending.** A finished reply can become a Runbook chapter (its
+  heading the title, its sources kept). Settings › App adds up every reply's
+  usage: in all, by model and by the costliest chats.
+
+Not done, and why: hover lifts and divider lines (the approved look has
+neither), ⌘W (macOS closes windows with it), a duration *estimate* and a next-turn
+cost (nothing can know them honestly), and a per-folder model (Hello runs one
+connection for every chat; per-chat models are a design decision of their own).
 
 ## Chat awareness: context, attention, search
 
@@ -380,7 +517,12 @@ with refs running on across frames and centres moved to page coordinates, so
 a control in a payment frame is clicked by ref like any other; `browser_wait`
 polls for words, a control, an address (substring or `*` pattern), the load or
 a time; `browser_screenshot annotate: true` writes each ref on the page before
-the picture and erases it after, returning the list with the image. A read is what a
+the picture and erases it after, returning the list with the image. Visible
+means what the person sees: an element clipped away by an ancestor (a
+screen-reader-only block, `clip-path: inset(50%)`, a menu or accordion closed
+to nothing under `overflow: hidden`) is not, and an inline link wrapping a
+whole card is measured by its content's box; a control inside a looping
+animation is read as "moves by itself", and `browser_mark` refuses it. A read is what a
 person could use now, as an accessibility tree has it: with a modal dialog open
 (`dialog:modal` or `aria-modal`) only its words and controls are listed, a
 background marked `aria-hidden`/`inert` is left out, controls on screen come
@@ -415,6 +557,15 @@ shown natively, including windows filled by their opener; manually created empty
 tabs still show the app's start page. Browser presentation does not tear down on
 each HTTP redirect. Reload recovers a discarded view with one explicit navigation.
 
+What the address bar is given becomes an address or a Google search
+(`browserURL`). A bare name the person typed that no site answers to
+(`ERR_NAME_NOT_RESOLVED`) becomes the search for it (`searchInstead`): the load
+`navigate()` started reports its own failure, so no error shows on the way, and
+the failed name's history entry goes once the results load, so Back returns where
+the person was. An address typed with its scheme, a port, an IP or a name of the
+person's own network (localhost, `.local`, `.lan`, `.internal` …) fails as typed,
+and so does every navigation the model makes: that address is what it asked for.
+
 An explicit agent `browser_open` carries `userRequested: true` in its opened event
 so the active conversation selects and reveals the new browser tab even when
 Terminal/Files was selected. It never switches to another conversation. This
@@ -446,10 +597,56 @@ retain their own permission model and may maintain their own state.
 
 `terminal/notebook-context.ts` creates one authenticated loopback connection per
 supported CLI session and conversation. It reuses the Pi bridge transport with
-only `notebook_list` and `notebook_task_status` available. These operate on the
+only `notebook_list` and `notebook_task_status` available, plus Hello's browser
+for this conversation's tabs (below). The notebook tools operate on the
 same SQLite entries as the Hello chat; the latter validates the exact task line
 before updating its status. Runbook is read-only. The generated Node helper
 uses Electron's bundled Node and credentials inherited only by that CLI.
+
+The browser (user, 30.09: a CLI that could not see Hello's browser read the
+human's own Chrome through osascript instead) is the chat's own tool code and
+`BrowserHooks`: `browser_tabs`, `open`, `show_html`, `read`, `screenshot`,
+`navigate`, `click`, `type`, `press`, `scroll` and `wait`, run from the helper as
+`browser <action> '<json>'`. Every call passes the same per-tab Agent control
+check as the chat's. A screenshot is saved in the session's private folder (the
+newest 20 kept, all removed with the session) and its path is printed for the
+CLI's own image reader. The guide names Hello's browser as the only one and
+tells the CLI not to script the human's other browsers — guidance, not a wall:
+an unsandboxed CLI runs as the human.
+
+A terminal moved into the chat pane ("Set as chat tab") is saved in the window's
+workspace preferences as which CLI it is and, for Claude Code and Pi, the id of
+its conversation: every launch of those two starts one with an id of Hello's
+(`--session-id`; Pi's in `cli-sessions/pi`, which outlives the app). After a
+restart, the chat shown is given its CLIs again and they continue: Pi by the same
+id, Claude Code by `--resume` once it has written the conversation. Other CLIs
+come back in the same place with a new conversation.
+
+Settings' Reasoning reaches a local Qwen server from the CLIs on Hello's
+connection as it does from the chat (`chat/qwen-thinking.ts`: chosen in
+Settings, or on Auto a Qwen model on the person's own server): Qwen Code by
+`generationConfig.extra_body`, OpenCode by the model's `options` (the request
+body of `@ai-sdk/openai-compatible`), Pi by `thinkingFormat: qwen-chat-template`
+and `--thinking`, Aider by a model settings file's `extra_body`. Kimi sends no
+extra fields to an OpenAI server, so it thinks at the server's own level.
+
+Claude Code and Codex get the same connection as a stdio MCP server
+(`hello-mcp.cjs`, beside the shell client, run with Electron's Node): it relays
+`tools/list` and `tools/call` to the bridge, screenshots as MCP image content,
+and a refused call as the tool's `isError` answer. Claude Code loads it with
+`--mcp-config hello-mcp.json`, Codex with `-c mcp_servers.hello.*`, Kimi from
+`mcp.json` in its private home, Qwen Code from its private `settings.json`,
+OpenCode from the `mcp` of the config Hello hands it. No file holds the token:
+Claude expands `${HELLO_NOTEBOOK_BRIDGE_TOKEN}` in `--mcp-config` from its own
+environment, Codex forwards it by name (`env_vars`), and Kimi, Qwen Code and
+OpenCode give a stdio server their whole environment. The guide adds that
+another MCP server's browser tools (another app's bridge) are not this chat's.
+
+A Pi CLI loads Hello's own extension (`-e out/main/pi-extension.js`) on this same
+connection, with `HELLO_PI_EXTENSION_ROLE=cli`: the notebook and browser tools
+become Pi's own, and a screenshot comes back as a picture as well as a path. In
+that role the extension adds tools only — it does not change the process's
+folder, wrap its `fetch` or add Hello's runtime snapshot to its context.
 
 On launch, a small connection guide tells the model that Hello Tasks are not
 the repository's `tasks/todo.md`, gives the real launch folder and explains how
@@ -488,6 +685,90 @@ derived read-only snapshots, not a write-back channel. Their automatic refresh
 does not invalidate a committed database change; explicit path/export requests
 still report export failures. This is shared notebook access, not a scheduler,
 worker orchestration protocol or automatic task-completion detector.
+
+## DSH surface and the plugin market
+
+Hello. runs DeepSeek Harness (dsh) plugins without becoming dsh. dsh's interface
+plugins and themes need dsh's own web shell (its module loader, shared React and
+Cordis modules, about twenty infrastructure plugins and the slot declarers), so
+they run in the **DSH surface**: dsh's client, hosted by Hello.
+
+```
+Hello main ──utilityProcess──▶ DSH host   (runProfile, profile "hello", DSH_HOME = <data>/dsh/home)
+  │  one-time token → cookie: net.request in partition persist:hello-dsh    │ 127.0.0.1:<free port>
+  ├── <webview> "DSH" (src minted by main, no preload) ◀───────────────────┘ dsh client + UI plugins + Hello theme
+  ├── model proxy 127.0.0.1 (per-start token) ◀── dsh-llm-pi-ai route "hello"
+  ├── tool bridge 127.0.0.1 (per-start token) ──▶ dsh ToolRegistry, global view ◀── McpManager link "dsh-plugins"
+  └── Community Plugin Market: npm latest preview → confirm → pnpm add --save-exact → restart the host
+```
+
+The **Pi package market** is the same window over another backend
+(`src/main/market/pi-service.ts`): the list and its filters are pi.dev/packages'
+own (`pi-gallery.ts`, npm's search as fallback in `pi-catalog.ts`); an install is
+Hello's pnpm into a staging project that becomes a library plugin
+(`pi-install.ts`, `ResourceLibrary.installPackage`), turned on per chat. The
+sidebar's Plugin Market row opens a menu with both markets; each market's
+Installed list updates and removes what it installed.
+
+- **Install.** `@deepseek-ai/dsh@0.1.7-rc.2` (exact, or a newer version the person
+  updated to from the sidebar, kept in `<data>/dsh/version.json`) goes into `<data>/dsh/runtime`
+  with Hello's bundled pnpm (11.8.0, run by Electron as Node), hoisted, on first
+  use: about 0.5 GB. `node-addon-require-builtin`, which reads Node's internal
+  module loader through a native addon that recognises only exact Electron
+  builds, is replaced by Hello's shim (`assets/dsh/shims/`), which answers the same
+  calls through `--expose-internals` (see [`DSH-SPIKE.md`](DSH-SPIKE.md)).
+  The install panel is live: counters against pnpm's `Packages: +N`, elapsed time,
+  pnpm's latest line in plain words (a retry, a slow download, a build) and, past
+  twenty seconds of silence, how long it has been quiet. Every pnpm run is taken
+  at its word 20 s after it says `Done` (pnpm 11.8 once hung for hours retrying
+  other platforms' tarballs after finishing) and stopped after five minutes with
+  no output, with the reason.
+- **Profile.** `<data>/dsh/home/profiles/hello`: dsh's web template bundles plus
+  Hello's own `hello-dsh` bundle, linked from the app's files. Hello writes a patch
+  layer on every start (`hello.patch.yml`): no browser to open, no URL printed, and
+  with a model connection, the `llm-pi-ai` route `hello` and the default model.
+  The last three healthy profiles and a point before every change are kept.
+- **Theme.** `assets/dsh/hello-dsh/lib/client.js` is generated by
+  `scripts/dsh-theme.mjs` from `src/renderer/styles/tokens.css`: every dsh token
+  (`--dsw-*`), light and dark, through `ctx.theme.overrideTokens('hello', …)`, plus
+  Inter and Hello's mark and name in dsh's brand slots. A test fails when the pinned
+  dsh gains a token without a Hello value. The bundle's patch starts the appearance
+  dark, as Hello's window is; dsh's Settings › Appearance changes it in the
+  profile's own layer. Hello's overlay never sets it: dsh refuses a Settings change
+  that an overlay would override.
+- **Surface.** One guest, positioned like a browser tab's page over the DSH view,
+  parked while the view is closed, never reparented or reloaded for chrome. It stays
+  on the host's origin; web links open in a browser tab of the chat on screen.
+- **A place of its own.** The DSH view is a destination, like the chat it covers: the
+  chats sidebar stays beside it whatever that chat's layout (an expanded pane, tools
+  open in a narrower window), and asking for a chat — its row, New chat, a
+  notification — leaves the surface for it. With the sidebar hidden (unpinned, or a
+  window under 720 px), the view's header keeps clear of the window's own buttons
+  and starts with the button that pins the sidebar back; its × closes the surface.
+- **Model.** Sessions in the surface talk to Hello's active connection through
+  `dsh/model-proxy.ts`; the real key is added only on the way to the provider. The
+  connection is read on every request — address, key and model: dsh names the model
+  Hello had when the surface started, and the proxy puts Hello's current one in its
+  place, so a model changed in Hello never reaches a server that does not have it.
+- **Market.** `renderer/market/` and `main/market/` port dsh-community-market's
+  views, stylesheet, 1024Store adapter, network rules and install preview. The page
+  never names a package: it installs items main listed under opaque keys, or a
+  package the person typed in Settings. Hello adds a compatibility gate: a package
+  whose dsh peers exclude the pinned dsh is not installed. Sources: DSH 1024Store
+  (the default), dshfind, and standard sources added by manifest URL; one is in
+  use at a time, kept in `<data>/dsh/market-sources.json`. A standard source's
+  paging cursor stays in main, behind a token bound to that source and search.
+- **Skills and tools in Hello chats.** The skills of installed dsh plugins appear
+  in Extensions › Found on this Mac, to import like any skill. Their tools cross
+  through the tool bridge (`dsh/tool-bridge.ts`), which the host entry starts next
+  to dsh's registry: `GET /tools` lists the global view (dsh's own tools register
+  per agent, so this is what plugins brought, less the reserved `run_code`), and
+  `POST /call` runs one through dsh's policy and guards with no dsh session. In
+  Hello it is one library row, `dsh-plugins` (Settings › DSH surface switches it),
+  which the MCP manager reaches in-process through `dsh/tool-link.ts` instead of
+  spawning a server. It is off in every chat until turned on there, starts a
+  stopped surface when a chat needs it, never installs one, and lists again after
+  a host restart.
 
 ## Validation boundary
 

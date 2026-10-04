@@ -1,0 +1,133 @@
+/* The DSH surface: a workspace-sized view whose page lives in a fixed host,
+   like a browser tab's (see BrowserPane). */
+.dsh-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  /* One window in the workspace, like the tools card: its header shares the
+     band of the window's own buttons. */
+  margin: var(--sp-4) var(--sp-4) var(--sp-4) 0;
+  border-radius: var(--panel-radius);
+  background: var(--surface-panel);
+  border: 1px solid var(--surface-edge);
+  overflow: hidden;
+}
+.dsh-view[hidden] { display: none; }
+.dsh-view-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-height: var(--pane-header-height);
+  /* With the sidebar hidden this is the window's top-left corner, where its
+     own buttons sit: nothing of the header goes under them. */
+  padding: var(--sp-4) var(--sp-8) var(--sp-4) max(var(--sp-16), calc(var(--navigation-inset) + var(--sp-8)));
+  color: var(--ink-secondary);
+  -webkit-app-region: drag;
+}
+.dsh-view-head > * { -webkit-app-region: no-drag; }
+.dsh-view-head strong { color: var(--ink-primary); font-size: var(--fs-13); font-weight: var(--fw-medium); }
+.dsh-view-grow { flex: 1; -webkit-app-region: drag; }
+.dsh-state-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--sp-8);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--surface-edge);
+  font-size: var(--fs-11);
+  color: var(--ink-secondary);
+}
+.dsh-state-pill[data-state="running"] { color: var(--color-success); border-color: var(--color-success-subtle); }
+.dsh-state-pill[data-state="failed"] { color: var(--color-error); border-color: var(--color-error-subtle); }
+.dsh-state-pill[data-state="installing"],
+.dsh-state-pill[data-state="starting"] { color: var(--color-accent); border-color: var(--color-accent-subtle); }
+.dsh-view-body { position: relative; flex: 1; min-height: 0; margin: 0 var(--sp-8) var(--sp-8); }
+.dsh-slot { position: absolute; inset: 0; border-radius: var(--r-10); }
+.dsh-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-12);
+  padding: var(--sp-32);
+  text-align: center;
+  border-radius: var(--r-10);
+  background: var(--surface-workspace);
+}
+.dsh-panel h2 { margin: 0; font-size: var(--fs-16); font-weight: var(--fw-semibold); letter-spacing: -0.02em; }
+.dsh-panel p { max-width: 440px; margin: 0; color: var(--ink-secondary); line-height: 1.6; }
+.dsh-panel p.muted { color: var(--ink-tertiary); font-size: var(--fs-13); }
+.dsh-primary { background: var(--ink-primary); color: var(--surface-sidebar); }
+.dsh-primary:hover { background: var(--ink-secondary); color: var(--surface-sidebar); }
+.dsh-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); justify-content: center; }
+.dsh-progress { width: min(360px, 80%); height: 4px; border-radius: var(--r-pill); background: var(--surface-active); overflow: hidden; }
+.dsh-progress span { display: block; height: 100%; background: var(--ink-primary); transition: width var(--motion-base) var(--ease-out); }
+/* While pnpm is talking, light runs along the bar; quiet, it holds still. */
+.dsh-progress span { position: relative; overflow: hidden; }
+.dsh-progress[data-live] span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface-workspace) 60%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: dsh-progress-light 1.4s var(--ease-out) infinite;
+}
+@keyframes dsh-progress-light { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .dsh-progress[data-live] span::after { animation: none; } }
+.dsh-panel .dsh-activity { max-width: 520px; color: var(--ink-tertiary); font: var(--fs-12) / 1.5 var(--font-mono); overflow-wrap: anywhere; }
+.dsh-panel .dsh-quiet { max-width: 440px; color: var(--color-warning); font-size: var(--fs-13); }
+.dsh-error {
+  max-width: min(640px, 100%);
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--sp-12);
+  border-radius: var(--r-8);
+  background: var(--surface-raised);
+  border: 1px solid var(--surface-edge);
+  color: var(--ink-secondary);
+  font: var(--fs-12) / 1.5 var(--font-mono);
+  text-align: left;
+  white-space: pre-wrap;
+}
+.dsh-guest-host {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: var(--r-10);
+  background: var(--surface-panel);
+}
+.dsh-guest-host webview { width: 100%; height: 100%; display: flex; border: 0; }
+.sidebar-settings .dsh-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: var(--r-pill);
+  background: var(--ink-disabled);
+}
+.sidebar-settings .dsh-dot[data-state="running"] { background: var(--color-success); }
+.sidebar-settings .dsh-dot[data-state="failed"] { background: var(--color-error); }
+.sidebar-settings .dsh-dot[data-state="installing"],
+.sidebar-settings .dsh-dot[data-state="starting"] { background: var(--color-accent); }
+.sidebar-settings[aria-pressed="true"] { background: var(--surface-hover); color: var(--ink-primary); }
+
+.dsh-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-8);
+  margin: 0 var(--sp-8) var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
+  border: 1px solid var(--color-warning-subtle);
+  background: color-mix(in srgb, var(--color-warning-subtle) 60%, transparent);
+  color: var(--ink-primary);
+  font-size: var(--fs-13);
+}
+.dsh-banner > span { flex: 1; min-width: 200px; }
+.dsh-change { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--sp-4); font-size: var(--fs-13); color: var(--ink-secondary); }
+.dsh-change code { font: var(--fs-12) var(--font-mono); color: var(--ink-primary); }

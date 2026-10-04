@@ -12,6 +12,18 @@ const STDERR_BYTES = 16 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SHUTDOWN_GRACE_MS = 1_500;
 const SHUTDOWN_KILL_MS = 2_000;
+/** How long Pi may take over its own shutdown once its input ends. */
+const EXTENSION_SHUTDOWN_MS = 1_500;
+/** Pi writes why it stopped to stderr as it exits; give that the moment it needs. */
+const STDERR_SETTLE_MS = 300;
+
+/** An extension Pi could not load, with Pi's own reason; nothing started. */
+export class PiExtensionLoadError extends Error {
+  constructor(readonly extensionPath: string, readonly reason: string) {
+    super(`Pi could not load the extension ${extensionPath}: ${reason}`);
+    this.name = "PiExtensionLoadError";
+  }
+}
 
 export interface PiRpcEvent {
   type: string;
@@ -95,6 +107,8 @@ export class PiRpcProcess {
   private stdoutParts: Buffer[] = [];
   private stdoutBytes = 0;
   private stderrTail: Buffer = Buffer.alloc(0);
+  /** An unexpected stop seen, waiting for Pi's stderr before it is reported. */
+  private stopMessage?: string;
   private stderrTruncated = false;
   private writeTail: Promise<void> = Promise.resolve();
   private queuedBytes = 0;
@@ -261,16 +275,10 @@ export class PiRpcProcess {
     });
     child.once("close", (code, signal) => this.finish(code, signal));
     child.once("exit", () => {
-      if (!this.stopping && !this.closed) {
-        // Descendants may retain pipe descriptors after the Pi parent exits.
-        this.fail(new Error("Pi process exited unexpectedly."));
-      }
+      // Descendants may retain pipe descriptors after the Pi parent exits.
+      this.failAfterStderr("Pi process exited unexpectedly.");
     });
-    child.stdout.once("end", () => {
-      if (!this.stopping && !this.closed) {
-        this.fail(new Error("Pi closed its RPC output."));
-      }
-    });
+    child.stdout.once("end", () => this.failAfterStderr("Pi closed its RPC output."));
     await this.dispatch(
       { type: "get_state" },
       timeoutValue(this.options.startupTimeoutMs, DEFAULT_TIMEOUT_MS),
@@ -446,6 +454,32 @@ export class PiRpcProcess {
       pending.timer = this.expiry(pending.command, ms ?? pending.timeoutMs);
     }
   }
+  /**
+   * An unexpected stop, reported once what Pi wrote on its way out has
+   * arrived: an extension that failed to load is named in it.
+   */
+  private failAfterStderr(message: string): void {
+    if (this.stopping || this.closed || this.stopMessage !== undefined) return;
+    this.stopMessage = message;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, STDERR_SETTLE_MS);
+      timer.unref();
+    });
+    void Promise.race([this.whenClosed, settled]).then(() => {
+      if (timer) clearTimeout(timer);
+      this.fail(this.explained(new Error(message)));
+    });
+  }
+
+  /** Pi's own account of an extension it could not load, when stderr has one. */
+  private explained(error: Error): Error {
+    const match = /Failed to load extension "([^"\n]+)": (?:Failed to load extension: )?([^\n]+)/.exec(
+      this.stderrTail.toString("utf8"),
+    );
+    return match ? new PiExtensionLoadError(match[1], this.redact(match[2].trim())) : error;
+  }
+
   private fail(error: Error): void {
     if (this.closed || this.stopping) return;
     this.failure = error;
@@ -471,6 +505,23 @@ export class PiRpcProcess {
       return;
     }
     if (this.closed) return;
+    const exited = this.child.exitCode !== null || this.child.signalCode !== null;
+    if (!exited) {
+      // End of input is Pi's own way out: it lets extensions finish their
+      // session_shutdown work — a memory plugin saving the session — and
+      // exits. A signal sent at the same moment cuts that work off after
+      // ~10 ms. The reply in progress is aborted first, so nothing the person
+      // stopped keeps streaming while those handlers run.
+      try {
+        if (!this.child.stdin.destroyed) {
+          if (this.ready) this.child.stdin.write(`${JSON.stringify({ type: "abort", id: randomUUID() })}\n`);
+          this.child.stdin.end();
+        }
+      } catch {
+        // A broken pipe already ended the input.
+      }
+      if (await this.waitForClose(EXTENSION_SHUTDOWN_MS)) return;
+    }
     this.child.stdin.destroy();
     this.signalTree("SIGTERM");
     if (await this.waitForClose(SHUTDOWN_GRACE_MS)) return;
@@ -529,7 +580,7 @@ export class PiRpcProcess {
     this.closed = true;
     const error =
       this.failure ??
-      (!expected ? new Error("Pi session exited unexpectedly.") : undefined);
+      (!expected ? this.explained(new Error(this.stopMessage ?? "Pi session exited unexpectedly.")) : undefined);
     this.rejectPending(error ?? new Error("Pi session is closed."));
     this.stdoutParts = [];
     this.stdoutBytes = 0;
@@ -575,6 +626,8 @@ export class PiRpcProcess {
   }
 
   private asError(error: unknown, fallback: string): Error {
+    // Already redacted, and the caller needs to know which extension it was.
+    if (error instanceof PiExtensionLoadError) return error;
     return new Error(error instanceof Error ? this.redact(error.message) : fallback);
   }
 }

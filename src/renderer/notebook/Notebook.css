@@ -294,3 +294,160 @@
   min-width: 0;
   margin: 0;
 }
+
+/* One notebook, three sections (user, 29.09): Runbooks, Tasks and Plans as a
+   quiet tree beside the editor. A section's switch sits at the end of its row,
+   a chapter's before its title; what is off reads as off, and stays in reach. */
+.notebook .notebook-tree {
+  display: flex;
+  flex: 0 0 204px;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.notebook-section-header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: var(--control-lg);
+}
+
+.notebook-section-title {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 0;
+  height: var(--control-lg);
+  padding: 0 var(--sp-8);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  text-align: left;
+}
+
+.notebook-section-title:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.notebook-section-title > svg {
+  flex: none;
+  color: var(--ink-tertiary);
+}
+
+.notebook-section-header .icon-button {
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  color: var(--ink-tertiary);
+}
+
+.notebook-section-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: var(--sp-12);
+}
+
+.notebook-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  border-radius: var(--r-8);
+}
+
+.notebook-entry-row[data-selected="true"] {
+  background: var(--surface-raised);
+}
+
+.notebook-entry-row .notebook-entry {
+  flex: 1;
+  min-width: 0;
+  padding-left: var(--sp-4);
+}
+
+/* The row carries the selection; the title inside it stays flat. */
+.notebook-entry-row .notebook-entry[data-selected="true"] {
+  background: transparent;
+}
+
+.notebook-entry-row[data-shared="false"] .notebook-entry {
+  color: var(--ink-tertiary);
+}
+
+/* A section that is off stays readable and editable, just quieter; its switch
+   keeps full contrast, so turning it back on is never a search. */
+.notebook-section[data-on="false"] .notebook-section-title,
+.notebook-section[data-on="false"] .notebook-section-entries {
+  opacity: 0.55;
+}
+
+.notebook-section-empty {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-8);
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+
+.notebook-show-more {
+  align-self: flex-start;
+  padding: var(--sp-4) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-tertiary);
+  font-size: var(--fs-12);
+}
+
+.notebook-show-more:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+/* The switch: drawn as a switch, green while on. */
+.notebook-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-tertiary);
+  cursor: pointer;
+  transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+
+.notebook-switch:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.notebook-switch[aria-checked="true"] {
+  color: var(--color-success);
+}
+
+.notebook-switch:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+@media (max-width: 760px) {
+  .notebook .notebook-tree {
+    flex-basis: 168px;
+  }
+}
+
+@media (max-width: 620px) {
+  .notebook .notebook-tree {
+    flex-basis: 140px;
+  }
+}

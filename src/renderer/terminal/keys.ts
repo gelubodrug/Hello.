@@ -3,7 +3,8 @@
  *
  * xterm claims nearly every key that reaches its textarea, including the ones
  * this window's own shortcuts are built on: with no handler in front of it,
- * focusing the terminal silently kills ⌘B, ⌘⇧B and ⌘J. The rules are stated
+ * focusing the terminal silently kills ⌘B (View › Toggle Sidebar, in the app
+ * menu) and ⌘J, kept for showing and hiding the terminal. The rules are stated
  * here as a pure decision so they can be read — and tested — without a
  * terminal attached.
  */
@@ -57,9 +58,9 @@ export function terminalKeyVerdict(
 }
 
 /**
- * ⌘J / Ctrl+J toggles the terminal drawer, matching the panel-toggle key every
- * editor on this platform uses. ⌘B is the sidebar and ⌘⇧B the browser
- * (src/renderer/app/browser-split.ts).
+ * ⌘J / Ctrl+J: the panel-toggle key every editor on this platform uses, kept
+ * for showing and hiding the terminal. Nothing acts on it yet; ⌘B, the
+ * sidebar, is the app menu's (src/main/index.ts).
  */
 export function isTerminalToggleShortcut(
   event: Pick<

@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, link, mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AppSettings } from '../../shared/types';
 import { normalizeEndpoint } from '../data/store';
+import { usesQwenThinkingSwitch } from './qwen-thinking';
 
 export interface ImportedChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -31,6 +32,11 @@ export function piRpcEntry(): string {
     if (dirname(directory) === directory) break;
   }
   throw new Error('The bundled Pi runtime could not be located next to this build.');
+}
+
+/** Hello's own Pi extension, bundled beside main: the bridge to Hello's tools. */
+export function helloPiExtensionPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'pi-extension.js');
 }
 
 export function piConversationDir(dataDir: string, conversationId: string): string {
@@ -104,7 +110,11 @@ export interface PiLaunchConfiguration {
   skillPaths?: string[];
   /** Verified Pi extension entry files from activated plugins. */
   extensionPaths?: string[];
+  /** The chat's attached folder, which extensions see as their working directory. */
+  folder?: string | null;
   promptPaths?: string[];
+  /** The Pi to start: an update installed from the sidebar. Absent, the bundled one. */
+  piEntry?: string;
 }
 
 /** Isolated resources and credentials; no global Pi config or project discovery. */
@@ -144,29 +154,39 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   const openai = hostname === 'api.openai.com';
   const openrouter = compatibility === 'auto' && hostname === 'openrouter.ai';
   const deepseek = compatibility === 'auto' && hostname === 'api.deepseek.com';
-  const qwen = compatibility === 'qwen-chat-template';
+  // Auto, for a Qwen model on a server of the person's own: Qwen's thinking
+  // switch, so Reasoning Off reaches the server (qwen-thinking.ts).
+  const qwenFor = (id: string) => usesQwenThinkingSwitch(baseUrl, id, compatibility);
   const effort = settings.reasoningEffort ?? 'off';
-  const compat = {
-    supportsStore: false,
-    supportsDeveloperRole: openai,
-    supportsReasoningEffort: !qwen && !deepseek && !openrouter && (openai || compatibility === 'openai'),
-    maxTokensField: openai ? 'max_completion_tokens' : 'max_tokens',
-    ...(openrouter ? { thinkingFormat: 'openrouter' } : {}),
-    ...(deepseek ? { thinkingFormat: 'deepseek' } : {}),
-    ...(qwen ? { thinkingFormat: 'qwen-chat-template' } : {}),
+  const compatFor = (id: string) => {
+    const qwen = qwenFor(id);
+    return {
+      supportsStore: false,
+      supportsDeveloperRole: openai,
+      supportsReasoningEffort: !qwen && !deepseek && !openrouter && (openai || compatibility === 'openai'),
+      maxTokensField: openai ? 'max_completion_tokens' : 'max_tokens',
+      ...(openrouter ? { thinkingFormat: 'openrouter' } : {}),
+      ...(deepseek ? { thinkingFormat: 'deepseek' } : {}),
+      ...(qwen ? { thinkingFormat: 'qwen-chat-template' } : {}),
+    };
   };
+  // This custom endpoint descriptor must preserve submitted image blocks.
+  // The selected endpoint/model still decides whether vision is supported;
+  // declaring text-only here would silently discard user attachments in Pi.
+  const describe = (id: string) => ({ id, name: id, input: ['text', 'image'],
+    reasoning: effort !== 'off' || qwenFor(id) || deepseek, contextWindow, maxTokens, compat: compatFor(id),
+    // Keep the configured temperature except families that reject it.
+    ...(/^(?:o[134](?:-|$)|gpt-5)/i.test(id) ? {} : {
+      samplingParams: { temperature: settings.temperature },
+    }),
+  });
+  // The model plugins' subagents run on (user, 29.09), on this same
+  // connection: a second model of the same provider, which pi-subagents takes
+  // as its default. Its children read this folder too.
+  const subagentModel = settings.subagentModel?.trim() && settings.subagentModel.trim() !== settings.model ? settings.subagentModel.trim() : undefined;
   const models = { providers: { hello: {
     baseUrl, api: 'openai-completions', apiKey: '$HELLO_PI_API_KEY',
-    // This custom endpoint descriptor must preserve submitted image blocks.
-    // The selected endpoint/model still decides whether vision is supported;
-    // declaring text-only here would silently discard user attachments in Pi.
-    models: [{ id: settings.model, name: settings.model, input: ['text', 'image'],
-      reasoning: effort !== 'off' || qwen || deepseek, contextWindow, maxTokens, compat,
-      // Keep the configured temperature except families that reject it.
-      ...(/^(?:o[134](?:-|$)|gpt-5)/i.test(settings.model) ? {} : {
-        samplingParams: { temperature: settings.temperature },
-      }),
-    }],
+    models: [describe(settings.model), ...(subagentModel ? [describe(subagentModel)] : [])],
   } } };
   const piSettings = {
     defaultProvider: 'hello', defaultModel: settings.model, defaultThinkingLevel: effort,
@@ -180,6 +200,8 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
     retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000,
       provider: { maxRetries: 0, timeoutMs: options.requestTimeoutMs, maxRetryDelayMs: 60000 } },
     httpIdleTimeoutMs: options.requestTimeoutMs,
+    // pi-subagents: provider/model, which wins exactly.
+    ...(subagentModel ? { subagents: { defaultModel: `hello/${subagentModel}` } } : {}),
   };
   const promptFile = join(root, 'system-prompt.md');
   await Promise.all([
@@ -195,14 +217,20 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   Object.assign(env, options.bridgeEnv, {
     ELECTRON_RUN_AS_NODE: '1', PI_CODING_AGENT_DIR: agentDir,
     PI_SKIP_VERSION_CHECK: '1', PI_OFFLINE: '1', HELLO_PI_API_KEY: options.key || 'hello-local',
+    // Pi itself starts in the private directory above, where it reads its
+    // settings and keeps the session: a folder's own .pi files never load.
+    // Hello's extension, loaded first, moves the process into the folder, so
+    // the extensions a person activated see the project the way they would
+    // if Pi ran in it (a memory plugin scopes by its git remote).
+    ...(options.folder && isAbsolute(options.folder) ? { HELLO_CHAT_FOLDER: options.folder } : {}),
   });
   return {
     command: process.execPath, cwd, env, sessionFile,
     args: [
-      piRpcEntry(),
+      options.piEntry ?? piRpcEntry(),
       '--offline', '-nc', '-ne', '-ns', '-np', '--no-themes', '--no-builtin-tools',
       '--exclude-tools', 'read,bash,edit,write,grep,find,ls,powershell',
-      '-e', join(dirname(fileURLToPath(import.meta.url)), 'pi-extension.js'),
+      '-e', helloPiExtensionPath(),
       // Activated plugin extensions load beside Hello's own, never instead of it.
       ...(options.extensionPaths ?? []).flatMap(file => ['-e', file]),
       // `--skill` stays additive under `-ns`, so nothing else on disk is discovered.

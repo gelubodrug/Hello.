@@ -14,6 +14,7 @@ import type {
   WorkerInfo,
 } from "../../shared/types";
 import {
+  continuesSessions,
   detectCliWorkers,
   isWorkerId,
   prepareCliWorkerLaunch,
@@ -107,6 +108,8 @@ export interface MainTerminalServiceOptions {
   home?: string;
   spawn?: SpawnPty;
   detectWorkers?: () => DetectedWorker[];
+  /** Hello's own Pi CLI, the one its chats run on. */
+  piCli?: () => string;
 }
 
 /**
@@ -199,12 +202,12 @@ export class MainTerminalService {
   private detected(): DetectedWorker[] {
     return (
       this.options.detectWorkers?.() ??
-      detectCliWorkers({ env: this.options.env, home: this.options.home })
+      detectCliWorkers({ env: this.options.env, home: this.options.home, ...(this.options.piCli ? { piCli: this.options.piCli() } : {}) })
     );
   }
 
   workers(): WorkerInfo[] {
-    return this.detected().map(({ command: _command, ...worker }) => worker);
+    return this.detected().map(({ command: _command, node: _node, ...worker }) => worker);
   }
 
   private cwd(conversationId: string): string {
@@ -226,10 +229,21 @@ export class MainTerminalService {
   async create(
     conversationId: string,
     workerId?: WorkerId,
+    /** Continue this conversation of the CLI: a chat tab coming back after a restart. */
+    continued?: string,
   ): Promise<TerminalSession> {
     if (this.disposed) throw new Error("The terminal service has closed.");
     if (workerId !== undefined && !isWorkerId(workerId))
       throw new Error("Unknown CLI worker.");
+    if (continued !== undefined && !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(continued))
+      throw new Error("Invalid CLI session.");
+    // One process per CLI conversation: two writing one session corrupt it,
+    // and a window that asked twice (user, 30.09: eight Pi copies) gets the one.
+    if (continued !== undefined) {
+      const running = [...this.sessions.values()].find((live) => live.view.conversationId === conversationId
+        && live.view.session === continued && live.view.status === "running");
+      if (running) return { ...running.view };
+    }
     if (this.sessions.size + this.starting >= MAX_SESSIONS)
       throw new Error(
         `Close a terminal before opening more than ${MAX_SESSIONS} sessions.`,
@@ -264,6 +278,9 @@ export class MainTerminalService {
             "The chat folder changed while the CLI was opening. Launch it again in the selected folder.",
           );
       }
+      // Each launch of a CLI that can continue a conversation starts one with
+      // an id of Hello's, so it can be continued if it becomes a chat tab.
+      const cliConversation = worker && continuesSessions(worker.id) ? (continued ?? randomUUID()) : undefined;
       if (worker && notebooks) {
         launch = prepareCliWorkerLaunch({
           worker,
@@ -271,6 +288,7 @@ export class MainTerminalService {
           notebooks,
           userDataDir: this.options.userDataDir,
           context: notebookContext,
+          ...(cliConversation ? { session: { id: cliConversation, resume: continued !== undefined } } : {}),
         });
       } else {
         const shell = resolveTerminalShell(this.options.env);
@@ -306,6 +324,7 @@ export class MainTerminalService {
               notebookContext: launch.notebookContext ?? false,
             }
           : {}),
+        ...(cliConversation ? { session: cliConversation } : {}),
         cwd,
         status: "running",
       };

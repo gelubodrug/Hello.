@@ -22,13 +22,15 @@ This is a separate, greenfield Electron app. Never mutate the old repository at
 - CLI sessions receive a small Hello connection guide, never an automatically
   assigned task or the full notebook contents. Read Tasks/Runbook on request
   through the session-bound notebook connection; empty notebooks must not block launch.
-- All browser tabs start Agent control Off. Read access and mutations are gated
-  in the main process, per tab; full control requires an explicit user selection.
-  Opening a requested page/dev URL or scoped HTML preview inside Hello does not
-  require a grant. Prefer browser_open; it creates an Off tab. Off still blocks
-  page reading and DOM interaction; Read allows reading; Full allows interaction.
+- A tab the person opens starts Agent control Off. Read access and mutations are
+  gated in the main process, per tab. A tab the model opens with browser_open
+  starts Full (user, 29.09: the model opens a page to work in it, read-write);
+  that Full is not saved, comes back Off after a restart, and becomes the
+  person's once they change it. Opening a requested page/dev URL or scoped HTML
+  preview inside Hello does not require a grant. Off still blocks page reading
+  and DOM interaction; Read allows reading; Full allows interaction.
 - Generated HTML uses browser_show_html: bounded app-owned artifacts work without
-  an attached folder. Such a tab opens at Full, and only such a tab: the model
+  an attached folder. Such a tab opens at Full, like every tab the model opens: the model
   wrote every word in it, it is served from an isolated local session with
   nothing signed in, and a page it cannot look at is a page it never checked.
   The grant belongs to the document, not to the tab — navigating that tab

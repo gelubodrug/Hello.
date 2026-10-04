@@ -50,11 +50,41 @@ const words = el => {
   const picture = el.querySelector ? el.querySelector('img[alt]') : null;
   return attr('aria-label') || inner(el) || attr('title') || attr('alt') || (picture ? fold(picture.getAttribute('alt')) : '');
 };
+// An inline link around a whole card has no width of its own: its content's
+// box is where it is, for reading, clicking and marking alike (user, 30.09).
+const boxOf = el => {
+  const own = el.getBoundingClientRect();
+  if ((own.width > 0 && own.height > 0) || !el.firstElementChild || !document.createRange) return own;
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const inner = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+    return inner && inner.width > 0 && inner.height > 0 ? inner : own;
+  } catch (error) { return own; }
+};
+// Clipped away by what holds it: a screen-reader-only block (1x1, overflow
+// hidden, clip-path inset(50%)), a menu or accordion closed to nothing — there
+// for assistive technology, never for the person's eyes (user, 30.09: a hidden
+// nav repeated the names of the cards, and the marks went on it). Once per node.
+const clipMemo = new WeakMap();
+const clippedAway = node => {
+  if (!node || node === document.documentElement || !window.getComputedStyle) return false;
+  if (clipMemo.has(node)) return clipMemo.get(node);
+  const style = getComputedStyle(node);
+  let away = /inset\\(\\s*50%/.test(style.clipPath || '') || /rect\\(\\s*0(px)?[ ,]+0(px)?[ ,]+0(px)?[ ,]+0(px)?\\s*\\)/.test(style.clip || '');
+  if (!away && /hidden|clip/.test([style.overflow, style.overflowX, style.overflowY].join(' '))) {
+    const box = node.getBoundingClientRect();
+    away = box.width <= 2 || box.height <= 2;
+  }
+  away = away || clippedAway(node.parentElement);
+  clipMemo.set(node, away);
+  return away;
+};
 const visible = el => {
-  const box = el.getBoundingClientRect();
+  const box = boxOf(el);
   if (!(box.width > 0 && box.height > 0)) return false;
   const style = window.getComputedStyle ? getComputedStyle(el) : null;
-  return !style || style.visibility !== 'hidden';
+  return (!style || style.visibility !== 'hidden') && !clippedAway(el);
 };
 // Hidden from use: a modal's background (aria-hidden, inert) takes no clicks
 // while the dialog is open — what an accessibility tree leaves out too.
@@ -86,11 +116,11 @@ const usable = selector => {
   const open = all.filter(el => !shut(el, root));
   return { dialog, list: open.length || !all.length ? open : all };
 };
-const inView = el => { const box = el.getBoundingClientRect(); return box.bottom > 0 && box.right > 0 && box.top < innerHeight && box.left < innerWidth; };
+const inView = el => { const box = boxOf(el); return box.bottom > 0 && box.right > 0 && box.top < innerHeight && box.left < innerWidth; };
 // What is over a control's centre, when it is not the control: it would take the click.
 const covering = el => {
   if (!document.elementFromPoint) return null;
-  const box = el.getBoundingClientRect();
+  const box = boxOf(el);
   const x = box.left + box.width / 2, y = box.top + box.height / 2;
   if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
   const hit = document.elementFromPoint(x, y);
@@ -134,7 +164,11 @@ const stateFlags = el => {
   if (tag === 'select') { const chosen = el.options[el.selectedIndex]; if (chosen) flags.push('= ' + JSON.stringify(fold(chosen.text).slice(0, 60))); }
   else if ((tag === 'input' || tag === 'textarea') && !/^(password|checkbox|radio|button|submit|reset|file|hidden|image)$/.test(type))
     flags.push(fold(el.value) ? '= ' + JSON.stringify(fold(el.value).slice(0, 60)) : 'empty');
-  if (tag === 'a' && attr('href')) { try { const url = new URL(el.href); flags.push('→ ' + (url.origin === location.origin ? url.pathname : url.host + url.pathname).slice(0, 80)); } catch (error) { /* not a URL */ } }
+  // Where a link goes, whole enough to use: the query stays (an item?id=… link
+  // is its id), another site keeps its scheme so it can be fetched, and an
+  // address too long to list is shortened in the middle, visibly — a silently
+  // cut one read as a real address and was fetched into a 404 (29.09).
+  if (tag === 'a' && attr('href')) { try { const url = new URL(el.href); const whole = url.origin === location.origin ? url.pathname + url.search : url.href; flags.push('→ ' + (whole.length > 160 ? whole.slice(0, 110) + '…' + whole.slice(-40) : whole)); } catch (error) { /* not a URL */ } }
   return flags;
 };
 const flagged = flags => flags.length ? ' (' + flags.join(', ') + ')' : '';
@@ -206,7 +240,7 @@ const el = find(${JSON.stringify(target)});
 const what = describe(el);
 // Instant, never smooth: the centre is measured right after the scroll.
 if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-const box = el.getBoundingClientRect();
+const box = boxOf(el);
 const left = Math.max(0, box.left), top = Math.max(0, box.top);
 const right = Math.min(window.innerWidth, box.right), bottom = Math.min(window.innerHeight, box.bottom);
 if (right <= left || bottom <= top) throw new Error(what + ' is outside the viewport even after scrolling to it.');
@@ -215,6 +249,73 @@ const hit = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
 if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) { el.click(); return { what, x, y, covered: describe(hit) }; }
 return { what, x, y };
 })()`;
+}
+
+/** Where an element is, as boxScript measures it: in its own frame's viewport, and the path that finds it again. */
+export interface ElementBox { what: string; left: number; top: number; width: number; height: number; inView: boolean; path?: string;
+  /** It moves by itself (a ticker, a marquee): a mark cannot stay on it. */
+  moving?: boolean }
+
+/**
+ * Where an element is, without touching it: its box in this frame's viewport
+ * and what it is — for a mark the person is shown (browser_mark). With
+ * `reveal` it is scrolled into view first, on a page at Full only.
+ */
+export function boxScript(target: ElementTarget, reveal = false): string {
+  return `(async () => {${PAGE_HELPERS}
+const el = find(${JSON.stringify(target)});
+${reveal ? "if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });" : ''}
+const measure = () => boxOf(el);
+const box = measure();
+// Something that moves by itself (user, 30.09: a ticker at the top repeated
+// the names of the cards below it, and the marks slid away with it): a
+// looping animation on it or around it, or a place on the page that changes
+// while it is measured. A page scrolled meanwhile is not movement.
+const loops = node => typeof node.getAnimations === 'function' && node.getAnimations().some(animation =>
+  animation.playState === 'running' && animation.effect && typeof animation.effect.getTiming === 'function' && animation.effect.getTiming().iterations === Infinity);
+let moving = false;
+for (let node = el; node && node !== document.documentElement && !moving; node = node.parentElement) moving = loops(node);
+if (!moving) {
+  const x = box.left + window.scrollX, y = box.top + window.scrollY;
+  await new Promise(resolve => setTimeout(resolve, 150));
+  const again = measure();
+  moving = Math.abs(again.left + window.scrollX - x) > 2 || Math.abs(again.top + window.scrollY - y) > 2;
+}
+// The element itself, not a place on the screen (user, 30.09: marks that
+// stay on their element when the page is resized): a CSS path, from its id
+// where one is unique, that finds it again — in Hello's own world, and after a reload.
+const unique = node => node.id && document.querySelectorAll('#' + CSS.escape(node.id)).length === 1;
+const steps = [];
+for (let node = el; node && node.nodeType === 1 && node !== document.documentElement; node = node.parentElement) {
+  if (unique(node)) { steps.unshift('#' + CSS.escape(node.id)); break; }
+  const tag = node.tagName.toLowerCase();
+  const same = node.parentElement ? [...node.parentElement.children].filter(child => child.tagName === node.tagName) : [];
+  steps.unshift(same.length > 1 ? tag + ':nth-of-type(' + (same.indexOf(node) + 1) + ')' : tag);
+}
+const path = steps.join(' > ');
+return { what: describe(el), left: box.left, top: box.top, width: box.width, height: box.height,
+  inView: box.bottom > 0 && box.right > 0 && box.top < window.innerHeight && box.left < window.innerWidth,
+  ...(path && document.querySelector(path) === el ? { path } : {}), ...(moving ? { moving: true } : {}) };
+})()`;
+}
+
+/**
+ * A page script's exception reaches main as its whole stack — "Error: No
+ * visible element…\n    at find (<anonymous>:147:28)…" (user, 30.09) — lines of
+ * Hello's own injected script that tell neither the model nor the person
+ * anything. Only its words are kept. Electron hands it over as that text, not
+ * as an Error, and a CLI then read only "Hello tool execution failed.": it
+ * becomes an Error here, with its words.
+ */
+export function pageScriptError(error: unknown): unknown {
+  const text = error instanceof Error ? error.message : typeof error === 'string' ? error
+    : error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message
+      : undefined;
+  if (text === undefined) return error;
+  const lines = text.split('\n');
+  const stack = lines.findIndex(line => /^\s+at .*<anonymous>/.test(line));
+  if (error instanceof Error && stack < 1) return error;
+  return new Error((stack < 1 ? lines : lines.slice(0, stack)).join('\n').replace(/^(?:Uncaught )?[A-Za-z]*Error: /, '').trim() || 'The page script failed.');
 }
 
 /** Set a text field's value the way a framework notices, without submitting;
@@ -302,12 +403,22 @@ if (layer) {
   layer.setAttribute('style', 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;font:11px/1 system-ui,sans-serif;');
   document.body.appendChild(layer);
 }
+// What loops on its own (a ticker, a marquee), found once for the whole read:
+// a control inside it moves by itself, and is said to (user, 30.09).
+let looping = [];
+try {
+  looping = (typeof document.getAnimations === 'function' ? document.getAnimations() : [])
+    .filter(animation => animation.playState === 'running' && animation.effect && typeof animation.effect.getTiming === 'function'
+      && animation.effect.getTiming().iterations === Infinity && animation.effect.target && animation.effect.target.nodeType === 1)
+    .map(animation => animation.effect.target);
+} catch (error) { looping = []; }
 const lines = shown.map((item, index) => {
   const el = item.el;
-  const box = el.getBoundingClientRect();
+  const box = boxOf(el);
   const ref = 'e' + (${start} + index);
-  const where = !item.onScreen ? ['off screen, ' + (box.top >= innerHeight ? 'below' : box.bottom <= 0 ? 'above' : 'beside')]
-    : item.cover ? ['covered by ' + describe(item.cover)] : item.hidden ? ['shows on hover'] : [];
+  const where = (!item.onScreen ? ['off screen, ' + (box.top >= innerHeight ? 'below' : box.bottom <= 0 ? 'above' : 'beside')]
+    : item.cover ? ['covered by ' + describe(item.cover)] : item.hidden ? ['shows on hover'] : [])
+    .concat(looping.some(target => target === el || target.contains(el)) ? ['moves by itself'] : []);
   if (layer) {
     const tag = document.createElement('div');
     tag.textContent = ref;

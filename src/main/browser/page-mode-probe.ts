@@ -500,6 +500,305 @@ export const PAGE_MODE_PROBE = String.raw`(function(){
     W[method]("resize",onScroll,true);
   }
 
+  // ── Marks an agent places (user, 30.09) ─────────────────────────────────
+  // "A pointer for agents": after finding something, the agent shows the
+  // person where to look (browser_mark). Annotate's own pins and notes, each
+  // with an outline around the element it means, on a layer of their own — so
+  // never among the person's markers, their Send or their exit. Page
+  // coordinates like the person's: they scroll with the page. A chat bubble at
+  // the left keeps the index: on hover it lists them, a click scrolls to one.
+  // Each has an ×; what the person keeps is what main keeps with the page.
+  var HINT_CSS=MARK_CSS+
+    ".box{position:absolute;box-sizing:border-box;border:2px solid var(--c);border-radius:8px;pointer-events:none;"+
+    "box-shadow:0 0 0 4px rgba(0,0,0,.18),0 0 18px var(--c)}"+
+    ".box.appear,.hint.appear .pinwrap,.hint.appear .label{animation-delay:var(--d,0ms)}"+
+    ".box.appear{animation:markLabel .26s cubic-bezier(.2,.8,.2,1) both}"+
+    ".box.pulse{animation:hintPulse 1.1s ease-out 2}"+
+    "@keyframes hintPulse{0%{box-shadow:0 0 0 0 var(--c)}100%{box-shadow:0 0 0 14px rgba(0,0,0,0)}}"+
+    ".hint .label{display:flex;align-items:flex-start;gap:6px;padding-right:5px}"+
+    ".x{flex:none;width:18px;height:18px;margin:-1px -1px 0 2px;border:0;border-radius:50%;background:transparent;color:#8a8a8a;"+
+    "font:600 14px/18px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;text-align:center;cursor:pointer;padding:0}"+
+    ".x:hover{background:rgba(255,255,255,.12);color:#fff}"+
+    ".dock{position:fixed;left:12px;top:50%;transform:translateY(-50%);display:flex;align-items:center;gap:8px;pointer-events:auto;"+
+    "font:400 13px/1.35 -apple-system,BlinkMacSystemFont,system-ui,sans-serif}"+
+    ".bubble{position:relative;width:38px;height:38px;border-radius:50%;border:0;background:#1e1e1e;color:#e8e8e8;cursor:pointer;"+
+    "display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(0,0,0,.45);padding:0}"+
+    ".bubble svg{width:19px;height:19px}"+
+    ".count{position:absolute;right:-3px;top:-3px;min-width:17px;height:17px;border-radius:9px;background:#f5c542;color:#111;"+
+    "font:700 11px/17px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;text-align:center;padding:0 4px;box-sizing:border-box}"+
+    ".list{display:none;flex-direction:column;gap:6px;max-height:70vh;overflow:auto;padding:2px}"+
+    ".dock:hover .list,.dock:focus-within .list{display:flex;animation:markLabel .18s cubic-bezier(.2,.8,.2,1) both}"+
+    ".chip{display:flex;align-items:center;gap:6px;width:240px;box-sizing:border-box;background:#1e1e1e;color:#d4d4d4;border:0;"+
+    "border-left:3px solid var(--c);border-radius:8px;padding:6px 6px 6px 9px;box-shadow:0 8px 24px rgba(0,0,0,.45);cursor:pointer;text-align:left;font:inherit}"+
+    ".chip:hover{background:#262626}"+
+    ".chip .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"+
+    "@media (prefers-reduced-motion:reduce){.box.appear,.box.pulse,.dock:hover .list,.dock:focus-within .list{animation:none}}";
+  // Built node by node: some pages refuse markup given as a string.
+  function bubbleIcon(){
+    var ns="http://www.w3.org/2000/svg";
+    var svg=document.createElementNS(ns,"svg");
+    var attrs={viewBox:"0 0 24 24",fill:"none",stroke:"currentColor","stroke-width":"2","stroke-linecap":"round","stroke-linejoin":"round","aria-hidden":"true"};
+    for(var k in attrs)svg.setAttribute(k,attrs[k]);
+    var path=document.createElementNS(ns,"path");
+    path.setAttribute("d","M7.9 20A9 9 0 1 0 4 16.1L2 22Z");
+    svg.appendChild(path);
+    return svg;
+  }
+  var H={host:null,root:null,marks:[],dock:null,waiters:[],frame:0,timer:0,listening:false};
+  function hintsState(){return H.marks.map(function(m){return {n:m.n,x:m.x,y:m.y,width:m.width,height:m.height};});}
+  function hintsChanged(){
+    var waiters=H.waiters;H.waiters=[];
+    for(var i=0;i<waiters.length;i++)waiters[i](hintsState());
+  }
+  // A mark stays on its element (user, 30.09: "tied to the marked elements…
+  // arranged back even when the page is resized"): it follows the element's
+  // box through a resize, a scroll inside the page, content that arrives and
+  // moves it; a node the page rendered again is found by its path; a hidden
+  // one hides its mark. One layout per frame, whatever asked for it.
+  function scheduleHints(){
+    if(H.frame||!H.marks.length)return;
+    var run=function(){H.frame=0;layoutHints();};
+    H.frame=W.requestAnimationFrame?W.requestAnimationFrame(run):setTimeout(run,16);
+  }
+  function listenHints(on){
+    if(on===H.listening)return;
+    H.listening=on;
+    var method=on?"addEventListener":"removeEventListener";
+    W[method]("resize",scheduleHints,true);
+    // Capture: a scroll inside any container moves what it holds.
+    document[method]("scroll",scheduleHints,{capture:true,passive:true});
+    if(on)H.timer=setInterval(scheduleHints,600);
+    else{clearInterval(H.timer);H.timer=0;if(H.frame){(W.cancelAnimationFrame||clearTimeout)(H.frame);H.frame=0;}}
+  }
+  function anchorOf(m){
+    var el=m.el;
+    if((!el||!el.isConnected)&&m.path){try{el=document.querySelector(m.path);}catch(_){el=null;}}
+    m.el=el&&el.isConnected?el:null;
+    return m.el;
+  }
+  // An inline element around a whole card has no width of its own: its content's box is the card.
+  function boxOf(el){
+    var own=el.getBoundingClientRect();
+    if((own.width&&own.height)||!el.firstElementChild)return own;
+    try{
+      var range=document.createRange();
+      range.selectNodeContents(el);
+      var inner=typeof range.getBoundingClientRect==="function"?range.getBoundingClientRect():null;
+      return inner&&inner.width&&inner.height?inner:own;
+    }catch(_){return own;}
+  }
+  function placeHint(m){
+    var el=anchorOf(m);
+    if(el){
+      var r=boxOf(el);
+      // Its element hidden (a closed menu, a collapsed row): so is the mark.
+      var shown=r.width>0||r.height>0;
+      m.box.style.visibility=m.node.style.visibility=shown?"":"hidden";
+      if(shown){m.x=Math.round(r.left+W.scrollX);m.y=Math.round(r.top+W.scrollY);m.width=Math.round(r.width);m.height=Math.round(r.height);}
+    }
+    m.box.style.left=m.x+"px";m.box.style.top=m.y+"px";
+    m.box.style.width=m.width+"px";m.box.style.height=m.height+"px";
+    m.node.style.left=m.x+"px";m.node.style.top=m.y+"px";
+    // From the outline's corner, up and to the right like the person's pin.
+    var vx=m.x-W.scrollX,vy=m.y-W.scrollY;
+    var angle=(vx>W.innerWidth-300?-3:-1)*Math.PI/4;
+    if(vy<90)angle=-angle;
+    if(angle!==m.angle){m.angle=angle;layoutMark(m);}
+  }
+  function layoutHints(){for(var i=0;i<H.marks.length;i++)placeHint(H.marks[i]);}
+  function clearHints(){
+    listenHints(false);
+    if(H.host)H.host.remove();
+    H.host=null;H.root=null;H.marks=[];H.dock=null;
+    hintsChanged();
+  }
+  function ensureHints(){
+    var host=document.createElement("div");
+    host.setAttribute("data-hello-hints","");
+    var st=host.style;
+    st.setProperty("position","absolute","important");
+    st.setProperty("left","0","important");
+    st.setProperty("top","0","important");
+    st.setProperty("width","0","important");
+    st.setProperty("height","0","important");
+    st.setProperty("z-index","2147483645","important");
+    st.setProperty("pointer-events","none","important");
+    st.setProperty("display","block","important");
+    var root=host.attachShadow({mode:"closed"});
+    try{
+      var sheet=new CSSStyleSheet();
+      sheet.replaceSync(HINT_CSS);
+      root.adoptedStyleSheets=[sheet];
+    }catch(_){
+      var tag=document.createElement("style");
+      tag.textContent=HINT_CSS;
+      root.appendChild(tag);
+    }
+    // A press on a mark or the index is not a press on the page under it.
+    for(var j=0;j<PRESSES.length;j++)root.addEventListener(PRESSES[j],function(ev){ev.stopPropagation();});
+    root.addEventListener("click",function(ev){ev.stopPropagation();});
+    (document.documentElement||document.body).appendChild(host);
+    H.host=host;H.root=root;
+  }
+  function removeHint(n){
+    var at=-1;
+    for(var i=0;i<H.marks.length;i++)if(H.marks[i].n===n)at=i;
+    if(at<0)return;
+    var m=H.marks.splice(at,1)[0];
+    m.box.remove();m.node.remove();if(m.chip)m.chip.remove();
+    if(!H.marks.length)clearHints();
+    else{renderDock();hintsChanged();}
+  }
+  function evaporateHints(){
+    var host=H.host;
+    if(!host)return;
+    var still=W.matchMedia&&W.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if(still){clearHints();return;}
+    host.style.setProperty("transition","opacity .2s ease-out, filter .2s ease-out","important");
+    host.style.setProperty("opacity","0","important");
+    host.style.setProperty("filter","blur(4px)","important");
+    setTimeout(function(){if(H.host===host)clearHints();},220);
+  }
+  function goToHint(m){
+    var smooth=!(W.matchMedia&&W.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    try{W.scrollTo({top:Math.max(0,m.y-W.innerHeight/3),left:Math.max(0,m.x-40),behavior:smooth?"smooth":"auto"});}catch(_){}
+    m.box.classList.remove("pulse");void m.box.offsetWidth;m.box.classList.add("pulse");
+  }
+  function xButton(n,label){
+    var x=document.createElement("button");
+    x.type="button";x.className="x";x.textContent="×";
+    x.title="Remove #"+n;x.setAttribute("aria-label","Remove mark "+n+": "+label);
+    x.addEventListener("click",function(ev){
+      if(!ev.isTrusted)return;
+      ev.preventDefault();ev.stopPropagation();
+      removeHint(n);
+    });
+    return x;
+  }
+  function renderDock(){
+    if(!H.root)return;
+    if(!H.dock){
+      var dock=document.createElement("div");
+      dock.className="dock";
+      var bubble=document.createElement("button");
+      bubble.type="button";bubble.className="bubble";
+      var count=document.createElement("span");
+      count.className="count";
+      bubble.appendChild(bubbleIcon());bubble.appendChild(count);
+      // A double click is the page's reset (user, 30.09: "double-click on
+      // their bubble evaporates them"): all of them fade, and are gone.
+      bubble.addEventListener("dblclick",function(ev){
+        if(!ev.isTrusted)return;
+        ev.preventDefault();ev.stopPropagation();
+        evaporateHints();
+      });
+      var list=document.createElement("div");
+      list.className="list";list.setAttribute("role","list");
+      dock.appendChild(bubble);dock.appendChild(list);
+      H.root.appendChild(dock);
+      H.dock={node:dock,bubble:bubble,list:list};
+    }
+    var d=H.dock;
+    d.bubble.querySelector(".count").textContent=String(H.marks.length);
+    d.bubble.title=(H.marks.length===1?"1 mark on this page":H.marks.length+" marks on this page")+" \u2014 double-click to clear them";
+    d.bubble.setAttribute("aria-label",d.bubble.title);
+    d.list.textContent="";
+    H.marks.forEach(function(m){
+      var chip=document.createElement("div");
+      chip.className="chip";chip.setAttribute("role","listitem");chip.tabIndex=0;
+      chip.style.setProperty("--c",m.color);
+      chip.title="#"+m.n+" "+m.note;
+      var text=document.createElement("span");
+      text.className="t";text.textContent="#"+m.n+" "+m.note;
+      chip.appendChild(text);chip.appendChild(xButton(m.n,m.note));
+      chip.addEventListener("click",function(ev){if(ev.isTrusted)goToHint(m);});
+      chip.addEventListener("keydown",function(ev){if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();goToHint(m);}});
+      d.list.appendChild(chip);
+      m.chip=chip;
+    });
+  }
+  /**
+   * Replace the agent's marks with these, and answer what was drawn, in page
+   * px. Each is {n, note, width, height, path?} with its place either in the
+   * viewport (left, top: measured now) or on the page (x, y: kept from before);
+   * the element its path finds, when there is one, is where it stays.
+   */
+  S.hints=function(list){
+    clearHints();
+    if(!Array.isArray(list)||!list.length)return [];
+    ensureHints();
+    for(var i=0;i<list.length&&i<6;i++){
+      var h=list[i]||{};
+      var n=Math.max(1,Math.floor(Number(h.n)||i+1));
+      var paged=Number.isFinite(Number(h.x))&&Number.isFinite(Number(h.y))&&h.left===undefined;
+      var x=Math.round(paged?Number(h.x):(Number(h.left)||0)+W.scrollX);
+      var y=Math.round(paged?Number(h.y):(Number(h.top)||0)+W.scrollY);
+      var w=Math.max(0,Math.round(Number(h.width)||0)),ht=Math.max(0,Math.round(Number(h.height)||0));
+      var note=String(h.note||"").replace(/\s+/g," ").trim().slice(0,500);
+      var path=typeof h.path==="string"&&h.path?h.path.slice(0,2000):undefined;
+      var c=MARK_COLORS[(n-1)%MARK_COLORS.length];
+      var delay=(i*90)+"ms";
+      var box=document.createElement("div");
+      box.className="box appear";
+      box.style.left=x+"px";box.style.top=y+"px";
+      box.style.width=w+"px";box.style.height=ht+"px";
+      box.style.setProperty("--c",c[1]);box.style.setProperty("--d",delay);
+      var node=document.createElement("div");
+      node.className="mark hint appear";
+      node.style.left=x+"px";node.style.top=y+"px";
+      node.style.setProperty("--c",c[1]);node.style.setProperty("--d",delay);
+      // From the outline's corner, up and to the right like the person's pin.
+      var vx=x-W.scrollX,vy=y-W.scrollY;
+      var angle=(vx>W.innerWidth-300?-3:-1)*Math.PI/4;
+      if(vy<90)angle=-angle;
+      var wrap=document.createElement("div");
+      wrap.className="pinwrap";
+      var pin=document.createElement("div");
+      pin.className="pin";
+      pin.style.background=c[1];
+      pin.style.cursor="default";
+      var num=document.createElement("span");
+      num.textContent=String(n);
+      pin.appendChild(num);
+      wrap.appendChild(pin);
+      var label=document.createElement("div");
+      label.className="label";
+      var words=document.createElement("span");
+      words.textContent="#"+n+" "+note;
+      label.appendChild(words);label.appendChild(xButton(n,note));
+      node.appendChild(wrap);node.appendChild(label);
+      H.root.appendChild(box);H.root.appendChild(node);
+      var m={n:n,note:note,x:x,y:y,width:w,height:ht,path:path,el:null,color:c[1],box:box,node:node,chip:null,pin:pin,num:num,label:label,angle:angle};
+      layoutMark(m);
+      placeHint(m);
+      H.marks.push(m);
+    }
+    renderDock();
+    listenHints(true);
+    hintsChanged();
+    return H.marks.map(function(m){
+      var kept={n:m.n,note:m.note,x:m.x,y:m.y,width:m.width,height:m.height};
+      if(m.path)kept.path=m.path;
+      return kept;
+    });
+  };
+  S.clearHints=function(){clearHints();return true;};
+  /** The marks still on the page, where they are now, once the person has put one away, or after ms. */
+  S.hintsWait=function(ms){
+    return new Promise(function(resolve){
+      var done=false;
+      function finish(state){
+        if(done)return;
+        done=true;clearTimeout(timer);
+        var at=H.waiters.indexOf(finish);
+        if(at>=0)H.waiters.splice(at,1);
+        resolve(state);
+      }
+      H.waiters.push(finish);
+      var timer=setTimeout(function(){finish(hintsState());},Math.max(50,Math.min(30000,Number(ms)||20000)));
+    });
+  };
+
   // ── Bridge ───────────────────────────────────────────────────────────────
   S.kinds=function(){return Object.keys(KINDS);};
   S.arm=function(kind,armId){

@@ -204,21 +204,26 @@ describe('a shared page that is switched off', () => {
     expect(names({ runbook: true, tasks: true })).toEqual(expect.arrayContaining([
       'notebook_list', 'notebook_save', 'notebook_task_status', 'notebook_paths', 'plan_write',
     ]));
-    const withoutTasks = names({ runbook: true, tasks: false });
+    const withoutTasks = names({ runbook: true, tasks: false }, false);
     expect(withoutTasks).toContain('notebook_list');
     expect(withoutTasks).not.toContain('notebook_save');
     expect(withoutTasks).not.toContain('notebook_task_status');
     expect(withoutTasks).not.toContain('plan_write');
-    const neither = names({ runbook: false, tasks: false });
+    // Plans is a section of its own, on while Plan is: its plan stays workable without Tasks.
+    const planOnly = names({ runbook: false, tasks: false }, true);
+    expect(planOnly).toEqual(expect.arrayContaining(['notebook_list', 'notebook_task_status', 'plan_write']));
+    expect(planOnly).not.toContain('notebook_save');
+    const neither = names({ runbook: false, tasks: false }, false);
     expect(neither.some(name => name.startsWith('notebook_'))).toBe(false);
   });
 
   it('names only the pages that are there, in the tool it leaves', () => {
-    const only = (pages: { runbook: boolean; tasks: boolean }) =>
-      toolDefinitions(false, false, { skills: [], mcp: [] }, true, false, pages)
+    const only = (pages: { runbook: boolean; tasks: boolean }, planning = true) =>
+      toolDefinitions(false, false, { skills: [], mcp: [] }, planning, false, pages)
         .find(item => item.function.name === 'notebook_list')!;
-    expect((only({ runbook: true, tasks: false }).function.parameters as { properties: { kind: { enum: string[] } } })
-      .properties.kind.enum).toEqual(['runbook']);
+    const kinds = (tool: ReturnType<typeof only>) => (tool.function.parameters as { properties: { kind: { enum: string[] } } }).properties.kind.enum;
+    expect(kinds(only({ runbook: true, tasks: false }))).toEqual(['runbook', 'plan']);
+    expect(kinds(only({ runbook: true, tasks: false }, false))).toEqual(['runbook']);
     expect(only({ runbook: false, tasks: true }).function.description).not.toContain('Runbook');
   });
 
@@ -231,8 +236,9 @@ describe('a shared page that is switched off', () => {
     const context = { store, conversationId: 'chat', signal: new AbortController().signal, approve: vi.fn(async () => true) };
     await expect(executeTool('notebook_list', { kind: 'tasks' }, context))
       .rejects.toThrow(/Tasks is switched off for this chat/);
+    // Plans follows Plan, which this chat has off.
     await expect(executeTool('plan_write', { steps: [{ step: 'do it' }] }, context))
-      .rejects.toThrow(/Tasks is switched off/);
+      .rejects.toThrow(/Plans \(Plan\) is switched off/);
     // The page that is still there answers as before.
     expect(JSON.parse(await executeTool('notebook_list', { kind: 'runbook' }, context))).toEqual([]);
   });

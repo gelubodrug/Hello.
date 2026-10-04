@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convertToLlm, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import helloTools from '../src/main/chat/pi-extension';
+import helloTools, { schemaArguments } from '../src/main/chat/pi-extension';
 import type { ToolDefinition } from '../src/main/chat/tools';
 import { createPiToolBridge } from '../src/main/chat/pi-tool-bridge';
 import type { ToolOutput } from '../src/main/chat/tool-output';
@@ -207,3 +207,71 @@ describe('tool results with pictures', () => {
     }
   });
 });
+
+describe('the chat’s folder', () => {
+  it('becomes the working directory of the extensions loaded after Hello’s', async () => {
+    const { mkdtempSync, realpathSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'hello-chat-folder-')));
+    const before = process.cwd();
+    try {
+      vi.stubEnv('HELLO_CHAT_FOLDER', folder);
+      await helloTools(pi.api);
+      expect(process.cwd()).toBe(folder);
+      // A folder that is gone, or a relative one, leaves the directory alone.
+      process.chdir(before);
+      vi.stubEnv('HELLO_CHAT_FOLDER', join(folder, 'missing'));
+      await helloTools(pi.api);
+      vi.stubEnv('HELLO_CHAT_FOLDER', 'relative/folder');
+      await helloTools(pi.api);
+      expect(process.cwd()).toBe(before);
+    } finally {
+      process.chdir(before);
+    }
+  });
+});
+
+// A Pi CLI the person opened from Hello loads this extension too (user, 30.09):
+// the connection's tools become its own, and nothing else of it changes.
+describe('in a Pi CLI opened from Hello', () => {
+  it('adds the connection’s tools and leaves the person’s Pi as it was', async () => {
+    vi.stubEnv('HELLO_PI_EXTENSION_ROLE', 'cli');
+    vi.stubEnv('HELLO_CHAT_FOLDER', process.env.TMPDIR || '/tmp');
+    const folder = process.cwd();
+    const stub = globalThis.fetch;
+    await helloTools(pi.api);
+    await pi.handlers.get('session_start')!({ type: 'session_start' });
+    expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths']);
+    // Its fetch keeps following redirects, its folder stays, its context gets no snapshot.
+    expect(globalThis.fetch).toBe(stub);
+    expect(process.cwd()).toBe(folder);
+    expect(pi.handlers.has('context')).toBe(false);
+    // The tools themselves call through the connection.
+    executed = 'Clicked button "Decline all" at (320, 437).';
+    const click = pi.registered.get('web_search') as { execute(id: string, params: object): Promise<{ content: Array<{ text: string }> }> };
+    expect((await click.execute('call-1', {})).content[0].text).toBe('Clicked button "Decline all" at (320, 437).');
+  });
+});
+
+// A model sent tab_id for tabId, and every browser call failed Pi's check
+// (user, 30.09): arguments are named as the schema names them first.
+describe('arguments as the schema names them', () => {
+  const schema = { type: 'object', properties: { tabId: { type: 'string' }, deltaY: { type: 'number' }, url: { type: 'string' } } };
+  it('renames a snake_case key the schema knows in camelCase, and parses arguments sent as a string', () => {
+    expect(schemaArguments({ tab_id: 't1', delta_y: 600 }, schema)).toEqual({ tabId: 't1', deltaY: 600 });
+    expect(schemaArguments('{"tab_id":"t1","url":"https://example.test"}', schema)).toEqual({ tabId: 't1', url: 'https://example.test' });
+    // Both sent: the schema's own name wins, and the other is left for the schema to refuse.
+    expect(schemaArguments({ tabId: 'a', tab_id: 'b' }, schema)).toEqual({ tabId: 'a', tab_id: 'b' });
+    expect(schemaArguments({ other_key: 1 }, schema)).toEqual({ other_key: 1 });
+    expect(schemaArguments('not json', schema)).toBe('not json');
+  });
+
+  it('is what every Hello tool hands Pi to run before its check', async () => {
+    offered = [{ type: 'function', function: { name: 'browser_read', description: 'read', parameters: schema } }];
+    await helloTools(pi.api);
+    const tool = pi.registered.get('browser_read') as { prepareArguments(args: unknown): unknown };
+    expect(tool.prepareArguments({ tab_id: 't1' })).toEqual({ tabId: 't1' });
+  });
+});
+

@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { chatPagesFor } from '../src/renderer/workspace/Workspace';
+import { CHAT_PAGES, normalizeChatTab } from '../src/renderer/workspace/Workspace';
 
-// A shared page the human switched off is gone from the UI: it is switched
-// back on from the chat's menu, never from a tab that is no longer there
-// (user, 20.09: "le scoți din UI când sunt off… le activezi din meniu").
+// One notebook pill beside Chat, not one per section (user, 29.09): Runbooks,
+// Tasks and Plans are sections inside it, switched there.
 describe('the pages a chat shows', () => {
-  it('shows both while both are on, including a chat that predates the switches', () => {
-    expect(chatPagesFor({ runbook: true, tasks: true })).toEqual(['chat', 'runbook', 'tasks']);
-    expect(chatPagesFor({})).toEqual(['chat', 'runbook', 'tasks']);
+  it('are the chat and its notebook, whatever is switched on', () => {
+    expect(CHAT_PAGES).toEqual(['chat', 'notebook']);
   });
 
-  it('drops the one that is off, and keeps the chat itself whatever happens', () => {
-    expect(chatPagesFor({ runbook: true, tasks: false })).toEqual(['chat', 'runbook']);
-    expect(chatPagesFor({ runbook: false, tasks: true })).toEqual(['chat', 'tasks']);
-    expect(chatPagesFor({ runbook: false, tasks: false })).toEqual(['chat']);
+  it('open a page saved before the notebook was one on the notebook', () => {
+    expect(normalizeChatTab('runbook')).toBe('notebook');
+    expect(normalizeChatTab('tasks')).toBe('notebook');
+    expect(normalizeChatTab('notebook')).toBe('notebook');
+    expect(normalizeChatTab('chat')).toBe('chat');
+    expect(normalizeChatTab(undefined)).toBe('chat');
+    expect(normalizeChatTab(42)).toBe('chat');
   });
 });

@@ -14,6 +14,9 @@ interface Bridge {
   beforeShot(): Promise<{ viewport: { w: number; h: number }; extra: unknown }>;
   afterShot(): boolean;
   call(kind: string, method: string, args: unknown[]): unknown;
+  hints(list: unknown[]): Array<{ n: number; note: string; x: number; y: number; width: number; height: number }>;
+  clearHints(): boolean;
+  hintsWait(ms: number): Promise<number[]>;
 }
 const run = (code: string): unknown => (0, eval)(code);
 const bridge = () => (window as unknown as { __HELLO_PAGE_MODE__: Bridge }).__HELLO_PAGE_MODE__;
@@ -402,3 +405,131 @@ describe('annotate probe — criteria', () => {
     expect(pendingInput()).not.toBeNull();
   });
 });
+
+// An agent shows the person where to look (user, 30.09: "a pointer for
+// agents"): Annotate's pins and notes, placed by browser_mark on a layer of
+// their own, with an outline around each element, a chat bubble indexing them,
+// and an × on each for the person to keep only what they want.
+describe('marks an agent places', () => {
+  const hintRoot = () => roots.filter(root => (root.host as HTMLElement).hasAttribute('data-hello-hints')).at(-1)!;
+  const tap = (node: Element) => dispatchTrusted(node, new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+  afterEach(() => { bridge().clearHints(); bridge().disarm(); });
+
+  it('draws numbered pins with notes and outlines, with no mode on and apart from the person’s markers', () => {
+    document.body.innerHTML = '<p id="p">text</p>';
+    const drawn = bridge().hints([
+      { n: 1, left: 40, top: 300, width: 320, height: 90, note: 'Cheapest:  $3,500,\nBuy It Now' },
+      { n: 2, left: 40, top: 420, width: 320, height: 90, note: 'Same, auction' },
+    ]);
+    // What was drawn, in page px, for main to keep with the page.
+    expect(drawn).toEqual([
+      { n: 1, note: 'Cheapest: $3,500, Buy It Now', x: 40, y: 300, width: 320, height: 90 },
+      { n: 2, note: 'Same, auction', x: 40, y: 420, width: 320, height: 90 },
+    ]);
+    const root = hintRoot();
+    expect([...root.querySelectorAll('.mark.hint .label span')].map(node => node.textContent)).toEqual(['#1 Cheapest: $3,500, Buy It Now', '#2 Same, auction']);
+    const box = root.querySelector<HTMLElement>('.box')!;
+    expect([box.style.left, box.style.top, box.style.width, box.style.height]).toEqual(['40px', '300px', '320px', '90px']);
+    // One after the other on reveal.
+    expect([...root.querySelectorAll<HTMLElement>('.box')].map(node => node.style.getPropertyValue('--d'))).toEqual(['0ms', '90ms']);
+    expect(markerRoot()?.querySelectorAll('.mark').length ?? 0).toBe(0);
+  });
+
+  it('keeps them in a chat bubble that lists them, scrolls to one, and puts one away at its ×', async () => {
+    document.body.innerHTML = '<p id="p">text</p>';
+    const scrolled: unknown[] = [];
+    window.scrollTo = ((options: unknown) => { scrolled.push(options); }) as typeof window.scrollTo;
+    bridge().hints([{ n: 1, left: 10, top: 900, width: 50, height: 20, note: 'one' }, { n: 2, left: 10, top: 1400, width: 50, height: 20, note: 'two' }]);
+    const root = hintRoot();
+    expect(root.querySelector('.bubble .count')?.textContent).toBe('2');
+    const chips = () => [...root.querySelectorAll<HTMLElement>('.chip')];
+    expect(chips().map(chip => chip.querySelector('.t')?.textContent)).toEqual(['#1 one', '#2 two']);
+    tap(chips()[1]);
+    expect(scrolled.at(-1)).toMatchObject({ top: 1400 - window.innerHeight / 3 });
+    expect(root.querySelectorAll('.box')[1].classList.contains('pulse')).toBe(true);
+    // A page's own script cannot put a mark away; the person's click on its × does.
+    const waited = bridge().hintsWait(5_000);
+    root.querySelector<HTMLElement>('.mark.hint .x')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    expect(root.querySelectorAll('.mark.hint')).toHaveLength(2);
+    tap(chips()[0].querySelector('.x')!);
+    await expect(waited).resolves.toEqual([{ n: 2, x: 10, y: 1400, width: 50, height: 20 }]);
+    expect([...root.querySelectorAll('.mark.hint .label span')].map(node => node.textContent)).toEqual(['#2 two']);
+    expect(root.querySelector('.bubble .count')?.textContent).toBe('1');
+    // The last one away: nothing is left, not even the bubble.
+    tap(root.querySelector('.mark.hint .x')!);
+    expect(document.querySelector('[data-hello-hints]')).toBeNull();
+  });
+
+  it('evaporates them all at a double click on the bubble — the person’s, not a script’s', async () => {
+    document.body.innerHTML = '<p id="p">text</p>';
+    bridge().hints([{ n: 1, left: 10, top: 10, width: 50, height: 20, note: 'one' }, { n: 2, left: 10, top: 60, width: 50, height: 20, note: 'two' }]);
+    const bubble = hintRoot().querySelector<HTMLElement>('.bubble')!;
+    expect(bubble.title).toContain('double-click to clear them');
+    bubble.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, composed: true }));
+    await new Promise(resolve => setTimeout(resolve, 260));
+    expect(document.querySelector('[data-hello-hints]')).not.toBeNull();
+    const waited = bridge().hintsWait(5_000);
+    dispatchTrusted(bubble, new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true }));
+    await expect(waited).resolves.toEqual([]);
+    expect(document.querySelector('[data-hello-hints]')).toBeNull();
+  });
+
+  it('draws kept marks where they were on the page, and replaces or clears them', () => {
+    document.body.innerHTML = '<p id="p">text</p>';
+    expect(bridge().hints([{ n: 3, x: 40, y: 1300, width: 320, height: 90, note: 'kept' }])).toEqual([{ n: 3, note: 'kept', x: 40, y: 1300, width: 320, height: 90 }]);
+    expect(hintRoot().querySelector<HTMLElement>('.box')!.style.top).toBe('1300px');
+    bridge().hints([{ n: 1, left: 0, top: 0, width: 10, height: 10, note: 'new' }]);
+    expect([...hintRoot().querySelectorAll('.label span')].map(node => node.textContent)).toEqual(['#1 new']);
+    expect(bridge().hints([])).toEqual([]);
+    expect(document.querySelector('[data-hello-hints]')).toBeNull();
+  });
+});
+
+// A mark stays on its element (user, 30.09: "tied to the marked elements…
+// arranged back even when the page is resized").
+describe('a mark on its element', () => {
+  const hintRoot = () => roots.filter(root => (root.host as HTMLElement).hasAttribute('data-hello-hints')).at(-1)!;
+  const settle = () => new Promise(resolve => setTimeout(resolve, 60));
+  afterEach(() => { bridge().clearHints(); });
+  const boxed = (el: Element, box: { left: number; top: number; width: number; height: number }) => {
+    el.getBoundingClientRect = () => ({ ...box, x: box.left, y: box.top, right: box.left + box.width, bottom: box.top + box.height, toJSON: () => ({}) }) as DOMRect;
+  };
+
+  it('follows its element when the page is resized, and hides while it is hidden', async () => {
+    document.body.innerHTML = '<main><article id="listing">Mac Studio</article></main>';
+    const listing = document.getElementById('listing')!;
+    boxed(listing, { left: 40, top: 300, width: 320, height: 90 });
+    const [drawn] = bridge().hints([{ n: 1, left: 40, top: 300, width: 320, height: 90, note: 'Cheapest', path: '#listing' }]);
+    expect(drawn).toMatchObject({ x: 40, y: 300, path: '#listing' });
+    // The window narrows and the listing moves down and shrinks: the mark goes with it.
+    boxed(listing, { left: 24, top: 520, width: 280, height: 110 });
+    window.dispatchEvent(new Event('resize'));
+    await settle();
+    const box = hintRoot().querySelector<HTMLElement>('.box')!;
+    expect([box.style.left, box.style.top, box.style.width, box.style.height]).toEqual(['24px', '520px', '280px', '110px']);
+    expect(hintRoot().querySelector<HTMLElement>('.mark.hint')!.style.top).toBe('520px');
+    // Collapsed away: the mark is hidden, not left on whatever took its place.
+    boxed(listing, { left: 0, top: 0, width: 0, height: 0 });
+    window.dispatchEvent(new Event('resize'));
+    await settle();
+    expect(box.style.visibility).toBe('hidden');
+    // Where it is now is what main keeps.
+    boxed(listing, { left: 24, top: 600, width: 280, height: 110 });
+    window.dispatchEvent(new Event('resize'));
+    await settle();
+    await expect(bridge().hintsWait(50)).resolves.toEqual([{ n: 1, x: 24, y: 600, width: 280, height: 110 }]);
+  });
+
+  it('finds its element again by its path when the page renders it anew', async () => {
+    document.body.innerHTML = '<ul><li>one</li><li>two</li></ul>';
+    boxed(document.querySelectorAll('li')[1], { left: 10, top: 100, width: 50, height: 20 });
+    bridge().hints([{ n: 1, left: 10, top: 100, width: 50, height: 20, note: 'Here', path: 'body > ul > li:nth-of-type(2)' }]);
+    // The list is rendered again: a new node in the same place.
+    document.body.innerHTML = '<ul><li>one</li><li>two</li></ul>';
+    boxed(document.querySelectorAll('li')[1], { left: 10, top: 180, width: 50, height: 20 });
+    window.dispatchEvent(new Event('resize'));
+    await settle();
+    expect(hintRoot().querySelector<HTMLElement>('.box')!.style.top).toBe('180px');
+  });
+});
+

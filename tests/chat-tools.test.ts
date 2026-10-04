@@ -888,3 +888,56 @@ describe('what a chat’s earlier visits learned about a site', () => {
     local.store.close();
   });
 });
+
+// "A pointer for agents" (user, 30.09): the model shows the person where to look.
+describe('browser_mark', () => {
+  function markFixture(control: BrowserTab['control']) {
+    const tab: BrowserTab = {
+      id: 'tab', conversationId: 'c', title: 'M3 Ultra for sale | eBay', url: 'https://www.ebay.com/sch/i.html',
+      control, loading: false, progress: null, canGoBack: false, canGoForward: false,
+    };
+    const browser = {
+      getTabs: vi.fn(() => [tab]),
+      read: vi.fn(), navigate: vi.fn(), click: vi.fn(), type: vi.fn(), scroll: vi.fn(),
+      mark: vi.fn(async () => 'Marked one place for the person.'),
+    } satisfies BrowserHooks;
+    const context = {
+      store: { getConversation: () => ({ id: 'c', folder: null }) } as unknown as DataStore,
+      conversationId: 'c', browser, signal: new AbortController().signal, approve: async () => false,
+    };
+    return { browser, context };
+  }
+  const marks = { tabId: 'tab', marks: [{ ref: 'e12', label: 'Apple Mac Studio', note: '  Cheapest:\n $3,500 ' }] };
+
+  it('is offered with the browser, at Read or Full', () => {
+    const tools = Object.fromEntries(toolDefinitions(false, true).map(item => [item.function.name, item.function]));
+    expect(tools.browser_mark.description).toMatch(/Read or Full/);
+    expect(toolDefinitions(false, false).some(item => item.function.name === 'browser_mark')).toBe(false);
+  });
+
+  it('refuses at Off, marks at Read with each element named as a click names it, and wants a note', async () => {
+    const off = markFixture('off');
+    await expect(executeTool('browser_mark', marks, off.context)).rejects.toThrow(/requires Read or Full/);
+    expect(off.browser.mark).not.toHaveBeenCalled();
+    const read = markFixture('read');
+    await expect(executeTool('browser_mark', marks, read.context)).resolves.toBe('Marked one place for the person.');
+    expect(read.browser.mark).toHaveBeenCalledWith('c', 'tab', [{ target: { ref: 'e12', label: 'Apple Mac Studio' }, note: 'Cheapest: $3,500' }], expect.anything());
+    await expect(executeTool('browser_mark', { tabId: 'tab', marks: [{ ref: 'e1' }] }, read.context)).rejects.toThrow(/needs a note/);
+    await expect(executeTool('browser_mark', { tabId: 'tab', marks: Array.from({ length: 7 }, () => ({ label: 'x', note: 'y' })) }, read.context)).rejects.toThrow(/six/);
+    // An empty list clears.
+    await executeTool('browser_mark', { tabId: 'tab', marks: [] }, read.context);
+    expect(read.browser.mark).toHaveBeenLastCalledWith('c', 'tab', [], expect.anything());
+  });
+
+  // Skills found by skills_find were pinned on an open eBay page (user, 30.09):
+  // a mark names the words its element shows, and what is not on the page is refused.
+  it('wants the words each element shows, and sends a mark that is not on this page to its own page', async () => {
+    const read = markFixture('read');
+    await expect(executeTool('browser_mark', { tabId: 'tab', marks: [{ ref: 'e12', note: 'Most downloaded skill' }] }, read.context))
+      .rejects.toThrow(/needs label: the words that element shows on this page[\s\S]*open it first/);
+    expect(read.browser.mark).not.toHaveBeenCalled();
+    read.browser.mark.mockRejectedValueOnce(new Error('No visible element shows "google-agents-cli-eval". browser_read lists the visible controls with their words.'));
+    await expect(executeTool('browser_mark', { tabId: 'tab', marks: [{ label: 'google-agents-cli-eval', note: 'Third most downloaded' }] }, read.context))
+      .rejects.toThrow(/This page is "M3 Ultra for sale \| eBay"\. Marks go on the page that shows what they point at/);
+  });
+});
