@@ -46,6 +46,7 @@ import {
   Truncated,
   errorText,
 } from "./ui/primitives";
+import { KeyboardShortcuts } from "./ui/KeyboardShortcuts";
 import {
   createPreviewLayoutMotion,
   type PreviewLayoutMotionPhase,
@@ -1146,6 +1147,7 @@ function Application() {
             onClose={() => setMarket({ open: null })} />
         ))}
       </main>
+      <KeyboardShortcuts />
       <Dialog
         open={noticeOpen && !!appMessage}
         title={error ? "Something needs attention" : "Workspace notification"}
