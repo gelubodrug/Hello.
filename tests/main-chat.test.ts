@@ -290,6 +290,7 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
   });
 
   it('runs notebook tools in Hello and records one result card', async () => {
+    store.updateConversation(conversationId, { runbook: true });
     store.saveNotebook({ conversationId, kind: 'runbook', title: 'Decision', body: 'Use SQLite.' });
     const running = create().send(conversationId, 'Read the runbook');
     const current = await runtime();

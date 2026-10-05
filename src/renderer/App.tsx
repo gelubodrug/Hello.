@@ -34,10 +34,11 @@ import type {
   TerminalSession,
   WorkerId,
 } from "../shared/types";
-import type { MarketKind, MessageMatch, QueuedMessage } from "../shared/types";
+import type { MarketKind, MenuAction, MessageMatch, QueuedMessage } from "../shared/types";
 import type { FindJump } from "./chat/ChatFind";
 import { api } from './api';
 import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, strongest, type AttentionKind, type Seen } from "./attention";
+import { chatForMenu } from "./menu-chats";
 import {
   Dialog,
   ErrorNote,
@@ -661,8 +662,16 @@ function Application() {
   };
   // ⌘N and ⌘B from the app menu (user, 04.10, the design audit): what the
   // New chat button and the sidebar's pin do, wherever focus is.
-  const menuRef = useRef<(action: 'new-chat' | 'toggle-sidebar') => void>(() => {});
-  menuRef.current = (action) => { if (action === 'new-chat') void newChat(); else toggleSidebarPin(); };
+  const menuRef = useRef<(action: MenuAction) => void>(() => {});
+  menuRef.current = (action) => {
+    if (action === 'new-chat') { void newChat(); return; }
+    if (action === 'toggle-sidebar') { toggleSidebarPin(); return; }
+    // ⌘J looks through every chat; the others go by the list as it is shown.
+    const order = (action === 'attention-chat' ? boot?.conversations ?? [] : listed).map(row => row.id);
+    const target = chatForMenu(action, order, shell.activeId ?? null, new Set(Object.keys(attention)));
+    if (target) select(target);
+    else if (action === 'attention-chat') setNotice('No chat is waiting.');
+  };
   useEffect(() => api.system.onMenu?.((action) => menuRef.current(action)) ?? (() => {}), []);
   const launch = async (
     conversation: Conversation,

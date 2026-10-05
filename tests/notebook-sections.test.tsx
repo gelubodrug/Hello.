@@ -27,7 +27,7 @@ vi.mock('../src/renderer/api', () => ({
   },
 }));
 
-import { Notebook, sectionOn } from '../src/renderer/notebook/Notebook';
+import { Notebook, searchNotebook, sectionOn } from '../src/renderer/notebook/Notebook';
 
 const entry = (id: string, kind: NotebookKind, title: string, shared = true, createdAt = 1): NotebookEntry =>
   ({ id, conversationId: 'c1', kind, title, body: '', createdAt, updatedAt: createdAt, shared });
@@ -173,9 +173,62 @@ describe('one notebook with three sections', () => {
   });
 
   it('knows which sections are on: Plans is on while Plan is', () => {
-    expect(sectionOn({ runbook: undefined, tasks: undefined, planning: undefined }, 'runbook')).toBe(true);
+    // Nothing said means off: every section starts off (user, 05.10).
+    expect(sectionOn({ runbook: undefined, tasks: undefined, planning: undefined }, 'runbook')).toBe(false);
+    expect(sectionOn({ runbook: true, tasks: undefined, planning: undefined }, 'runbook')).toBe(true);
     expect(sectionOn({ runbook: true, tasks: false, planning: false }, 'tasks')).toBe(false);
     expect(sectionOn({ runbook: true, tasks: true, planning: undefined }, 'plan')).toBe(false);
     expect(sectionOn({ runbook: true, tasks: true, planning: true }, 'plan')).toBe(true);
   });
 });
+
+// S209 F3: a search above the tree, over every chapter's title and words.
+describe('searching the notebook', () => {
+  const words = (id: string, kind: NotebookKind, title: string, body: string): NotebookEntry =>
+    ({ ...entry(id, kind, title), body });
+  it('finds titles and words whatever the case, in the tree’s order, off sections and drafts included', () => {
+    const rows = [
+      words('t1', 'tasks', 'Release', '- [ ] Ship the DMG'),
+      words('r1', 'runbook', 'Deploy', 'Run pnpm package:mac, then notarise the dmg.'),
+      words('p1', 'plan', 'Plan', 'Nothing here'),
+    ];
+    const hits = searchNotebook(rows, '  DMG ');
+    expect(hits.map(hit => hit.entry.id)).toEqual(['r1', 't1']);
+    expect(hits[0].snippet).toBe('Run pnpm package:mac, then notarise the dmg.');
+    expect(searchNotebook(rows, 'deploy').map(hit => hit.entry.id)).toEqual(['r1']);
+    expect(searchNotebook(rows, '   ')).toEqual([]);
+    const long = words('r9', 'runbook', 'Long', `${'a '.repeat(100)}needle${' b'.repeat(100)}`);
+    const [hit] = searchNotebook([long], 'needle');
+    expect(hit.snippet.startsWith('…')).toBe(true);
+    expect(hit.snippet.endsWith('…')).toBe(true);
+    expect(hit.snippet).toContain('needle');
+    expect(hit.snippet.length).toBeLessThanOrEqual(162);
+  });
+
+  it('lists what it finds in place of the tree, opens one on Enter, and gives the tree back on Escape', async () => {
+    state.rows = [
+      words('r1', 'runbook', 'Chapter 1', 'Install with pnpm'),
+      words('t1', 'tasks', 'Tasks 1', '- [ ] Check pnpm cache'),
+    ];
+    await act(async () => {
+      root.render(createElement(Notebook, { conversation: chat({ tasks: false }), onConversationChange: () => {}, reportError: vi.fn(), active: true }));
+    });
+    await act(async () => { await Promise.resolve(); });
+    const field = host.querySelector<HTMLInputElement>('[aria-label="Search notebook"]')!;
+    // ⌘F, with the notebook on screen, goes to its search.
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true })); });
+    expect(document.activeElement).toBe(field);
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => { setter.call(field, 'PNPM'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+    const results = () => [...host.querySelectorAll('.notebook-result-title')].map(node => node.textContent);
+    expect(results()).toEqual(['Chapter 1', 'Tasks 1']);
+    expect(host.querySelector('.notebook-section')).toBeNull();
+    await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector('.notebook-result[data-selected="true"] .notebook-result-title')?.textContent).toBe('Chapter 1');
+    await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(field.value).toBe('');
+    expect(host.querySelector('.notebook-section')).not.toBeNull();
+  });
+});
+

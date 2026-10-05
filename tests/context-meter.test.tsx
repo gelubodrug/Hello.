@@ -50,5 +50,22 @@ describe('the context meter', () => {
     act(() => root.render(createElement(ContextMeter, { messages: [reply(185_000)], settings, conversationId: 'c1' })));
     await act(async () => { action()!.click(); });
     expect(host.querySelector('.context-meter-error')?.getAttribute('title')).toBe('Pi could not summarise.');
+    // In words on screen and to a screen reader, not only on hover (second review, 05.10).
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Could not summarise: Pi could not summarise.');
+    expect(action()).toBeDefined();
+  });
+
+  it('keeps its button in place while it works, says so aloud, and the bar agrees with what it reads', async () => {
+    let finish!: (value: { tokensBefore: number; tokensAfter: number }) => void;
+    compact.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    act(() => root.render(createElement(ContextMeter, { messages: [reply(160_000)], settings, conversationId: 'c1' })));
+    await act(async () => { action()!.click(); });
+    const working = [...host.querySelectorAll('button')].find(button => button.textContent?.startsWith('Summarising'));
+    expect(working?.disabled).toBe(true);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Summarising the conversation');
+    await act(async () => { finish({ tokensBefore: 160_000, tokensAfter: 30_000 }); });
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Summarised: 160k → about 30k');
+    expect(host.querySelector('[role="meter"]')?.getAttribute('aria-valuenow')).toBe('15');
+    expect(host.querySelector<HTMLElement>('.context-meter-fill')?.style.width).toBe('15%');
   });
 });

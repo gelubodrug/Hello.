@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import type { AppSettings, Message } from '../../shared/types';
 import { api } from '../api';
 import { modelName } from '../settings/presets';
@@ -73,6 +74,9 @@ export function ContextMeter({ messages, settings, conversationId, busy = false 
   useEffect(() => { setSummary(current => current?.state === 'done' && current.at !== latest ? null : current); }, [latest]);
   if (!reading) return null;
   const percent = Math.min(100, Math.round(reading.share * 100));
+  // One number for the bar and for what it tells a screen reader it holds.
+  const shown = summary?.state === 'done' && summary.after !== undefined
+    ? Math.min(100, Math.round((summary.after / reading.window) * 100)) : percent;
   const other = reading.model && reading.model !== settings.model ? modelName(reading.model) : null;
   const said = reading.level === 'full' ? ' — the conversation is summarised soon, by itself or with Summarise now'
     : reading.level === 'warn' ? ' — close to the point where the conversation is summarised' : '';
@@ -88,23 +92,29 @@ export function ContextMeter({ messages, settings, conversationId, busy = false 
   return (
     <div className="context-meter" data-level={summary?.state === 'done' ? 'ok' : reading.level}
       title={`The latest reply held ${reading.used.toLocaleString()} of ${reading.window.toLocaleString()} tokens${said}.`}>
-      <span className="context-meter-bar" role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-        <span className="context-meter-fill" style={{ width: `${summary?.state === 'done' && summary.after !== undefined ? Math.min(100, Math.round((summary.after / reading.window) * 100)) : percent}%` }} />
+      <span className="context-meter-bar" role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={shown}>
+        <span className="context-meter-fill" style={{ width: `${shown}%` }} />
       </span>
       <span className="context-meter-text">
-        {summary?.state === 'done'
-          ? <>Summarised{summary.after !== undefined ? `: ${tokens(summary.before)} → about ${tokens(summary.after)}` : ''}</>
-          : <>{percent}% of {tokens(reading.window)}</>}
+        {summary?.state !== 'done' && <>{percent}% of {tokens(reading.window)}</>}
         {summary?.state !== 'done' && reading.level !== 'ok' && !summarising && <span className="context-meter-note">{reading.level === 'full' ? ' · summarises soon' : ' · filling up'}</span>}
-        {summarising && <span className="context-meter-note"> · summarising{elapsed >= 2000 ? ` ${workDuration(elapsed)}` : '…'}</span>}
-        {summary?.state === 'failed' && <span className="context-meter-error" title={summary.error}> · could not summarise</span>}
+        {/* What a summary did is said aloud as it happens, and a failure in
+            words on screen, not only on hover (second review, 05.10). */}
+        <span role="status">
+          {summary?.state === 'done' && <>Summarised{summary.after !== undefined ? `: ${tokens(summary.before)} → about ${tokens(summary.after)}` : ''}</>}
+          {summary?.state === 'failed' && <span className="context-meter-error" title={summary.error}> · Could not summarise: {summary.error}</span>}
+          {summarising && <span className="sr-only">Summarising the conversation</span>}
+        </span>
         {reading.cost > 0 && <> · {dollars(reading.cost)}</>}
         {other && <> · last reply: {other}</>}
       </span>
-      {canSummarise && !summarising && (
-        <button type="button" className="context-meter-action" onClick={summarise}
+      {/* It stays where it was while it works, so nothing jumps. */}
+      {(canSummarise || summarising) && (
+        <button type="button" className="context-meter-action" onClick={summarise} disabled={summarising}
           title="Summarise the conversation now: the model keeps a summary and the recent turns; the transcript stays whole">
-          Summarise now
+          {summarising
+            ? <><Loader2 size={11} className="spin" aria-hidden />Summarising{elapsed >= 2000 ? ` ${workDuration(elapsed)}` : '…'}</>
+            : 'Summarise now'}
         </button>
       )}
     </div>

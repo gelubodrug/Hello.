@@ -305,6 +305,104 @@
   gap: var(--sp-8);
 }
 
+/* Search above the tree: the sidebar's quiet field; while it has words, the
+   results stand in for the sections (S209). */
+.notebook-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-height: var(--control-md);
+  padding: 0 var(--sp-8);
+  border-radius: var(--r-8);
+  color: var(--ink-tertiary);
+}
+
+.notebook-search:has(input:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.notebook-search input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-4) 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink-primary);
+  font-size: var(--fs-12);
+}
+
+.notebook-search-clear {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-tertiary);
+}
+
+.notebook-search-clear:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.notebook-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notebook-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--sp-8);
+  width: 100%;
+  padding: var(--sp-4) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-primary);
+  font-size: var(--fs-12);
+  text-align: left;
+}
+
+.notebook-result:hover {
+  background: var(--surface-hover);
+}
+
+.notebook-result:active {
+  background: var(--surface-active);
+}
+
+.notebook-result[data-selected="true"] {
+  background: var(--surface-raised);
+}
+
+.notebook-result-section {
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+
+.notebook-result-snippet {
+  grid-column: 1 / -1;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .notebook-section-header {
   display: flex;
   align-items: center;

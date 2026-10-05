@@ -110,6 +110,8 @@ async function reply(text: string) {
 
 describe('a turn Pi begins on its own', () => {
   it('is followed as a new reply, saying which plugin message woke it', async () => {
+    // Runbook on, so Hello's own notebook tool has something to answer (sections start off, 05.10).
+    store.updateConversation(conversationId, { runbook: true });
     const pi = await reply('compare Go, Rust and Python with subagents');
     expect(store.listMessages(conversationId).map(message => message.role)).toEqual(['user', 'assistant']);
     // pi-subagents: "Pi will wake you when this subagent completes".

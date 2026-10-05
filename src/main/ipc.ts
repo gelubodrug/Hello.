@@ -135,6 +135,16 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.usage',()=>store.usageSummary());
   handle('settings.localServers',()=>chat.localServers(true));
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
+  // A picture pasted into the composer (S209): read here, in main, only when the
+  // person pastes, so its bytes never pass through the window and are never logged.
+  handle('chat.attachClipboard',async(id)=>{
+    // Electron 44's clipboard is the W3C one: the picture is an item's image/png.
+    const item=(await clipboard.read()).find(entry=>entry.types.includes('image/png'));
+    if(!item)throw new Error('There is no picture on the clipboard.');
+    const picture=await item.getType('image/png');
+    if(!(picture instanceof Blob))throw new Error('There is no picture on the clipboard.');
+    return chat.attachData(str(id),[{name:`Pasted image ${new Date().toISOString()}.png`,bytes:Buffer.from(await picture.arrayBuffer())}]);
+  });
   handle('chat.previewAttachment',(id,attachmentId)=>chat.previewAttachment(str(id),str(attachmentId)));
   handle('chat.send',(id,text,attachmentIds)=>{
     if(typeof text!=='string'||text.length>200000)throw new Error('Invalid message.');
@@ -323,6 +333,8 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     announceExtensions();
     return status;
   });
+  // Files the person picks to attach (S209): files only, never a folder, over this window.
+  handle('system.chooseFiles',async()=>{const result=await dialog.showOpenDialog(window,{title:'Attach files',properties:['openFile','multiSelections']});return result.canceled?null:result.filePaths;});
   handle('system.chooseFolder',async()=>{const result=await dialog.showOpenDialog(window,{title:'Choose this chat’s folder',properties:['openDirectory']});return result.canceled?null:result.filePaths[0]??null;});
   handle('system.openExternal',async(input)=>{const url=new URL(str(input,'link',8192));if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw new Error('Only web links can be opened.');await shell.openExternal(url.href);});
   handle('system.copy',async(value)=>{

@@ -109,16 +109,16 @@ function chatModel(value: ChatModel): ChatModel {
   if (!id) throw new Error('Choose a model for this chat.');
   return { endpointUrl: normalizeEndpoint(value.endpointUrl), id };
 }
-/** A chat's switches live in `settings`, keyed by chat: the mode, whether the
- *  model plans, whether each shared page exists at all, and the model it runs
- *  on. Absent means the default — chat, no planning, both pages there, the
- *  selection in Settings. Only the departure from the default is stored, so
- *  every chat that already exists keeps its pages. */
+/** A chat's switches live in `settings`, keyed by chat: the mode, which
+ *  notebook sections are on, and the model it runs on. Absent means the
+ *  default — chat, every section off (user, 05.10), the selection in
+ *  Settings. Only the departure from the default is stored; a chat made while
+ *  Runbook and Tasks started on had them written down for it (version 15). */
 const CONVERSATION_COLUMNS = `SELECT c.*,
     CASE WHEN m.value = 'coder' THEN 'coder' ELSE 'chat' END AS chatMode,
     CASE WHEN p.value = 'on' THEN 1 ELSE 0 END AS planning,
-    CASE WHEN r.value = 'off' THEN 0 ELSE 1 END AS runbook,
-    CASE WHEN t.value = 'off' THEN 0 ELSE 1 END AS tasks,
+    CASE WHEN r.value = 'on' THEN 1 ELSE 0 END AS runbook,
+    CASE WHEN t.value = 'on' THEN 1 ELSE 0 END AS tasks,
     CAST(f.value AS INTEGER) AS freshFrom,
     json_extract(cm.value, '$.endpointUrl') AS modelEndpoint,
     json_extract(cm.value, '$.id') AS modelId
@@ -214,7 +214,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 14)
+    if (version > 15)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -407,6 +407,16 @@ export class DataStore {
         if (!columns.includes('workedMs')) this.db.exec('ALTER TABLE messages ADD COLUMN workedMs INTEGER');
         this.db.exec('PRAGMA user_version = 14');
       })();
+    if (version < 15)
+      this.db.transaction(() => {
+        // Runbook and Tasks start off in a new chat, like Plans (user, 05.10). A
+        // chat that already exists keeps the pages it has: the default it was
+        // made with is written down for it.
+        for (const page of ['runbook', 'tasks'])
+          this.db.prepare(`INSERT INTO settings (key, value) SELECT 'chat-${page}:' || id, 'on' FROM conversations
+            WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'chat-${page}:' || conversations.id)`).run();
+        this.db.exec('PRAGMA user_version = 15');
+      })();
   }
 
   // ── Library of skills, plugins and MCP servers ────────────────────────────
@@ -517,7 +527,7 @@ export class DataStore {
         'INSERT INTO conversations (id,title,folder,createdAt,updatedAt) VALUES (@id,@title,@folder,@createdAt,@updatedAt)',
       )
       .run(row);
-    return { ...row, chatMode: 'chat', planning: false, runbook: true, tasks: true };
+    return { ...row, chatMode: 'chat', planning: false, runbook: false, tasks: false };
   }
   updateConversation(
     id: string,
@@ -558,8 +568,8 @@ export class DataStore {
       if (patch.chatMode !== undefined)
         this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
           .run(`chat-mode:${id}`, patch.chatMode);
-      // Only a departure from the default is written: planning off, or a page
-      // the person took away, is stored as nothing at all.
+      // Only a section switched on is written; one that is off, the default,
+      // is stored as nothing at all.
       const switchRow = (key: string, store: boolean, value: string) => {
         if (store)
           this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
@@ -567,8 +577,8 @@ export class DataStore {
         else this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
       };
       if (patch.planning !== undefined) switchRow(`chat-plan:${id}`, patch.planning, 'on');
-      if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, !patch.runbook, 'off');
-      if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, !patch.tasks, 'off');
+      if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, patch.runbook, 'on');
+      if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, patch.tasks, 'on');
       if (patch.model !== undefined) this.writeChatModel(id, row.model ?? null);
     })();
     // A section switched off empties its export: a worker's file is not a way around the switch.
@@ -1086,7 +1096,7 @@ export class DataStore {
       tasks: path.join(directory, 'tasks.md'),
       plan: path.join(directory, 'plan.md'),
     };
-    const on = { runbook: conversation.runbook !== false, tasks: conversation.tasks !== false, plan: conversation.planning === true };
+    const on = { runbook: conversation.runbook === true, tasks: conversation.tasks === true, plan: conversation.planning === true };
     for (const kind of NOTEBOOK_KINDS) {
       // What a worker may read: a section that is on, and of Runbooks only the chapters that are on.
       const text = (on[kind] ? this.listNotebooks(conversationId, kind) : []).filter(entry => kind !== 'runbook' || entry.shared)

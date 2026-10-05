@@ -1,5 +1,5 @@
 import { BrowserWindow, session } from "electron";
-import type { DownloadItem, HandlerDetails, Session, WebContents, WebFrameMain, WebPreferences } from "electron";
+import type { ContextMenuParams, DownloadItem, HandlerDetails, Session, WebContents, WebFrameMain, WebPreferences } from "electron";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, extname, join } from "node:path";
@@ -202,6 +202,8 @@ interface BrowserOptions {
   lifecycle?(event: BrowserLifecycleEvent): void;
   /** Produces a page again from its handle and returns the address it is at now. */
   serve?(conversationId: string, source: string): Promise<string>;
+  /** A right-click on one of these pages, for main to show its menu. */
+  contextMenu?(contents: WebContents, params: ContextMenuParams): void;
 }
 
 /** One native viewport; inactive pages stay alive without covering application chrome. */
@@ -760,6 +762,11 @@ export class BrowserManager {
       if (record.contents !== contents) return;
       record.contents = undefined;
       record.detaching = false;
+    });
+    // A guest shows no menu of its own on a right-click: main shows one.
+    contents.on("context-menu", (_event, params) => {
+      if (record.contents !== contents || this.disposed) return;
+      this.options.contextMenu?.(contents, params);
     });
     // Remote popup resize/move requests must never move the Hello. host window.
     contents.on("content-bounds-updated", (event) => event.preventDefault());

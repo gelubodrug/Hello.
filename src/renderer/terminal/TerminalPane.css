@@ -52,6 +52,78 @@
   font: var(--fs-12)/var(--lh-normal) var(--font-ui);
   pointer-events: none;
 }
+/* Find in the scrollback: a compact field over the top right of the terminal. */
+.hello-terminal-find {
+  position: absolute;
+  z-index: 2;
+  top: var(--sp-8);
+  right: var(--sp-16);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  max-width: calc(100% - var(--sp-16) * 2);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-12);
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  box-shadow: var(--panel-shadow);
+  color: var(--ink-secondary);
+  font-size: var(--fs-12);
+}
+
+.hello-terminal-find input {
+  width: 160px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink-primary);
+  font: inherit;
+}
+
+.hello-terminal-find:has(input:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.hello-terminal-find-count {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hello-terminal-find button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-secondary);
+}
+
+.hello-terminal-find button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.hello-terminal-find button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.hello-terminal-find button:disabled {
+  color: var(--ink-tertiary);
+  opacity: 0.5;
+}
+
 .hello-terminal[hidden] {
   display: none;
 }

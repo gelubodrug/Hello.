@@ -217,6 +217,7 @@ function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conv
   const saveDownload = vi.fn();
   const removeDownload = vi.fn();
   const downloadEvent = vi.fn();
+  const contextMenu = vi.fn();
   const manager = new BrowserManager({
     window: window as unknown as BrowserWindow,
     initial,
@@ -231,6 +232,7 @@ function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conv
     remove,
     emit,
     lifecycle,
+    contextMenu,
     ...(serve ? { serve } : {}),
   });
   services.push(manager);
@@ -257,7 +259,7 @@ function fixture(options: BrowserTab[] | { initial?: BrowserTab[]; serve?: (conv
     manager.setActive(tab.id);
     return tab;
   };
-  return { manager, window, save, remove, emit, lifecycle, saveDownload, removeDownload, downloadEvent, open, attach };
+  return { manager, window, save, remove, emit, lifecycle, saveDownload, removeDownload, downloadEvent, contextMenu, open, attach };
 }
 beforeEach(() => {
   native.views.length = 0;
@@ -269,6 +271,21 @@ beforeEach(() => {
 afterEach(() => {
   for (const manager of services.splice(0)) manager.dispose();
   vi.useRealTimers();
+});
+
+// User, 05.10: a right-click on a page showed nothing, not even Copy.
+describe("a right-click on a page", () => {
+  it("hands main the page and what was under the pointer, and nothing once the page is gone", () => {
+    const f = fixture();
+    f.open();
+    const guest = guestAt(0);
+    const params = { selectionText: "Google LLC", isEditable: false, linkURL: "", mediaType: "none", srcURL: "" };
+    guest.emit("context-menu", {}, params);
+    expect(f.contextMenu).toHaveBeenCalledWith(guest, params);
+    f.manager.dispose();
+    guest.emit("context-menu", {}, params);
+    expect(f.contextMenu).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("native browser lifecycle and grants", () => {

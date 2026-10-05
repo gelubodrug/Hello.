@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -16,11 +16,13 @@ import {
   CodeXml,
   Loader2,
   MessageCircle,
+  Paperclip,
   X,
 } from "lucide-react";
 import type {
   AppSettings,
   ChatAttachment,
+  ChatDropResult,
   ChatQuote,
   ConnectionModels,
   Conversation,
@@ -178,7 +180,9 @@ export function ToolPart({
   part: Extract<MessagePart, { type: "tool" }>;
 }) {
   const [open, setOpen] = useState(part.status === "approval");
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"allow" | "decline" | null>(null);
+  // A decision main is slow to take says it is under way, past a second.
+  const slow = useElapsed(pending !== null) >= 1000;
   const [error, setError] = useState<string | null>(null);
   const WebIcon = webToolIcon(part.name);
   const id = useId();
@@ -193,13 +197,13 @@ export function ToolPart({
   }, [part.status]);
   const approve = async (allow: boolean) => {
     if (!part.approvalId) return;
-    setPending(true);
+    setPending(allow ? "allow" : "decline");
     setError(null);
     try {
       await api.chat.approve(part.approvalId, allow);
     } catch (reason) {
       setError(errorText(reason));
-      setPending(false);
+      setPending(null);
     }
   };
   return (
@@ -233,17 +237,21 @@ export function ToolPart({
             <div className="approval-actions">
               <p>This tool is asking for your approval.</p>
               <button
+                type="button"
                 className="pill"
-                disabled={pending}
+                disabled={pending !== null}
                 onClick={() => void approve(false)}
               >
+                {slow && pending === "decline" && <Loader2 size={12} className="spin" aria-hidden />}
                 Decline
               </button>
               <button
+                type="button"
                 className="pill primary-button"
-                disabled={pending}
+                disabled={pending !== null}
                 onClick={() => void approve(true)}
               >
+                {slow && pending === "allow" && <Loader2 size={12} className="spin" aria-hidden />}
                 Allow once
               </button>
             </div>
@@ -415,6 +423,24 @@ function MessageRow({
   const [editDraft, setEditDraft] = useState("");
   const editLock = useRef(false);
   const field = useRef<HTMLTextAreaElement>(null);
+  const article = useRef<HTMLElement>(null);
+  // Copying and keeping are a round trip to main: past a second, the button
+  // says it is under way rather than looking dead (second review, 05.10).
+  const copyingSlow = useElapsed(copying) >= 1000;
+  const keepingSlow = useElapsed(kept === "saving") >= 1000;
+  // Edit puts the caret at the end of the words, and leaving the edit gives
+  // focus back to the message, not to the page.
+  const wasEditing = useRef(false);
+  useLayoutEffect(() => {
+    if (editingMessage) {
+      const node = field.current;
+      node?.focus({ preventScroll: true });
+      node?.setSelectionRange(node.value.length, node.value.length);
+    } else if (wasEditing.current && (!document.activeElement || document.activeElement === document.body)) {
+      article.current?.focus({ preventScroll: true });
+    }
+    wasEditing.current = editingMessage;
+  }, [editingMessage]);
   const [context, setContext] = useState<({ position: { x: number; y: number } } & ReturnType<typeof chatCopySnapshot>) | null>(null);
   const copyPayload = async (payload: { text: string; html?: string }) => {
     setCopying(true);
@@ -474,7 +500,9 @@ function MessageRow({
   const waited = useElapsed(runtimeStatus !== null, undefined, runtimeStatus);
   return (
     <article
+      ref={article}
       tabIndex={0}
+      aria-keyshortcuts="Meta+C Control+C"
       data-message-id={message.id}
       className={`message message-${message.role}`}
       aria-label={
@@ -548,7 +576,7 @@ function MessageRow({
               disabled={copying}
               onClick={() => void copyMessage()}
             >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copyingSlow ? <Loader2 size={14} className="spin" aria-hidden /> : copied ? <Check size={14} /> : <Copy size={14} />}
             </IconButton>
             <button className="text-button" onClick={onReuse}>
               Use as draft
@@ -575,7 +603,7 @@ function MessageRow({
             disabled={copying}
             onClick={() => void copyMessage()}
           >
-            {copied ? <Check size={15} /> : <Copy size={15} />}
+            {copyingSlow ? <Loader2 size={15} className="spin" aria-hidden /> : copied ? <Check size={15} /> : <Copy size={15} />}
           </IconButton>
           {message.content.trim() && (
             <IconButton
@@ -583,7 +611,7 @@ function MessageRow({
               disabled={kept === "saving"}
               onClick={() => void keepInRunbook()}
             >
-              {kept === "saved" ? <Check size={15} /> : <BookmarkPlus size={15} />}
+              {kept === "saved" ? <Check size={15} /> : keepingSlow ? <Loader2 size={15} className="spin" aria-hidden /> : <BookmarkPlus size={15} />}
             </IconButton>
           )}
           {last && (
@@ -621,11 +649,15 @@ function MessageRow({
             action: () => { setContext(null); setEditingMessage(true); setEditDraft(message.content); } },
         ] : []}
         onClose={reason => {
-          if (reason === 'escape' && context?.range) {
-            const selection = window.getSelection();
-            if (context.range.startContainer.isConnected && context.range.endContainer.isConnected) {
-              context.range.startContainer.parentElement?.closest<HTMLElement>('.message')?.focus({ preventScroll: true });
-              selection?.removeAllRanges(); selection?.addRange(context.range);
+          // Back to the message the menu was opened on, with the words selected
+          // in it: after Escape, and after an action that left focus in the
+          // menu — never over a field the action focused itself.
+          if (reason === 'escape' || (reason === 'action' && document.activeElement?.closest('.menu-popup'))) {
+            article.current?.focus({ preventScroll: true });
+            const range = context?.range;
+            if (range?.startContainer.isConnected && range.endContainer.isConnected) {
+              const selection = window.getSelection();
+              selection?.removeAllRanges(); selection?.addRange(range);
             }
           }
           setContext(null);
@@ -723,6 +755,46 @@ export function ConversationView({
     // A plugin's text for the composer never replaces words already written.
     onEditorText: text => setDraft(current => current.trim() ? current : text),
   });
+  // ↑ in an empty composer brings back what you sent, newest first; ↑ and ↓
+  // walk through it, Esc gives back what was there (S209 F1). Any other change
+  // to the words — typing, a quote, "Use as draft" — leaves the walk.
+  const recall = useRef<{ stash: string; index: number; shown: string } | null>(null);
+  const sent = useMemo(() => {
+    const said: string[] = [];
+    for (const message of messages)
+      if (message.role === "user" && message.content.trim() && said.at(-1) !== message.content) said.push(message.content);
+    return said.reverse();
+  }, [messages]);
+  useEffect(() => { if (recall.current && draft !== recall.current.shown) recall.current = null; }, [draft]);
+  const recallTo = (index: number, input: HTMLTextAreaElement) => {
+    const walk = recall.current ?? { stash: input.value, index: -1, shown: input.value };
+    const text = index < 0 ? walk.stash : sent[index];
+    recall.current = index < 0 ? null : { ...walk, index, shown: text };
+    setDraft(text);
+    requestAnimationFrame(() => input.setSelectionRange(text.length, text.length));
+  };
+  const recallKey = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    const input = event.currentTarget;
+    if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey || event.nativeEvent.isComposing) return false;
+    if (input.selectionStart !== input.selectionEnd) return false;
+    const walk = recall.current;
+    if (event.key === "ArrowUp" && (walk
+      // Within a recalled message, ↑ moves up its lines first.
+      ? !input.value.slice(0, input.selectionStart).includes("\n") && walk.index < sent.length - 1
+      : !input.value && sent.length > 0)) {
+      recallTo((walk?.index ?? -1) + 1, input);
+      return true;
+    }
+    if (event.key === "ArrowDown" && walk && !input.value.slice(input.selectionEnd).includes("\n")) {
+      recallTo(walk.index - 1, input);
+      return true;
+    }
+    if (event.key === "Escape" && walk) {
+      recallTo(-1, input);
+      return true;
+    }
+    return false;
+  };
   const commands = useSkillCommands({
     conversationId: conversation.id, draft, setDraft, onError: reportError,
     focus: () => requestAnimationFrame(() => {
@@ -838,16 +910,16 @@ export function ConversationView({
       setSending(false);
     }
   };
-  const importDrop = async (transfer: DataTransfer) => {
+  /** Every way in — a drop, a paste, the picker — lands the same: one at a
+   *  time, at most 8, a folder becoming the chat's folder (S209 F4). */
+  const importWith = async (bring: () => Promise<ChatDropResult | null>) => {
     if (importLock.current) return;
     importLock.current = true;
     setImporting(true);
     setError(null);
     try {
-      const paths = await droppedPaths(transfer);
-      if (paths.length + attachments.length > 8) throw new Error('Attach up to 8 files per message. Remove an attachment before adding more.');
-      const imported = await api.chat.attach(conversation.id, paths);
-      if (!mounted.current) return;
+      const imported = await bring();
+      if (!imported || !mounted.current) return;
       if (imported.folder) {
         if (busy) throw new Error('Stop the current response before changing its working folder.');
         const updated = await api.conversations.update(conversation.id, { folder: imported.folder });
@@ -863,6 +935,29 @@ export function ConversationView({
       if (mounted.current) setImporting(false);
     }
   };
+  const roomFor = (count: number) => {
+    if (count + attachments.length > 8) throw new Error('Attach up to 8 files per message. Remove an attachment before adding more.');
+  };
+  const importDrop = (transfer: DataTransfer) => importWith(async () => {
+    const paths = await droppedPaths(transfer);
+    roomFor(paths.length);
+    return api.chat.attach(conversation.id, paths);
+  });
+  const importPaths = (paths: string[]) => importWith(async () => {
+    roomFor(paths.length);
+    return api.chat.attach(conversation.id, paths);
+  });
+  // A picture without a file — a screenshot — is read by main from the clipboard.
+  const pastePicture = () => importWith(async () => {
+    roomFor(1);
+    return api.chat.attachClipboard!(conversation.id);
+  });
+  const pickFiles = () => importWith(async () => {
+    const paths = await api.system.chooseFiles?.();
+    if (!paths?.length) return null;
+    roomFor(paths.length);
+    return api.chat.attach(conversation.id, paths);
+  });
   const pickFolder = async () => {
     try {
       const folder = await api.system.chooseFolder();
@@ -1165,8 +1260,22 @@ export function ConversationView({
             value={draft}
             rows={2}
             onChange={(event) => setDraft(event.target.value)}
+            onPaste={(event) => {
+              const data = event.clipboardData;
+              // A file copied in Finder has a path: it is attached as a drop is.
+              const files = Array.from(data.files ?? []);
+              const paths = files.length ? api.system.pathsForFiles(files).filter(Boolean) : [];
+              if (paths.length) { event.preventDefault(); void importPaths(paths); return; }
+              // A picture alone becomes an attachment; anything with words pastes as words.
+              const picture = Array.from(data.items ?? []).some(item => item.kind === "file" && item.type.startsWith("image/"));
+              if (picture && !data.types.includes("text/plain") && api.chat.attachClipboard) {
+                event.preventDefault();
+                void pastePicture();
+              }
+            }}
             onKeyDown={(event) => {
               if (commands.onKeyDown(event)) return;
+              if (recallKey(event)) { event.preventDefault(); return; }
               if (
                 event.key === "Enter" &&
                 !event.shiftKey &&
@@ -1205,6 +1314,11 @@ export function ConversationView({
             >
               <Folder size={16} />
             </IconButton>
+            {api.system.chooseFiles && (
+              <IconButton label="Attach files…" disabled={busy || importing} onClick={() => void pickFiles()}>
+                <Paperclip size={16} />
+              </IconButton>
+            )}
             <IconButton label="New terminal" onClick={onTerminal}>
               <Terminal size={16} />
             </IconButton>

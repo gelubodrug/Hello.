@@ -149,7 +149,9 @@ export function ExtensionsPicker({
   const count = resources.filter(resource => active.includes(resource.id)).length;
   const available = resources.length + offered.length;
   // A library with nothing turned on in this chat looks the same as an empty
-  // one, and the model then has no skills. Say that there is something to use.
+  // one, and the model then has no skills. Say that there is something to use,
+  // in the button's name and tooltip. No dot: it floated to the composer's
+  // corner and opened this menu from there (user, 05.10: hide it).
   const waiting = !count && available;
   return (
     <MenuButton
@@ -157,11 +159,10 @@ export function ExtensionsPicker({
       searchPlaceholder="search extensions"
       items={items}
       onOpen={load}
-      className={`icon-button${count ? ' has-extensions' : ''}${waiting ? ' has-available' : ''}`}
+      className={`icon-button${count ? ' has-extensions' : ''}`}
     >
       <Blocks size={16} />
       {count > 0 && <span className="extension-count" aria-hidden>{count}</span>}
-      {!count && waiting ? <span className="extension-dot" aria-hidden /> : null}
     </MenuButton>
   );
 }

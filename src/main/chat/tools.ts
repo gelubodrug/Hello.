@@ -1117,7 +1117,7 @@ export async function executeToolOutput(
       case 'notebook_task_status': {
         const id = text(input, 'id', 100);
         const chat = store.getConversation(conversationId);
-        const tasksOn = chat.tasks !== false;
+        const tasksOn = chat.tasks === true;
         const planOn = chat.planning === true;
         if (!tasksOn && !planOn) requirePage(store, conversationId, 'tasks');
         const entry = (tasksOn ? visibleEntry(store, conversationId, 'tasks', id) : undefined)
@@ -1138,7 +1138,7 @@ export async function executeToolOutput(
         // The paths are for whichever sections are on; with none, there is
         // nothing to point a worker at. Each file holds the chapters that are on.
         const pages = store.getConversation(conversationId);
-        const on = { runbook: pages.runbook !== false, tasks: pages.tasks !== false, plan: pages.planning === true };
+        const on = { runbook: pages.runbook === true, tasks: pages.tasks === true, plan: pages.planning === true };
         if (!on.runbook && !on.tasks && !on.plan)
           throw new Error('This chat has no shared pages: Runbook, Tasks and Plans are all switched off.');
         const paths = store.notebookPaths(conversationId);

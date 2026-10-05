@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, safeStorage, protocol, net, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, clipboard, dialog, safeStorage, protocol, net, nativeImage } from 'electron';
 import { dirname, join, resolve, sep, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -12,6 +12,7 @@ import { MainTerminalService } from './terminal/service';
 import type { TerminalSession } from '../shared/types';
 import { createWorkerNotebookContext } from './terminal/notebook-context';
 import { BrowserManager } from './browser/manager';
+import { pageMenu } from './browser/context-menu';
 import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
 import { PageModeController } from './browser/page-mode';
@@ -119,6 +120,15 @@ else {
       {label:'File',submenu:[{label:'New Chat',accelerator:'CmdOrCtrl+N',click:()=>mainWindow?.webContents.send('hello:menu','new-chat')}]},
       {label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
       {label:'View',submenu:[{label:'Toggle Sidebar',accelerator:'CmdOrCtrl+B',click:()=>mainWindow?.webContents.send('hello:menu','toggle-sidebar')},{type:'separator'},{role:'reload'},{role:'toggleDevTools'},{type:'separator'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},
+      // Between chats from the keyboard, wherever focus is (S209): ⌘1–9 by place
+      // in the list, ⌘⇧] and ⌘⇧[ next and previous, ⌘J the next one waiting.
+      {label:'Go',submenu:[
+        {label:'Next Chat',accelerator:'CmdOrCtrl+Shift+]',click:()=>mainWindow?.webContents.send('hello:menu','next-chat')},
+        {label:'Previous Chat',accelerator:'CmdOrCtrl+Shift+[',click:()=>mainWindow?.webContents.send('hello:menu','previous-chat')},
+        {label:'Next Waiting Chat',accelerator:'CmdOrCtrl+J',click:()=>mainWindow?.webContents.send('hello:menu','attention-chat')},
+        {type:'separator'},
+        ...[1,2,3,4,5,6,7,8,9].map(place=>({label:`Chat ${place}`,accelerator:`CmdOrCtrl+${place}`,click:()=>mainWindow?.webContents.send('hello:menu',`chat-${place}`)})),
+      ]},
       {role:'windowMenu'},
     ]));
     const store=createDataStore(dataDir,{
@@ -152,7 +162,7 @@ else {
     window.on('focus',()=>emit('hello:window-focus',true));
     window.on('blur',()=>emit('hello:window-focus',false));
     const unsubscribeNotebooks=store.subscribeNotebooks(event=>emit('hello:notebooks-changed',event));
-    const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},folderFor(id){try{return store.getConversation(id).folder;}catch{return null;}},downloadsFolder:()=>app.getPath('downloads'),initialDownloads:store.listBrowserDownloads(),saveDownload:download=>store.saveBrowserDownload(download),removeDownload:id=>store.deleteBrowserDownload(id),downloadEvent:event=>emit('hello:browser-download',event),save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source)});
+    const browser=new BrowserManager({window,initial:store.listBrowserTabs(),conversationExists(id){try{store.getConversation(id);return true;}catch{return false;}},folderFor(id){try{return store.getConversation(id).folder;}catch{return null;}},downloadsFolder:()=>app.getPath('downloads'),initialDownloads:store.listBrowserDownloads(),saveDownload:download=>store.saveBrowserDownload(download),removeDownload:id=>store.deleteBrowserDownload(id),downloadEvent:event=>emit('hello:browser-download',event),save:tab=>store.saveBrowserTab(tab),remove:id=>store.deleteBrowserTab(id),emit:tab=>emit('hello:browser-update',tab),lifecycle:event=>emit('hello:browser-lifecycle',event),serve:(conversationId:string,source:string)=>serveSource(conversationId,source),contextMenu:(contents,params)=>{const items=pageMenu(params,{lookUp:()=>contents.showDefinitionForSelection(),cut:()=>contents.cut(),copy:()=>contents.copy(),paste:()=>contents.paste(),selectAll:()=>contents.selectAll(),copyText:text=>clipboard.writeText(text),copyImage:()=>contents.copyImageAt(params.x,params.y),saveImage:()=>contents.downloadURL(params.srcURL)});if(items.length&&!window.isDestroyed())Menu.buildFromTemplate(items).popup({window});}});
     // The DSH surface: dsh's own client, one page, in a partition of its own.
     // Its files ship in extraResources; in development they are the repo's assets.
     const dshResources=app.isPackaged?join(process.resourcesPath,'dsh'):[join(bundleDir,'..','..','assets','dsh'),join(process.cwd(),'assets','dsh')].find(candidate=>existsSync(candidate))??join(bundleDir,'..','..','assets','dsh');

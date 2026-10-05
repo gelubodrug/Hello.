@@ -1098,9 +1098,10 @@ svg {
 .context-meter-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-meter-error { color: var(--color-error); }
 /* The one thing to do about a filling window, beside the words that say so. */
-.context-meter-action { flex: none; padding: 1px var(--sp-4); border: 0; border-radius: var(--r-6); background: transparent; color: var(--ink-secondary); font: inherit; }
-.context-meter-action:hover { background: var(--surface-hover); color: var(--ink-primary); }
-.context-meter-action:active { background: var(--surface-active); }
+.context-meter-action { flex: none; display: inline-flex; align-items: center; gap: var(--sp-4); padding: 1px var(--sp-4); border: 0; border-radius: var(--r-6); background: transparent; color: var(--ink-secondary); font: inherit; }
+.context-meter-action:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink-primary); }
+.context-meter-action:active:not(:disabled) { background: var(--surface-active); }
+.context-meter-action:disabled { color: var(--ink-tertiary); }
 @media (prefers-reduced-motion: reduce) { .context-meter-fill { transition: none; } }
 .waiting-elapsed { font-variant-numeric: tabular-nums; }
 .waiting-response {
@@ -1752,6 +1753,8 @@ svg {
   width: min(440px, 100%);
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
+  /* Reaching its end does not scroll the app behind it. */
+  overscroll-behavior: contain;
   padding: var(--sp-20);
   border-radius: var(--panel-radius);
   background: var(--surface-panel);
@@ -1763,7 +1766,7 @@ svg {
 }
 .shortcuts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-16); margin-top: var(--sp-8); }
 .shortcuts-group h2 { margin: 0 0 var(--sp-8); font-size: var(--fs-12); font-weight: 600; color: var(--ink-tertiary); text-transform: uppercase; letter-spacing: 0.04em; }
-.shortcuts-group dl { margin: 0; display: flex; flex-direction: column; gap: var(--sp-6); }
+.shortcuts-group dl { margin: 0; display: flex; flex-direction: column; gap: var(--sp-8); }
 .shortcuts-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-8); font-size: var(--fs-12); }
 .shortcuts-row dt { margin: 0; }
 .shortcuts-row dd { margin: 0; color: var(--ink-secondary); text-align: right; }
@@ -2418,16 +2421,6 @@ svg {
 .composer-controls .icon-button.has-extensions {
   position: relative;
   color: var(--ink-primary);
-}
-/* Something in the library this chat is not using yet. */
-.extension-dot {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 5px;
-  height: 5px;
-  border-radius: var(--r-pill);
-  background: var(--ink-tertiary);
 }
 .extension-count {
   position: absolute;

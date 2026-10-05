@@ -163,7 +163,7 @@ describe('new application persistence', () => {
   });
   it('materializes separate empty exports, updates immediately and never writes to a repo', () => {
     const id = store.createConversation().id;
-    store.updateConversation(id, { folder: '/not/an/existing/repository' });
+    store.updateConversation(id, { folder: '/not/an/existing/repository', runbook: true, tasks: true });
     const paths = store.notebookPaths(id);
     expect(paths.runbook.startsWith(directory + path.sep)).toBe(true);
     expect(readFileSync(paths.tasks, 'utf8')).toBe('');
@@ -429,25 +429,41 @@ describe('the model a chat runs on', () => {
   });
 });
 
-// Runbook and Tasks are switches too, but the other way round: they exist
-// until the human takes one away, so only the departure is stored and every
-// chat that already existed keeps both pages (user, 20.09).
+// Runbook and Tasks are switches like Plans: off in a new chat (user, 05.10),
+// on only when switched on. A chat made while they started on keeps them.
 describe('the shared pages of a chat', () => {
-  it('starts with both, keeps what is switched off, and gives it back', () => {
+  it('starts with none, keeps what is switched on, and takes it away again', () => {
     const chat = store.createConversation('Pages');
-    expect(chat).toMatchObject({ runbook: true, tasks: true });
-    expect(store.getConversation(chat.id)).toMatchObject({ runbook: true, tasks: true });
+    expect(chat).toMatchObject({ runbook: false, tasks: false });
+    expect(store.getConversation(chat.id)).toMatchObject({ runbook: false, tasks: false });
 
-    expect(store.updateConversation(chat.id, { tasks: false })).toMatchObject({ runbook: true, tasks: false });
-    expect(store.getConversation(chat.id).tasks).toBe(false);
-    expect(store.listConversations().find(row => row.id === chat.id)?.tasks).toBe(false);
+    expect(store.updateConversation(chat.id, { tasks: true })).toMatchObject({ runbook: false, tasks: true });
+    expect(store.getConversation(chat.id).tasks).toBe(true);
+    expect(store.listConversations().find(row => row.id === chat.id)?.tasks).toBe(true);
     // Another change does not disturb it.
-    expect(store.updateConversation(chat.id, { title: 'Still off' }).tasks).toBe(false);
+    expect(store.updateConversation(chat.id, { title: 'Still on' }).tasks).toBe(true);
 
-    expect(store.updateConversation(chat.id, { runbook: false, tasks: true }))
-      .toMatchObject({ runbook: false, tasks: true });
+    expect(store.updateConversation(chat.id, { runbook: true, tasks: false }))
+      .toMatchObject({ runbook: true, tasks: false });
     store.deleteConversation(chat.id);
-    expect(store.createConversation('Fresh')).toMatchObject({ runbook: true, tasks: true });
+    expect(store.createConversation('Fresh')).toMatchObject({ runbook: false, tasks: false });
+  });
+
+  it('keeps both pages for a chat made while they started on, and what the person took away', () => {
+    const kept = store.createConversation('Kept').id;
+    const without = store.createConversation('Without tasks').id;
+    store.close();
+    // Roll the file back to how version 14 left these chats: no row meant on,
+    // and only a page taken away was written, as off.
+    const raw = new Database(store.databasePath);
+    raw.exec(`DELETE FROM settings WHERE key LIKE 'chat-runbook:%' OR key LIKE 'chat-tasks:%';
+      INSERT INTO settings(key, value) VALUES ('chat-tasks:${without}', 'off');
+      PRAGMA user_version = 14;`);
+    raw.close();
+    store = createDataStore(directory, codec);
+    expect(store.getConversation(kept)).toMatchObject({ runbook: true, tasks: true });
+    expect(store.getConversation(without)).toMatchObject({ runbook: true, tasks: false });
+    expect(store.createConversation('New')).toMatchObject({ runbook: false, tasks: false });
   });
 });
 
@@ -546,7 +562,7 @@ describe('what a chat’s earlier visits learned about a site', () => {
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'read' }]);
     expect(store.getDomainNote(chat, 'shared.example')).toBeUndefined();
     const check = new Database(store.databasePath, { readonly: true });
-    expect(check.pragma('user_version', { simple: true }) as number).toBe(14);
+    expect(check.pragma('user_version', { simple: true }) as number).toBe(15);
     expect((check.prepare('SELECT COUNT(*) AS rows FROM browser_domain_notes').get() as { rows: number }).rows).toBe(0);
     check.close();
     // And the new shape works on that same file.
@@ -725,6 +741,7 @@ describe('the notebook’s sections and chapter switches', () => {
 
   it('exports for workers only the chapters that are on, the plan included', () => {
     const chat = store.createConversation('Chat').id;
+    store.updateConversation(chat, { runbook: true });
     store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Shared', body: 'Visible.' });
     store.updateConversation(chat, { planning: true });
     const hidden = store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Private', body: 'Not for workers.' });

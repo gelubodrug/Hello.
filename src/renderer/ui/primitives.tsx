@@ -140,6 +140,13 @@ export interface MenuItem {
   children?: MenuItem[];
 }
 
+/** A choice among several, or a toggle, says whether it is on — to a screen
+ *  reader too, not only with its check mark (second review, 05.10). */
+const itemRole = (item: MenuItem) =>
+  item.checked === undefined ? "menuitem" : item.stayOpen ? "menuitemcheckbox" : "menuitemradio";
+/** Every row a menu moves through, whatever its role. */
+const MENU_ROWS = '[role^="menuitem"]';
+
 /** A selection-safe context menu using the same surface and native-view gate. */
 export function ContextMenu({
   position,
@@ -236,7 +243,7 @@ export function ContextMenu({
             : enabled[(enabled.indexOf(active) + (event.key === "ArrowDown" ? 1 : -1) + enabled.length) % enabled.length];
           if (index !== undefined) {
             setActive(index);
-            popup.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[index]?.focus({ preventScroll: true });
+            popup.current?.querySelectorAll<HTMLButtonElement>(MENU_ROWS)[index]?.focus({ preventScroll: true });
           }
         }
       }}
@@ -246,7 +253,8 @@ export function ContextMenu({
           {item.separator && index > 0 && <div role="separator" className="menu-separator" />}
           <button
             type="button"
-            role="menuitem"
+            role={itemRole(item)}
+            aria-checked={item.checked}
             aria-label={item.label}
             aria-keyshortcuts={item.id === 'copy' && item.shortcut ? 'Meta+C Control+C' : undefined}
             className="menu-item"
@@ -449,7 +457,7 @@ export function MenuButton({
               if (inSearch && event.key === "Enter" && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 event.stopPropagation();
-                popup.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.click();
+                popup.current?.querySelector<HTMLButtonElement>(`${MENU_ROWS}:not(:disabled)`)?.click();
               }
               if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
                 event.preventDefault();
@@ -467,7 +475,7 @@ export function MenuButton({
                 if (index !== undefined) {
                   setActive(index);
                   popup.current
-                    ?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+                    ?.querySelectorAll<HTMLButtonElement>(MENU_ROWS)
                     [index]?.focus();
                 }
               }
@@ -527,7 +535,8 @@ export function MenuButton({
                 )}
                 <button
                   type="button"
-                  role="menuitem"
+                  role={itemRole(item)}
+                  aria-checked={item.checked}
                   className="menu-item"
                   data-active={active === index}
                   tabIndex={active === index ? 0 : -1}
@@ -570,6 +579,23 @@ export function MenuButton({
   );
 }
 
+/** What Tab may land on in a dialog: enabled, and actually on screen. */
+function focusables(root: HTMLElement | null): HTMLElement[] {
+  return [...(root?.querySelectorAll<HTMLElement>(
+    'button:not(:disabled),input:not(:disabled):not([type="hidden"]),textarea:not(:disabled),select:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])',
+  ) ?? [])].filter(node => typeof node.checkVisibility !== "function" || node.checkVisibility());
+}
+/** While a dialog is open the app behind it takes no focus and no click,
+ *  whatever moved focus there; dialogs and menus live outside it, in body
+ *  (second review, 05.10). */
+let inertHolds = 0;
+function holdAppInert(): () => void {
+  const app = document.getElementById("root");
+  if (!app) return () => {};
+  if (inertHolds++ === 0) app.setAttribute("inert", "");
+  return () => { if (--inertHolds === 0) app.removeAttribute("inert"); };
+}
+
 export function Dialog({
   open,
   title,
@@ -594,8 +620,10 @@ export function Dialog({
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("input,button,textarea")?.focus();
-    return () => previous?.focus();
+    const release = holdAppInert();
+    focusables(ref.current)[0]?.focus();
+    // The app takes focus again before it is given back.
+    return () => { release(); previous?.focus(); };
   }, [open, present]);
   return present
     ? createPortal(
@@ -610,11 +638,7 @@ export function Dialog({
               onClose();
             }
             if (event.key === "Tab") {
-              const nodes = [
-                ...(ref.current?.querySelectorAll<HTMLElement>(
-                  'button:not(:disabled),input,textarea,select,[tabindex="0"]',
-                ) ?? []),
-              ];
+              const nodes = focusables(ref.current);
               if (event.shiftKey && document.activeElement === nodes[0]) {
                 event.preventDefault();
                 nodes.at(-1)?.focus();

@@ -9,7 +9,7 @@ import { executeTool, executeToolOutput, toolDefinitions, type BrowserHooks } fr
 
 /** Which notebook sections this chat has on: Plans follows Plan. */
 const pagesOf = (chat: { runbook?: boolean; tasks?: boolean; planning?: boolean }) =>
-  ({ runbook: chat.runbook !== false, tasks: chat.tasks !== false, plan: chat.planning === true });
+  ({ runbook: chat.runbook === true, tasks: chat.tasks === true, plan: chat.planning === true });
 
 export interface WorkerNotebookContext {
   env: Record<string, string>;

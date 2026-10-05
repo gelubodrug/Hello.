@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IDisposable, IEvent, Terminal } from "@xterm/xterm";
 import {
-  isTerminalToggleShortcut,
   terminalKeyVerdict,
   type TerminalKeyEvent,
 } from "../src/renderer/terminal/keys";
@@ -107,27 +106,26 @@ describe("terminal key routing", () => {
     );
   });
 
-  it("recognizes the drawer toggle and nothing adjacent to it", () => {
-    const base = {
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: false,
-      altKey: false,
-      key: "j",
-    };
+  // S209 F5: ⌘F (Ctrl+Shift+F off a Mac) opens find before xterm sees the key.
+  it("opens find in the scrollback before the key reaches the shell", () => {
+    const pane = readFileSync(join(process.cwd(), "src/renderer/terminal/TerminalPane.tsx"), "utf8");
+    const find = pane.indexOf("openFind.current()");
+    expect(find).toBeGreaterThan(0);
+    expect(find).toBeLessThan(pane.indexOf("terminalKeyVerdict(event, xterm.hasSelection())"));
+    expect(pane).toContain("findInBuffer(terminal.buffer.active, terminal.cols, state.query)");
+    expect(pane).toContain('aria-label="Find in terminal"');
+  });
 
-    expect(isTerminalToggleShortcut({ ...base, metaKey: true })).toBe(true);
-    expect(isTerminalToggleShortcut({ ...base, ctrlKey: true, key: "J" })).toBe(
-      true,
-    );
-    // ⌘⇧B is the browser pane and ⌘B the sidebar; neither may be swallowed.
-    expect(
-      isTerminalToggleShortcut({ ...base, metaKey: true, shiftKey: true }),
-    ).toBe(false);
-    expect(isTerminalToggleShortcut({ ...base, metaKey: true, key: "b" })).toBe(
-      false,
-    );
-    expect(isTerminalToggleShortcut(base)).toBe(false);
+  // S209: the app menu's chat keys survive a focused terminal too.
+  it("lets the menu's chat keys through: ⌘1–9 and ⌘⇧] / ⌘⇧[", () => {
+    expect(terminalKeyVerdict(key({ key: "1", metaKey: true }), false)).toBe("app");
+    expect(terminalKeyVerdict(key({ key: "9", metaKey: true }), false)).toBe("app");
+    expect(terminalKeyVerdict(key({ key: "}", metaKey: true, shiftKey: true }), false)).toBe("app");
+    expect(terminalKeyVerdict(key({ key: "[", metaKey: true, shiftKey: true }), false)).toBe("app");
+    // Ctrl+1 and ⌘0 stay the shell's; ⌘] without Shift is not a menu key.
+    expect(terminalKeyVerdict(key({ key: "1", ctrlKey: true }), false)).toBe("terminal");
+    expect(terminalKeyVerdict(key({ key: "0", metaKey: true }), false)).toBe("terminal");
+    expect(terminalKeyVerdict(key({ key: "]", metaKey: true }), false)).toBe("terminal");
   });
 });
 

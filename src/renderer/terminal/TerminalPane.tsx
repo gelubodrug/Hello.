@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { TerminalSession } from "../../shared/types";
@@ -6,6 +7,7 @@ import { api as appAPI } from "../api";
 import { droppedPaths, hasFileDrop, quoteTerminalPaths } from "../drop";
 import { Truncated } from "../ui/primitives";
 import { terminalKeyVerdict } from "./keys";
+import { findInBuffer, type TerminalMatch } from "./find";
 import {
   documentTokenReader,
   readTerminalFontFamily,
@@ -52,6 +54,60 @@ export function TerminalPane({
   active.current = visible;
   const mounted = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
   const folderChanged = currentFolder !== undefined && currentFolder !== session.cwd;
+
+  // Find in the scrollback (S209 F5): ⌘F, or Ctrl+Shift+F, while the terminal
+  // has focus. The query is this terminal's own, kept while it is hidden or
+  // moved; the field is outside xterm, so nothing typed reaches the shell.
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState({ index: 0, total: 0 });
+  const [alternate, setAlternate] = useState(false);
+  const findField = useRef<HTMLInputElement>(null);
+  const matches = useRef<TerminalMatch[]>([]);
+  const findState = useRef({ open: false, query: "", index: 0 });
+  findState.current.open = finding;
+  findState.current.query = query;
+  const showMatch = (terminal: Terminal, index: number) => {
+    const match = matches.current[index];
+    if (!match) { terminal.clearSelection(); return; }
+    terminal.select(match.col, match.row, match.length);
+    terminal.scrollToLine(Math.max(0, match.row - Math.floor(terminal.rows / 2)));
+  };
+  /** Again from the buffer: after typing, new output, a reflow or a screen switch.
+   *  A search starts at the newest match, and stays there while output arrives. */
+  const searchAgain = useRef((fromNewest: boolean) => {
+    const terminal = mounted.current?.terminal;
+    const state = findState.current;
+    if (!terminal || !state.open) return;
+    // A full-screen program (an editor, a pager) has no scrollback to search.
+    const full = terminal.buffer.active.type === "alternate";
+    setAlternate(full);
+    const atNewest = state.index >= matches.current.length - 1;
+    matches.current = full ? [] : findInBuffer(terminal.buffer.active, terminal.cols, state.query);
+    const total = matches.current.length;
+    state.index = !total ? 0 : fromNewest || atNewest ? total - 1 : Math.min(state.index, total - 1);
+    setFound({ index: state.index, total });
+    showMatch(terminal, state.index);
+  });
+  const step = (delta: number) => {
+    const terminal = mounted.current?.terminal;
+    const total = matches.current.length;
+    if (!terminal || !total) return;
+    findState.current.index = (findState.current.index + delta + total) % total;
+    setFound({ index: findState.current.index, total });
+    showMatch(terminal, findState.current.index);
+  };
+  const openFind = useRef(() => {
+    setFinding(true);
+    requestAnimationFrame(() => { findField.current?.focus(); findField.current?.select(); });
+  });
+  const closeFind = () => {
+    setFinding(false);
+    matches.current = [];
+    mounted.current?.terminal.clearSelection();
+    mounted.current?.terminal.focus();
+  };
+  useEffect(() => { if (finding) searchAgain.current(true); }, [finding, query]);
 
   useEffect(() => {
     if (!visible) { dropDepth.current = 0; setDropActive(false); }
@@ -123,6 +179,14 @@ export function TerminalPane({
       xterm.loadAddon(new Unicode11Addon());
       xterm.unicode.activeVersion = "11";
       xterm.attachCustomKeyEventHandler((event) => {
+        // ⌘F, or Ctrl+Shift+F off a Mac, opens find; Ctrl+F stays the shell's.
+        if (!event.altKey && event.key.toLowerCase() === "f" &&
+            ((event.metaKey && !event.ctrlKey && !event.shiftKey) || (event.ctrlKey && event.shiftKey && !event.metaKey))) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.type === "keydown") openFind.current();
+          return false;
+        }
         const verdict = terminalKeyVerdict(event, xterm.hasSelection());
         if (verdict === "copy" && event.type === "keydown") {
           event.preventDefault();
@@ -192,6 +256,13 @@ export function TerminalPane({
         () => input.dispose(),
         () => resized.dispose(),
       );
+      // An open search follows the buffer: output, a reflow, a full-screen program.
+      let findTimer: ReturnType<typeof setTimeout> | undefined;
+      const refind = () => { clearTimeout(findTimer); findTimer = setTimeout(() => searchAgain.current(false), 200); };
+      const parsed = xterm.onWriteParsed(refind);
+      const reflowed = xterm.onResize(refind);
+      const switched = xterm.buffer.onBufferChange(() => searchAgain.current(false));
+      cleanup.push(() => { clearTimeout(findTimer); parsed.dispose(); reflowed.dispose(); switched.dispose(); });
       inputReady.current = !processExited;
       const fitVisible = (): void => {
         if (active.current && host.clientWidth > 0 && host.clientHeight > 0)
@@ -316,6 +387,36 @@ export function TerminalPane({
         </p>
       )}
       {dropActive && <p className="hello-terminal-drop" role="status">{exited ? 'This terminal has exited' : 'Drop files to insert their paths'}</p>}
+      {finding && (
+        <div className="hello-terminal-find" role="search" aria-label="Find in terminal">
+          <input
+            ref={findField}
+            aria-label="Find in terminal"
+            placeholder="Find"
+            value={query}
+            spellCheck={false}
+            onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => {
+              // Enter goes up to older output, Shift+Enter back down; Escape returns to the shell.
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); step(event.shiftKey ? 1 : -1); }
+              if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFind(); }
+            }}
+          />
+          <span className="hello-terminal-find-count" role="status">
+            {alternate ? "Search is available in terminal scrollback"
+              : !query.trim() ? "" : found.total ? `${found.index + 1} of ${found.total}` : "No results"}
+          </span>
+          <button type="button" aria-label="Older match" title="Older match (Enter)" disabled={!found.total} onClick={() => step(-1)}>
+            <ChevronUp size={14} />
+          </button>
+          <button type="button" aria-label="Newer match" title="Newer match (Shift+Enter)" disabled={!found.total} onClick={() => step(1)}>
+            <ChevronDown size={14} />
+          </button>
+          <button type="button" aria-label="Close find" title="Close find (Esc)" onClick={closeFind}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
       <div className="hello-terminal-surface" ref={setHost} />
     </section>
   );

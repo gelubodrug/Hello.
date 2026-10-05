@@ -11,6 +11,8 @@ export const ATTACHMENT_LIMITS = {
 } as const;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+/** Where a pasted picture came from: no file, said in words, never a made-up path. */
+const PASTED = '(pasted from the clipboard)';
 type Snapshot = ChatAttachment & { sourcePath: string; mimeType?: string };
 export interface AttachmentContext {
   attachments: ChatAttachment[];
@@ -66,45 +68,68 @@ export class ChatAttachments {
         if (sources.length !== 1) throw new Error('Drop one folder by itself, or drop files to attach their contents.');
         return { folder: sources[0].path, attachments: [] };
       }
-      const snapshots: Array<{ metadata: Snapshot; bytes: Buffer }> = [];
+      const items: Array<{ name: string; bytes: Buffer; sourcePath: string }> = [];
       for (const source of sources) {
         current(); signal?.throwIfAborted();
-        const bytes = await this.readFile(source.path, ATTACHMENT_LIMITS.imageFile);
-        const mimeType = imageType(bytes);
-        if (!mimeType) {
-          if (/\.(?:png|jpe?g|webp|gif)$/i.test(source.path)) throw new Error('This image has an invalid or unsupported file signature.');
-          textContent(bytes);
-          if (bytes.length > ATTACHMENT_LIMITS.textFile) throw new Error('Each text attachment must be 128 KiB or smaller.');
-        }
-        snapshots.push({ bytes, metadata: {
-          id: randomUUID(), name: basename(source.path).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 255), sourcePath: source.path,
-          kind: mimeType ? 'image' : 'text', size: bytes.length, ...(mimeType ? { mimeType } : {}),
-        } });
+        items.push({ name: basename(source.path), bytes: await this.readFile(source.path, ATTACHMENT_LIMITS.imageFile), sourcePath: source.path });
       }
-      this.checkTotals(snapshots.map(snapshot => snapshot.metadata));
-      const parent = await this.folder(conversationId, true);
-      const created: string[] = [];
-      try {
-        for (const { metadata, bytes } of snapshots) {
-          current(); signal?.throwIfAborted();
-          await this.folder(conversationId, false);
-          const directory = join(parent, metadata.id);
-          await mkdir(directory, { mode: 0o700 });
-          created.push(directory);
-          await this.privateDirectory(directory);
-          await this.writeExclusive(join(directory, 'content'), bytes);
-          await this.writeExclusive(join(directory, 'metadata.json'), JSON.stringify(metadata));
-        }
-        current(); signal?.throwIfAborted();
-        return { attachments: snapshots.map(snapshot => publicMetadata(snapshot.metadata)) };
-      } catch (error) {
-        // Cleanup only our freshly allocated children after revalidating the parent.
-        await this.folder(conversationId, false).then(async () => {
-          await Promise.all(created.map(directory => rm(directory, { recursive: true, force: true })));
-        }).catch(() => {});
-        throw error;
-      }
+      return this.keep(conversationId, items, current, signal);
     }, signal);
+  }
+
+  /**
+   * Bytes the person gave without a file — a picture pasted from the clipboard
+   * — kept as a snapshot like a dropped file, under the same checks and limits
+   * (S209). Main read them; they never passed through the window.
+   */
+  importData(conversationId: string, items: Array<{ name: string; bytes: Buffer }>, signal?: AbortSignal): Promise<ChatDropResult> {
+    if (!items.length || items.length > ATTACHMENT_LIMITS.count)
+      return Promise.reject(new Error('Paste 1–8 items.'));
+    if (items.some(item => item.bytes.length > ATTACHMENT_LIMITS.imageFile))
+      return Promise.reject(new Error('This file is too large to attach (images: 5 MiB each; text: 128 KiB each).'));
+    return this.operation(conversationId, current =>
+      this.keep(conversationId, items.map(item => ({ ...item, sourcePath: PASTED })), current, signal), signal);
+  }
+
+  /** Checks each item as an image or UTF-8 text, then writes the private snapshots. */
+  private async keep(conversationId: string, items: Array<{ name: string; bytes: Buffer; sourcePath: string }>, current: () => void, signal?: AbortSignal): Promise<ChatDropResult> {
+    const snapshots: Array<{ metadata: Snapshot; bytes: Buffer }> = [];
+    for (const { name, bytes, sourcePath } of items) {
+      current(); signal?.throwIfAborted();
+      const mimeType = imageType(bytes);
+      if (!mimeType) {
+        if (/\.(?:png|jpe?g|webp|gif)$/i.test(name)) throw new Error('This image has an invalid or unsupported file signature.');
+        textContent(bytes);
+        if (bytes.length > ATTACHMENT_LIMITS.textFile) throw new Error('Each text attachment must be 128 KiB or smaller.');
+      }
+      snapshots.push({ bytes, metadata: {
+        id: randomUUID(), name: name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 255), sourcePath,
+        kind: mimeType ? 'image' : 'text', size: bytes.length, ...(mimeType ? { mimeType } : {}),
+      } });
+    }
+    this.checkTotals(snapshots.map(snapshot => snapshot.metadata));
+    const parent = await this.folder(conversationId, true);
+    const created: string[] = [];
+    try {
+      for (const { metadata, bytes } of snapshots) {
+        current(); signal?.throwIfAborted();
+        await this.folder(conversationId, false);
+        const directory = join(parent, metadata.id);
+        await mkdir(directory, { mode: 0o700 });
+        created.push(directory);
+        await this.privateDirectory(directory);
+        await this.writeExclusive(join(directory, 'content'), bytes);
+        await this.writeExclusive(join(directory, 'metadata.json'), JSON.stringify(metadata));
+      }
+      current(); signal?.throwIfAborted();
+      return { attachments: snapshots.map(snapshot => publicMetadata(snapshot.metadata)) };
+    } catch (error) {
+      // Cleanup only our freshly allocated children after revalidating the parent.
+      await this.folder(conversationId, false).then(async () => {
+        await Promise.all(created.map(directory => rm(directory, { recursive: true, force: true })));
+      }).catch(() => {});
+      throw error;
+    }
   }
 
   context(conversationId: string, attachmentIds: unknown): Promise<AttachmentContext> {
@@ -208,7 +233,7 @@ export class ChatAttachments {
     await this.privateDirectory(directory);
     const metadata: Snapshot = JSON.parse((await this.readFile(join(directory, 'metadata.json'), 16 * 1024, true)).toString('utf8'));
     if (metadata.id !== id || typeof metadata.name !== 'string' || !metadata.name || metadata.name.length > 255 ||
-        typeof metadata.sourcePath !== 'string' || !isAbsolute(metadata.sourcePath) || metadata.sourcePath.includes('\0') || metadata.sourcePath.length > 8192 ||
+        typeof metadata.sourcePath !== 'string' || (metadata.sourcePath !== PASTED && !isAbsolute(metadata.sourcePath)) || metadata.sourcePath.includes('\0') || metadata.sourcePath.length > 8192 ||
         !['text', 'image'].includes(metadata.kind) || !Number.isInteger(metadata.size) || metadata.size < 0)
       throw new Error('This attachment has invalid metadata. Drop the file again.');
     const snapshotPath = join(directory, 'content');

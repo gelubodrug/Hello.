@@ -20,6 +20,16 @@ tools to the model. Browser permission grants remain unchanged. The main process
 uses Electron 44's asynchronous [Clipboard API](https://www.electronjs.org/docs/latest/api/clipboard)
 so app copying does not require granting websites clipboard access.
 
+One read exists, and only the person triggers it (S209): pasting a picture into
+the composer calls `chat.attachClipboard`, and main reads the clipboard's
+`image/png` item itself. The bytes never pass through the window and are never
+logged; they become a private snapshot through the same checks and limits as a
+dropped image (a real image signature, 5 MiB each, 8 MiB together, 8 files).
+Pasted words stay ordinary text input, and a file copied in Finder is attached
+by its path, as a drop is. "Attach files…" asks main for a native open dialog
+over this window, for files only, never a folder; its paths take the same
+attach path as a drop. Neither is offered to the model as a tool.
+
 Remote pages run in `<webview>` guests of the app window, with web security
 enabled, no Node integration and no app preload. The window may ask for a page,
 but it decides nothing about it: `browser.attach` mints a one-time nonce for one

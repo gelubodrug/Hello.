@@ -3,10 +3,10 @@
  *
  * xterm claims nearly every key that reaches its textarea, including the ones
  * this window's own shortcuts are built on: with no handler in front of it,
- * focusing the terminal silently kills ⌘B (View › Toggle Sidebar, in the app
- * menu) and ⌘J, kept for showing and hiding the terminal. The rules are stated
- * here as a pure decision so they can be read — and tested — without a
- * terminal attached.
+ * focusing the terminal silently kills the app menu's keys (src/main/index.ts)
+ * — ⌘B the sidebar, ⌘J the next waiting chat, ⌘1–9 a chat by its place,
+ * ⌘⇧] and ⌘⇧[ the next and previous chat. The rules are stated here as a pure
+ * decision so they can be read — and tested — without a terminal attached.
  */
 
 export type TerminalKeyVerdict =
@@ -28,7 +28,9 @@ export interface TerminalKeyEvent {
 }
 
 /** Window shortcuts that must survive a focused terminal, by their bare key. */
-const APP_SHORTCUT_KEYS = new Set(["b", "j"]);
+const APP_SHORTCUT_KEYS = new Set(["b", "j", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+/** ⌘⇧] and ⌘⇧[, whichever character the layout reports for them. */
+const APP_SHIFTED_KEYS = new Set(["]", "[", "}", "{"]);
 
 export function terminalKeyVerdict(
   event: TerminalKeyEvent,
@@ -46,6 +48,9 @@ export function terminalKeyVerdict(
   if (event.metaKey && APP_SHORTCUT_KEYS.has(event.key.toLowerCase())) {
     return "app";
   }
+  if (event.metaKey && event.shiftKey && APP_SHIFTED_KEYS.has(event.key)) {
+    return "app";
+  }
 
   // ⌘C is copy only when there is something to copy. Left as a blanket copy it
   // would be indistinguishable from Ctrl+C to anyone typing quickly, and
@@ -55,23 +60,4 @@ export function terminalKeyVerdict(
   }
 
   return "terminal";
-}
-
-/**
- * ⌘J / Ctrl+J: the panel-toggle key every editor on this platform uses, kept
- * for showing and hiding the terminal. Nothing acts on it yet; ⌘B, the
- * sidebar, is the app menu's (src/main/index.ts).
- */
-export function isTerminalToggleShortcut(
-  event: Pick<
-    KeyboardEvent,
-    "metaKey" | "ctrlKey" | "shiftKey" | "altKey" | "key"
-  >,
-): boolean {
-  return (
-    (event.metaKey || event.ctrlKey) &&
-    !event.shiftKey &&
-    !event.altKey &&
-    event.key.toLowerCase() === "j"
-  );
 }

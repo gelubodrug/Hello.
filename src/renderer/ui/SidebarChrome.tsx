@@ -42,7 +42,12 @@ export function SidebarChrome({ visible, children }: { visible: boolean; childre
           event.clientY >= bounds.top && event.clientY < bounds.bottom;
       });
     };
-    const dismiss = () => { clearLeave(); setPeek(false); };
+    // A drawer going away does not keep focus in what is about to be hidden:
+    // it goes to the edge that brings the drawer back (second review, 05.10).
+    const dismiss = () => {
+      clearLeave(); setPeek(false);
+      if (drawer.current?.contains(document.activeElement)) edge.current?.focus({ preventScroll: true });
+    };
     const move = (event: PointerEvent) => {
       if (inside(event.target) || inDrawerBounds(event) || inPopup(event.target) ||
           drawer.current?.querySelector('[aria-haspopup="menu"][aria-expanded="true"]') ||

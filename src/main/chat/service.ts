@@ -763,7 +763,14 @@ export class ChatService {
     }
   }
 
-  async attach(conversationId: string, paths: unknown): Promise<ChatDropResult> {
+  attach(conversationId: string, paths: unknown): Promise<ChatDropResult> {
+    return this.prepareAttachments(conversationId, signal => this.attachments.import(conversationId, paths, signal));
+  }
+  /** A picture main read from the clipboard, kept like a dropped image (S209). */
+  attachData(conversationId: string, items: Array<{ name: string; bytes: Buffer }>): Promise<ChatDropResult> {
+    return this.prepareAttachments(conversationId, signal => this.attachments.importData(conversationId, items, signal));
+  }
+  private async prepareAttachments(conversationId: string, work: (signal: AbortSignal) => Promise<ChatDropResult>): Promise<ChatDropResult> {
     this.assertAvailable(conversationId);
     this.store.getConversation(conversationId);
     const controller = new AbortController();
@@ -771,7 +778,7 @@ export class ChatService {
     if (!pending) this.preparations.set(conversationId, pending = new Set());
     pending.add(controller);
     try {
-      const result = await this.attachments.import(conversationId, paths, controller.signal);
+      const result = await work(controller.signal);
       controller.signal.throwIfAborted();
       this.assertAvailable(conversationId);
       this.store.getConversation(conversationId);
@@ -1460,7 +1467,7 @@ export class ChatService {
       settings, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
       // The instructions name the notebook sections that are on: a switched
       // section starts the next turn in a session whose instructions say so.
-      sections: { plan: conversation.planning === true, runbook: conversation.runbook !== false, tasks: conversation.tasks !== false },
+      sections: { plan: conversation.planning === true, runbook: conversation.runbook === true, tasks: conversation.tasks === true },
       // A changed selection OR a re-imported copy restarts the child; the
       // durable Pi session file, and the conversation history, are unaffected.
       // Paths alone would not change on update: the row keeps its id.
@@ -1490,7 +1497,7 @@ export class ChatService {
           { skills: resources.skills, mcp: resources.mcp, skillsCatalog: Boolean(this.skillCatalog) },
           chat.planning === true,
           Boolean(this.workers),
-          { runbook: chat.runbook !== false, tasks: chat.tasks !== false },
+          { runbook: chat.runbook === true, tasks: chat.tasks === true },
         );
       },
       execute: (name, args, signal, toolCallId) => this.executePiTool(run.conversationId, name, args, signal, toolCallId),
@@ -1500,7 +1507,7 @@ export class ChatService {
         return {
           groups: helloToolGroups(tools, {
             chatMode: chat.chatMode ?? 'chat',
-            notebooks: { runbook: chat.runbook !== false, tasks: chat.tasks !== false },
+            notebooks: { runbook: chat.runbook === true, tasks: chat.tasks === true },
             planning: chat.planning === true,
             mcp: resources.mcp,
           }),
@@ -1527,7 +1534,7 @@ export class ChatService {
           mcp: resources.mcp.map(tool => ({ name: tool.name, serverName: tool.serverName })),
           catalog: Boolean(this.skillCatalog),
         }, conversation.planning === true,
-        { runbook: conversation.runbook !== false, tasks: conversation.tasks !== false }),
+        { runbook: conversation.runbook === true, tasks: conversation.tasks === true }),
         chatMode: conversation.chatMode ?? 'chat', history: wireHistory(history),
         bridgeEnv: bridge.env, requestTimeoutMs: this.requestTimeoutMs,
         skillPaths: resources.skillPaths, extensionPaths: resources.extensionPaths, promptPaths: resources.promptPaths,

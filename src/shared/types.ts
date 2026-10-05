@@ -74,11 +74,11 @@ export interface LocalServer { name: string; endpointUrl: string; models: ModelC
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
 export interface ResourceChange { conversationId?: string }
 /** The switches of a chat's notebook sections (user, 29.09). `planning` is
- *  Plans — the Plan switch: off by default, because a two-line request
- *  answered with a written plan is slower than the answer. `runbook` and
- *  `tasks` are on by default. A section that is off stays in the notebook,
- *  quieter, and is invisible to the model and CLI workers — no tool, no
- *  export, nothing about it in what the model is told. */
+ *  Plans — the Plan switch, because a two-line request answered with a
+ *  written plan is slower than the answer. All three are off in a new chat
+ *  (user, 05.10) and on only when switched on. A section that is off stays
+ *  in the notebook, quieter, and is invisible to the model and CLI workers —
+ *  no tool, no export, nothing about it in what the model is told. */
 export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean;
   /** When the chat was last restarted: the model's memory begins here; what came before stays for the person. */
   freshFrom?: number;
@@ -241,6 +241,11 @@ export interface ChatQuoteExtra {
 }
 export interface ChatQuote extends ChatQuoteExtra { text: string; }
 export interface ChatEvent { conversationId: string; message: Message; }
+/** What an app menu item asks the window for (src/main/index.ts): ⌘N a new chat,
+ *  ⌘B the sidebar, ⌘⇧] / ⌘⇧[ the next or previous chat, ⌘J the next chat
+ *  waiting, ⌘1–9 a chat by its place in the list (S209). */
+export type MenuAction = 'new-chat' | 'toggle-sidebar' | 'next-chat' | 'previous-chat' | 'attention-chat'
+  | `chat-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 /** The waiting list after main changed it on its own: a steer said, a held message delivered. */
 export interface ChatQueueEvent { conversationId: string; items: QueuedMessage[]; }
 /**
@@ -297,7 +302,9 @@ export interface HelloAPI {
     /** Drops a remembered connection and the key stored for its endpoint. */
     forgetConnection(endpointUrl: string): Promise<AppSettings>;
   };
-  chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>; /** A data: URL of one of this chat's image attachments. */ previewAttachment(conversationId: string, attachmentId: string): Promise<string>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; /** A row that is already gone is not an error: the chat's current list comes back. */ dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; onQueue?(listener: (event: ChatQueueEvent) => void): () => void; /** What the chat's plugins show. Optional for an older preload. */ extensionUi?(conversationId: string): Promise<ExtensionUiState>; onExtensionUi?(listener: (state: ExtensionUiState) => void): () => void; /** Answers a plugin's question. */ answerExtension?(conversationId: string, dialogId: string, answer: ExtensionAnswer): Promise<void>; /** The slash commands the chat's plugins added, as its running Pi last said; null before it ever ran. */ commands?(conversationId: string): Promise<PluginCommand[] | null>; /** Summarises the conversation now, as Pi does by itself near the limit. Optional for an older preload. */ compact?(conversationId: string): Promise<{ tokensBefore: number; tokensAfter?: number }>; };
+  chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>;
+    /** The picture on the clipboard, read by main and kept like a dropped image. Optional for an older preload. */
+    attachClipboard?(conversationId: string): Promise<ChatDropResult>; /** A data: URL of one of this chat's image attachments. */ previewAttachment(conversationId: string, attachmentId: string): Promise<string>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; /** A row that is already gone is not an error: the chat's current list comes back. */ dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; onQueue?(listener: (event: ChatQueueEvent) => void): () => void; /** What the chat's plugins show. Optional for an older preload. */ extensionUi?(conversationId: string): Promise<ExtensionUiState>; onExtensionUi?(listener: (state: ExtensionUiState) => void): () => void; /** Answers a plugin's question. */ answerExtension?(conversationId: string, dialogId: string, answer: ExtensionAnswer): Promise<void>; /** The slash commands the chat's plugins added, as its running Pi last said; null before it ever ran. */ commands?(conversationId: string): Promise<PluginCommand[] | null>; /** Summarises the conversation now, as Pi does by itself near the limit. Optional for an older preload. */ compact?(conversationId: string): Promise<{ tokensBefore: number; tokensAfter?: number }>; };
   notebooks: { list(conversationId: string, kind: NotebookKind): Promise<NotebookEntry[]>; save(input: { id?: string; conversationId: string; kind: NotebookKind; title: string; body: string; expectedUpdatedAt?: number }): Promise<NotebookEntry>; delete(id: string): Promise<void>; /** A chapter's switch. Leaves its revision alone, so an open draft stays valid. Optional for an older preload. */ share?(id: string, shared: boolean): Promise<NotebookEntry>; paths(conversationId: string): Promise<NotebookPaths>; onChange?(listener: (event: NotebookChange) => void): () => void; };
   extensions: {
     list(): Promise<LibraryResource[]>;
@@ -325,15 +332,17 @@ export interface HelloAPI {
     /** Copies it into the library when it is not there, and turns it on for the chat. */
     use(id: string, conversationId: string): Promise<SkillUse>;
   };
-  system: { chooseFolder(): Promise<string | null>; pathsForFiles(files: File[]): string[]; openExternal(url: string): Promise<void>; revealPath(path: string): Promise<void>; copy(content: { text: string; html?: string }): Promise<void>;
+  system: { chooseFolder(): Promise<string | null>;
+    /** Files to attach, from the native picker: their paths, or null when cancelled. Optional for an older preload. */
+    chooseFiles?(): Promise<string[] | null>; pathsForFiles(files: File[]): string[]; openExternal(url: string): Promise<void>; revealPath(path: string): Promise<void>; copy(content: { text: string; html?: string }): Promise<void>;
     /** A macOS notification about one chat; clicking it brings that chat forward. Optional for an older preload. */
     notify?(input: { title: string; body: string; conversationId: string }): Promise<boolean>;
     /** The number on the Dock icon: chats waiting for the person. 0 clears it. */
     badge?(count: number): Promise<void>;
     /** A notification was clicked: the chat it was about. */
     onFocusConversation?(listener: (conversationId: string) => void): () => void;
-    /** An item of the app menu, by its key: ⌘N `new-chat`, ⌘B `toggle-sidebar`. Optional for an older preload. */
-    onMenu?(listener: (action: 'new-chat' | 'toggle-sidebar') => void): () => void;
+    /** An item of the app menu, by its key. Optional for an older preload. */
+    onMenu?(listener: (action: MenuAction) => void): () => void;
     /** The app's window gained or lost the OS focus. */
     onWindowFocus?(listener: (focused: boolean) => void): () => void; };
   terminal: {

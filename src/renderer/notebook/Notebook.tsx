@@ -20,8 +20,10 @@ import {
   List,
   Plus,
   Redo2,
+  Search,
   Trash2,
   Undo2,
+  X,
 } from "lucide-react";
 import type { Conversation, NotebookEntry, NotebookKind } from "../../shared/types";
 import { NotebookSwitch } from "./NotebookSwitch";
@@ -71,9 +73,33 @@ const KINDS: NotebookKind[] = SECTIONS.map(section => section.kind);
 /** Chapters a section shows before “Show more”. */
 const SECTION_ROWS = 6;
 
+/** A chapter found by a search, with the words around the first place it matched. */
+export interface NotebookHit { entry: NotebookEntry; snippet: string }
+/**
+ * Chapters whose title or words hold the query, literally and whatever the
+ * case, in the tree's order, each with up to 160 characters around its first
+ * match in the words (S209 F3). Drafts count, since `entries` holds them, and
+ * so do sections that are off: the switch is the model's access, not yours.
+ */
+export function searchNotebook(entries: readonly NotebookEntry[], query: string): NotebookHit[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [];
+  const order = new Map(KINDS.map((kind, index) => [kind, index]));
+  return entries
+    .filter(entry => entry.title.toLocaleLowerCase().includes(needle) || entry.body.toLocaleLowerCase().includes(needle))
+    .sort((a, b) => (order.get(a.kind) ?? 0) - (order.get(b.kind) ?? 0))
+    .map(entry => {
+      const words = entry.body.replace(/\s+/g, " ").trim();
+      const at = words.toLocaleLowerCase().indexOf(needle);
+      const start = at < 0 ? 0 : Math.max(0, at - 60);
+      const end = Math.min(words.length, start + 160);
+      return { entry, snippet: `${start > 0 ? "…" : ""}${words.slice(start, end)}${end < words.length ? "…" : ""}` };
+    });
+}
+
 /** Whether the model may use a section at all. Plans is on while Plan is. */
 export function sectionOn(conversation: Pick<Conversation, "runbook" | "tasks" | "planning">, kind: NotebookKind): boolean {
-  return kind === "plan" ? conversation.planning === true : conversation[kind] !== false;
+  return kind === "plan" ? conversation.planning === true : conversation[kind] === true;
 }
 
 /** What this browser remembers of a chat's notebook: the chapter open, folded and unfolded sections. */
@@ -618,6 +644,8 @@ export function Notebook(props: {
   conversation: Conversation;
   onConversationChange: (conversation: Conversation) => void;
   reportError: (reason: unknown) => void;
+  /** The notebook is the page on screen of the chat in front: ⌘F searches it. */
+  active?: boolean;
 }) {
   return (
     <NotebookSession
@@ -632,10 +660,12 @@ function NotebookSession({
   conversation,
   onConversationChange,
   reportError,
+  active = false,
 }: {
   conversation: Conversation;
   onConversationChange: (conversation: Conversation) => void;
   reportError: (reason: unknown) => void;
+  active?: boolean;
 }) {
   const conversationId = conversation.id;
   const [entries, setEntries] = useState<NotebookEntry[]>([]);
@@ -1036,15 +1066,89 @@ function NotebookSession({
     }
   };
 
+  // Search: the results stand in for the tree while there are words to find,
+  // so the folds come back untouched when they are cleared (S209 F3).
+  const [query, setQuery] = useState("");
+  const searchField = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLElement>(null);
+  const hits = useMemo(() => searchNotebook(entries, query), [entries, query]);
+  const searching = query.trim().length > 0;
+  const openHit = (entry: NotebookEntry) => { void flush(); setSelected(entry.id); };
+  const focusEditor = () => root.current
+    ?.querySelector<HTMLElement>('.notebook-editor [contenteditable="true"], .notebook-editor textarea, .notebook-editor input')
+    ?.focus();
+  // The find keys belong to the page on screen, as the chat's do.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (!["f", "k"].includes(event.key.toLowerCase())) return;
+      if (!root.current || root.current.closest("[hidden]")) return;
+      event.preventDefault();
+      searchField.current?.focus();
+      searchField.current?.select();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active]);
+
   const toggleFold = (kind: NotebookKind) =>
     updateView({ collapsed: collapsed.has(kind) ? [...collapsed].filter(item => item !== kind) : [...collapsed, kind] });
   const toggleMore = (kind: NotebookKind) =>
     updateView({ expanded: unfolded.has(kind) ? [...unfolded].filter(item => item !== kind) : [...unfolded, kind] });
 
   return (
-    <section className="notebook" aria-label="Notebook">
+    <section className="notebook" aria-label="Notebook" ref={root}>
       <aside className="notebook-list notebook-tree" aria-label="Notebook sections">
-        {SECTIONS.map((section) => {
+        <div className="notebook-search">
+          <Search size={14} aria-hidden />
+          <input
+            ref={searchField}
+            aria-label="Search notebook"
+            placeholder="Search notebook"
+            value={query}
+            spellCheck={false}
+            onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && hits[0]) {
+                event.preventDefault();
+                openHit(hits[0].entry);
+              }
+              // Escape clears the words; with none left, it goes back to writing.
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                if (query) setQuery("");
+                else focusEditor();
+              }
+            }}
+          />
+          {query && (
+            <button type="button" className="notebook-search-clear" aria-label="Clear search" title="Clear search"
+              onClick={() => { setQuery(""); searchField.current?.focus(); }}>
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        {searching && (
+          hits.length ? (
+            <ul className="notebook-results" aria-label="Search results">
+              {hits.map(({ entry, snippet }) => (
+                <li key={entry.id}>
+                  <button type="button" className="notebook-result" data-selected={selected === entry.id}
+                    aria-pressed={selected === entry.id} onClick={() => openHit(entry)}>
+                    <span className="notebook-result-title truncate">{entry.title || "Untitled"}</span>
+                    <span className="notebook-result-section">{SECTIONS.find(section => section.kind === entry.kind)?.title}</span>
+                    {snippet && <span className="notebook-result-snippet">{snippet}</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="notebook-section-empty" role="status">Nothing in the notebook matches.</p>
+          )
+        )}
+        {!searching && SECTIONS.map((section) => {
           const rows = entries.filter(entry => entry.kind === section.kind);
           const on = sectionOn(conversation, section.kind);
           const folded = collapsed.has(section.kind);

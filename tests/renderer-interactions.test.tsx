@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   extensionsImportDiscovered: vi.fn<HelloAPI['extensions']['importDiscovered']>(),
   send: vi.fn(),
   attach: vi.fn(),
+  attachClipboard: vi.fn(),
+  chooseFiles: vi.fn(),
   pathsForFiles: vi.fn(),
   conversationUpdate: vi.fn(),
   stop: vi.fn(),
@@ -54,6 +56,7 @@ vi.mock("../src/renderer/api", () => ({
   api: {
     chat: {
       attach: mocks.attach,
+      attachClipboard: mocks.attachClipboard,
       send: mocks.send,
       stop: mocks.stop,
       retry: mocks.retry,
@@ -76,7 +79,7 @@ vi.mock("../src/renderer/api", () => ({
       delete: mocks.notebookDelete,
       onChange: mocks.notebookOnChange,
     },
-    system: { pathsForFiles: mocks.pathsForFiles, openExternal: vi.fn().mockResolvedValue(undefined), copy: mocks.copy },
+    system: { pathsForFiles: mocks.pathsForFiles, chooseFiles: mocks.chooseFiles, openExternal: vi.fn().mockResolvedValue(undefined), copy: mocks.copy },
     conversations: { update: mocks.conversationUpdate },
     extensions: {
       list: mocks.extensionsList,
@@ -156,7 +159,7 @@ function field(label: string) {
 }
 /** A menu entry, matched on its label and not on the detail line under it. */
 function menuItem(label: string) {
-  const node = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+  const node = [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find(
     item => (item.querySelector(".menu-item-copy")?.firstChild?.textContent ?? item.textContent)?.trim() === label,
   );
   expect(node, `menu item ${label}`).toBeDefined();
@@ -665,6 +668,14 @@ describe('chat selection context menu', () => {
     expect(message.content).toContain('**bold**');
     expect(mocks.send).not.toHaveBeenCalled();
   });
+  it('gives focus back to the message after an action that left it in the menu', async () => {
+    await render(view([message]));
+    await open(false);
+    const item = button('Copy message');
+    item.focus();
+    await click(item);
+    expect(document.activeElement).toBe(host.querySelector('.message-assistant'));
+  });
   it('uses the captured selection for Command-C while the context menu owns focus', async () => {
     await render(view([message]));
     await open();
@@ -672,6 +683,124 @@ describe('chat selection context menu', () => {
     const menu = document.querySelector('[aria-label="Chat text actions"]')!;
     await act(async () => { menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', metaKey: true, bubbles: true })); });
     expect(mocks.copy).toHaveBeenCalledWith(expect.objectContaining({ text: 'bold' }));
+  });
+});
+
+// S209 F1: ↑ in an empty composer brings back what you sent.
+describe("the composer's history", () => {
+  const said = (id: string, content: string, role: "user" | "assistant" = "user"): Message =>
+    ({ id, conversationId: conversation.id, role, content, status: "complete", createdAt: 1 });
+  const thread = [said("u1", "First question"), said("a1", "First answer", "assistant"), said("u2", "Second question"), said("a2", "Second answer", "assistant")];
+  const press = async (field: HTMLTextAreaElement, key: string) => {
+    await act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    await settle();
+  };
+  const composer = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  it("walks back through what you sent from an empty composer, and Esc clears it", async () => {
+    await render(view(thread));
+    await press(composer(), "ArrowUp");
+    expect(composer().value).toBe("Second question");
+    await press(composer(), "ArrowUp");
+    expect(composer().value).toBe("First question");
+    // The oldest stays the oldest.
+    await press(composer(), "ArrowUp");
+    expect(composer().value).toBe("First question");
+    await press(composer(), "ArrowDown");
+    expect(composer().value).toBe("Second question");
+    await press(composer(), "ArrowDown");
+    expect(composer().value).toBe("");
+    await press(composer(), "ArrowUp");
+    await press(composer(), "Escape");
+    expect(composer().value).toBe("");
+  });
+  it("leaves words you are writing alone, and stops walking once you type", async () => {
+    await render(view(thread));
+    await fill(composer(), "My own draft");
+    await press(composer(), "ArrowUp");
+    expect(composer().value).toBe("My own draft");
+    await fill(composer(), "");
+    await press(composer(), "ArrowUp");
+    expect(composer().value).toBe("Second question");
+    await fill(composer(), "Second question, again");
+    await press(composer(), "ArrowUp");
+    expect(composer().value).toBe("Second question, again");
+  });
+});
+
+// S209 F4: attachments by paste and by the native picker, the same as a drop.
+describe("attaching by paste and by the picker", () => {
+  const composer = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  const paste = async (data: { files?: File[]; items?: Array<{ kind: string; type: string }>; types?: string[] }) => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { files: data.files ?? [], items: data.items ?? [], types: data.types ?? [] } });
+    await act(async () => { composer().dispatchEvent(event); });
+    await settle();
+    return event;
+  };
+  const picture = (name: string) => ({ files: [new File(["x"], name, { type: "image/png" })], items: [{ kind: "file", type: "image/png" }], types: ["Files"] });
+  it("attaches a copied file by its path, a picture through main, and leaves words alone", async () => {
+    mocks.attachClipboard.mockResolvedValue({ attachments: [{ id: "pasted", name: "Pasted image.png", kind: "image", size: 10 }] });
+    await render(view());
+    await paste(picture("diagram.png"));
+    expect(mocks.attach).toHaveBeenCalledWith(conversation.id, ["/drops/diagram.png"]);
+    expect(mocks.attachClipboard).not.toHaveBeenCalled();
+    // A screenshot: a picture with no file behind it.
+    mocks.pathsForFiles.mockReturnValue([""]);
+    await paste(picture("image.png"));
+    expect(mocks.attachClipboard).toHaveBeenCalledWith(conversation.id);
+    expect(host.textContent).toContain("Pasted image.png");
+    mocks.attach.mockClear();
+    mocks.attachClipboard.mockClear();
+    const words = await paste({ items: [{ kind: "string", type: "text/plain" }], types: ["text/plain"] });
+    expect(words.defaultPrevented).toBe(false);
+    expect(mocks.attach).not.toHaveBeenCalled();
+    expect(mocks.attachClipboard).not.toHaveBeenCalled();
+  });
+  it("attaches what the picker returns, does nothing on cancel, and refuses more than eight", async () => {
+    await render(view());
+    mocks.chooseFiles.mockResolvedValueOnce(null);
+    await click(button("Attach files…"));
+    expect(mocks.attach).not.toHaveBeenCalled();
+    mocks.chooseFiles.mockResolvedValueOnce(["/files/a.md", "/files/b.png"]);
+    await click(button("Attach files…"));
+    expect(mocks.attach).toHaveBeenCalledWith(conversation.id, ["/files/a.md", "/files/b.png"]);
+    mocks.attach.mockClear();
+    mocks.chooseFiles.mockResolvedValueOnce(Array.from({ length: 9 }, (_, index) => `/files/${index}.md`));
+    await click(button("Attach files…"));
+    expect(mocks.attach).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Attach up to 8 files per message");
+  });
+});
+
+// Second review (05.10): Edit left focus on a button that had just gone.
+describe("editing your message", () => {
+  const mine: Message = { id: "mine", conversationId: conversation.id, role: "user", content: "Fix the bug", status: "complete", createdAt: 1 };
+  it("puts the caret at the end of the words, and gives focus back to the message after", async () => {
+    await render(view([mine]));
+    await click(button("Edit"));
+    const area = document.querySelector<HTMLTextAreaElement>('[aria-label="Edit your message"]')!;
+    expect(document.activeElement).toBe(area);
+    expect(area.selectionStart).toBe("Fix the bug".length);
+    await act(async () => { area.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(document.activeElement).toBe(host.querySelector(".message-user"));
+  });
+});
+
+// Second review (05.10): a round trip to main that takes long showed a dead button.
+describe("a slow copy", () => {
+  it("says it is under way after a second, and not before", async () => {
+    const reply: Message = { id: "slow", conversationId: conversation.id, role: "assistant", content: "Answer", status: "complete", createdAt: 1 };
+    mocks.copy.mockReturnValue(new Promise(() => {}));
+    await render(view([reply]));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      await click(button("Copy response"));
+      expect(button("Copy response").querySelector(".spin")).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(button("Copy response").querySelector(".spin")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -692,7 +821,7 @@ describe("settings shared controls", () => {
     const search = menu.querySelector<HTMLInputElement>('input[aria-label=\'search models try "free"\']')!;
     expect(search.placeholder).toBe('search models try "free"');
     await fill(search, "FREE");
-    expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(2);
+    expect(menu.querySelectorAll('[role^="menuitem"]')).toHaveLength(2);
     expect(menu.textContent).not.toContain("aion-labs");
     expect(mocks.settingsSave).not.toHaveBeenCalled();
     await fill(search, "no matching model");
@@ -869,7 +998,11 @@ describe("the extensions a chat can use", () => {
     mocks.extensionsSetActive.mockImplementation(async (_id, resourceId) => [resourceId]);
     await render(picker());
     await click(button("Extensions (2 available, none on)"));
+    // A toggle says whether it is on, not only with its check mark.
+    expect(menuItem("alpha").getAttribute("role")).toBe("menuitemcheckbox");
+    expect(menuItem("alpha").getAttribute("aria-checked")).toBe("false");
     await click(menuItem("alpha"));
+    await vi.waitFor(() => expect(menuItem("alpha").getAttribute("aria-checked")).toBe("true"));
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     await click(menuItem("beta"));
     expect(mocks.extensionsSetActive).toHaveBeenCalledTimes(2);
@@ -928,7 +1061,7 @@ describe("menus and notebook persistence", () => {
       ],
       children: "Model",
     }));
-    const listed = () => [...document.querySelectorAll('[role="menuitem"] .menu-item-copy')].map(node => node.textContent);
+    const listed = () => [...document.querySelectorAll('[role^="menuitem"] .menu-item-copy')].map(node => node.textContent);
     const pill = () => document.querySelector<HTMLButtonElement>(".menu-search-field > .menu-search-pill")!;
     await click(button("Choose model"));
     expect(pill().getAttribute("aria-pressed")).toBe("true");
@@ -1166,6 +1299,10 @@ describe("the model a chat runs on", () => {
     await click(button("Choose model"));
     expect(menuItem("qwen/qwen3-coder:free").querySelector("svg")).not.toBeNull();
     expect(menuItem("test-model").querySelector("svg")).toBeNull();
+    // One choice among several, said to a screen reader too.
+    expect(menuItem("qwen/qwen3-coder:free").getAttribute("role")).toBe("menuitemradio");
+    expect(menuItem("qwen/qwen3-coder:free").getAttribute("aria-checked")).toBe("true");
+    expect(menuItem("test-model").getAttribute("aria-checked")).toBe("false");
     await click(menuItem("second-model"));
     expect(mocks.settingsSave).toHaveBeenCalledWith({ model: "second-model" });
     await vi.waitFor(() => expect(mocks.conversationUpdate).toHaveBeenCalledWith(own.id, { model: { endpointUrl: settings.endpointUrl, id: "second-model" } }));

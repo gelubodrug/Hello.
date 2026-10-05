@@ -6,13 +6,13 @@ import {
   Bot,
   ChevronUp,
   CodeXml,
+  Columns2,
   Globe,
   FolderOpen,
   Maximize2,
   MessageCircle,
   Minimize2,
   Minus,
-  PanelsTopLeft,
   Plus,
   Terminal,
   X,
@@ -143,9 +143,10 @@ export interface WorkspaceProps {
 
 export function Workspace(props: WorkspaceProps) {
   const { conversation, ui, active, compact, onUI } = props;
-  const modeLabel = conversation.chatMode === 'coder' ? 'Coder' : 'Chat';
+  // The chat is "Chat" in either mode; only its icon says which (user, 05.10).
+  const chatLabel = 'Chat';
   const ModeIcon = conversation.chatMode === 'coder' ? CodeXml : MessageCircle;
-  const pageLabels = { chat: modeLabel, notebook: 'Notebook' };
+  const pageLabels = { chat: chatLabel, notebook: 'Notebook' };
   const body = useRef<HTMLDivElement>(null);
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
   const [choosingWorker, setChoosingWorker] = useState(false);
@@ -368,18 +369,17 @@ export function Workspace(props: WorkspaceProps) {
               onClick={() => onUI({ chatOpen: true, minimized: false, expanded: false, toolsExpanded: false, focus: "chat" })}
             >
               <ModeIcon size={15} aria-hidden />
-              Open {modeLabel}
+              Open {chatLabel}
             </button>
           )}
+          {/* The icon alone, its name on hover and to a screen reader (user, 05.10). */}
           {!ui.toolsOpen && (
-            <button
-              type="button"
-              className="pill"
+            <IconButton
+              label="Open tools"
               onClick={() => onUI({ toolsOpen: true, toolsMinimized: false, toolsExpanded: false, expanded: false, focus: "tools" })}
             >
-              <PanelsTopLeft size={15} />
-              Open tools
-            </button>
+              <Columns2 size={16} />
+            </IconButton>
           )}
         </div>
         {ui.toolsOpen && ui.chatOpen && (compactSelection || maximizedPane) && (
@@ -391,7 +391,7 @@ export function Workspace(props: WorkspaceProps) {
                 ? { focus: "chat", expanded: true, toolsExpanded: false, minimized: false }
                 : { focus: "chat" })}
             >
-              {modeLabel}
+              {chatLabel}
             </button>
             <button
               className="pill"
@@ -447,10 +447,10 @@ export function Workspace(props: WorkspaceProps) {
           <section
             className="chat-card"
             data-surface-rim="bottom-right"
-            aria-label={`${modeLabel} panel`}
+            aria-label={`${chatLabel} panel`}
           >
             <header className="panel-header pane-tab-header">
-                <div className="pills" role="tablist" aria-label={`${modeLabel} pages`}>
+                <div className="pills" role="tablist" aria-label={`${chatLabel} pages`}>
                   {pages.map((kind) => (
                     <div
                       className="tab-pill"
@@ -525,11 +525,11 @@ export function Workspace(props: WorkspaceProps) {
                   onClose={() => setPageMenu(null)} />
                 <div className="pane-actions">
                   {controlsHost === 'chat' && header}
-                  <MenuButton label={`Add ${modeLabel.toLowerCase()} tool`} items={toolsMenu}>
+                  <MenuButton label={`Add ${chatLabel.toLowerCase()} tool`} items={toolsMenu}>
                     <Plus size={17} />
                   </MenuButton>
                   <IconButton
-                    label={`${minimized ? 'Restore' : 'Minimize'} ${modeLabel.toLowerCase()}`}
+                    label={`${minimized ? 'Restore' : 'Minimize'} ${chatLabel.toLowerCase()}`}
                     onClick={() => onUI(current => ({
                       minimized: !current.minimized, expanded: current.toolsOpen ? false : current.expanded,
                       focus: !current.minimized && current.toolsOpen ? "tools" : "chat",
@@ -538,14 +538,14 @@ export function Workspace(props: WorkspaceProps) {
                     {minimized ? <ChevronUp size={16} /> : <Minus size={16} />}
                   </IconButton>
                   <IconButton
-                    label={ui.expanded ? `Restore ${modeLabel.toLowerCase()} size` : `Expand ${modeLabel.toLowerCase()}`}
+                    label={ui.expanded ? `Restore ${chatLabel.toLowerCase()} size` : `Expand ${chatLabel.toLowerCase()}`}
                     onClick={() => onUI(current => ({
                       expanded: !current.expanded, toolsExpanded: false, minimized: false, focus: "chat",
                     }))}
                   >
                     {ui.expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </IconButton>
-                  <IconButton label={`Close ${modeLabel.toLowerCase()}`} onClick={() => onUI({ chatOpen: false, minimized: false, expanded: false })}>
+                  <IconButton label={`Close ${chatLabel.toLowerCase()}`} onClick={() => onUI({ chatOpen: false, minimized: false, expanded: false })}>
                     <X size={16} />
                   </IconButton>
                 </div>
@@ -584,6 +584,7 @@ export function Workspace(props: WorkspaceProps) {
                   conversation={conversation}
                   onConversationChange={props.onConversationChange}
                   reportError={props.reportError}
+                  active={active && shownPage === "notebook"}
                 />
               </div>
               {docked.map(session => (

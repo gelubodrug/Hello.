@@ -103,6 +103,19 @@ describe('explicit chat attachment snapshots', () => {
     await expect(files.preview(conversationId, picture.id)).rejects.toThrow();
   });
 
+  // S209: a picture pasted from the clipboard, read by main, kept like a drop.
+  it('keeps a pasted picture as a snapshot like a dropped one, under the same checks', async () => {
+    const pasted = await files.importData(conversationId, [{ name: 'Pasted image 2026-10-05T12:00:00.000Z.png', bytes: png }]);
+    expect(pasted.attachments).toEqual([expect.objectContaining({ kind: 'image', name: 'Pasted image 2026-10-05T12:00:00.000Z.png', size: png.length })]);
+    const context = await files.context(conversationId, [pasted.attachments[0].id]);
+    expect(context.images).toEqual([{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }]);
+    // It has no file of its own, and the model is told so rather than given a path.
+    expect(context.text).toContain('(pasted from the clipboard)');
+    await expect(files.importData(conversationId, [{ name: 'Pasted image.png', bytes: Buffer.from('not a picture') }])).rejects.toThrow('signature');
+    await expect(files.importData(conversationId, [{ name: 'Pasted image.png', bytes: Buffer.alloc(5 * 1024 * 1024 + 1) }])).rejects.toThrow('too large');
+    await expect(files.importData(conversationId, [])).rejects.toThrow('Paste 1–8');
+  });
+
   it('returns only a canonical folder for a single directory and rejects mixed-folder drops', async () => {
     const folder = join(directory, 'project'); mkdirSync(folder);
     const alias = join(directory, 'project-alias'); symlinkSync(folder, alias);
