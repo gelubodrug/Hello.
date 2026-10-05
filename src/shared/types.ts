@@ -82,7 +82,11 @@ export interface ResourceChange { conversationId?: string }
 export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean;
   /** When the chat was last restarted: the model's memory begins here; what came before stays for the person. */
   freshFrom?: number;
+  /** The model this chat runs on, on its connection: the last one used or picked in it (user, 04.10). Absent, the chat runs on the selection in Settings. */
+  model?: ChatModel;
   createdAt: number; updatedAt: number; }
+/** A model on the connection that serves it: the endpoint keys the stored API key. */
+export interface ChatModel { endpointUrl: string; id: string; }
 export interface ChatAttachment { id: string; name: string; kind: 'text' | 'image'; size: number; }
 export interface ChatDropResult { folder?: string; attachments: ChatAttachment[]; }
 export type MessagePart =
@@ -264,7 +268,7 @@ export interface HelloAPI {
   conversations: {
     list(): Promise<Conversation[]>;
     create(title?: string): Promise<Conversation>;
-    update(id: string, patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean }): Promise<Conversation>;
+    update(id: string, patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null }): Promise<Conversation>;
     delete(id: string): Promise<void>;
     /** The model starts fresh from now; messages, tabs, terminals, notes and the folder stay. */
     restart(id: string): Promise<Conversation>;

@@ -795,7 +795,7 @@ export class ChatService {
     if (!Array.isArray(attachmentIds)) throw new Error('Invalid attachments. Drop files into this chat first.');
     if (!text.trim() && !attachmentIds.length) throw new Error('Message cannot be empty.');
     if (text.length > 200_000) throw new Error('Message is too large.');
-    const settings = this.validateSettings();
+    const settings = this.validateSettings(conversationId);
     const conversation = this.store.getConversation(conversationId);
     const generation = this.generations.get(conversationId) ?? 0;
     const userId = randomUUID();
@@ -835,7 +835,7 @@ export class ChatService {
 
   async retry(conversationId: string): Promise<void> {
     this.assertIdle(conversationId);
-    const settings = this.validateSettings();
+    const settings = this.validateSettings(conversationId);
     const messages = this.store.listMessages(conversationId);
     const last = messages[messages.length - 1];
     if (!last) throw new Error('There is no response to retry.');
@@ -962,7 +962,8 @@ export class ChatService {
     this.store.getConversation(conversationId);
     this.compacting.add(conversationId);
     try {
-      const settings = this.store.getSettings();
+      // The chat's own model, or the session it holds would be replaced by one on the selection.
+      const settings = this.chatSettings(conversationId);
       const session = await this.sessionFor({
         conversationId, key: this.store.getApiKey(settings.endpointUrl), controller: new AbortController(),
         // Nothing new is said: the session is the conversation as it stands.
@@ -990,12 +991,27 @@ export class ChatService {
     this.store.getConversation(conversationId);
     if (generation !== (this.generations.get(conversationId) ?? 0)) throw new Error('This message was stopped before sending.');
   }
-  private validateSettings(): AppSettings {
-    const settings = this.store.getSettings();
+  private validateSettings(conversationId: string): AppSettings {
+    const settings = this.chatSettings(conversationId);
     if (!settings.model.trim())
       throw new Error('Choose a model in Settings before sending a message.');
     normalizeEndpoint(settings.endpointUrl);
     return settings;
+  }
+  /**
+   * What a chat runs on: the model last used or picked in it, on that model's
+   * own connection and key (user, 04.10: "remember the last model used in
+   * that chat"). A chat with none yet runs on the selection in Settings. What
+   * was learned about the selection's window is the selection's, and a
+   * subagent model belongs to its connection; the limits are looked up for
+   * the chat's model when its session launches.
+   */
+  private chatSettings(conversationId: string, settings = this.store.getSettings()): AppSettings {
+    const chosen = this.store.getConversation(conversationId).model;
+    if (!chosen || limitsKey(chosen.endpointUrl, chosen.id) === limitsKey(settings.endpointUrl, settings.model)) return settings;
+    const { contextScale: _learned, subagentModel, ...shared } = settings;
+    const sameConnection = normalizeEndpoint(chosen.endpointUrl) === normalizeEndpoint(settings.endpointUrl);
+    return { ...shared, endpointUrl: chosen.endpointUrl, model: chosen.id, ...(sameConnection && subagentModel ? { subagentModel } : {}) };
   }
   private start(
     conversationId: string,
@@ -1016,8 +1032,10 @@ export class ChatService {
       createdAt: Date.now(),
     };
     // Which model writes it, for the reply's footer and the composer's meter:
-    // a retried reply carries on with whatever model is selected now.
+    // a retried reply carries on with the model the chat runs on now.
     if (settings.model) message.model = settings.model;
+    // The model this turn runs on is the one the chat runs on next (user, 04.10).
+    if (settings.model.trim()) this.store.rememberChatModel(conversationId, { endpointUrl: settings.endpointUrl, id: settings.model });
     // Read only the secret for this exact endpoint; never leak an old provider's key.
     const key = this.store.getApiKey(settings.endpointUrl);
     const run: Run = {
@@ -1100,7 +1118,7 @@ export class ChatService {
           // One call's prompt against the window — never the reply's total,
           // which adds the context again for every tool step and would shrink
           // the window after any turn with a few steps.
-          this.calibrateContext(run.contextPeak);
+          this.calibrateContext(run.contextPeak, conversationId);
           // A message held for after this turn is said now — but never into a
           // turn that failed: the person should see what went wrong and decide.
           if (run.message.status !== 'error') this.deliverQueued(conversationId);
@@ -1115,9 +1133,11 @@ export class ChatService {
    * shrinks, and the next session compacts sooner. It is the one measurement in
    * this loop that is not a guess, so it is the one worth acting on.
    */
-  private calibrateContext(reported?: number): void {
+  private calibrateContext(reported: number | undefined, conversationId: string): void {
     if (!reported || !Number.isFinite(reported)) return;
     const settings = this.store.getSettings();
+    // What is learned is the selection's: a chat on a model of its own teaches nothing about it.
+    try { if (this.chatSettings(conversationId, settings) !== settings) return; } catch { return; }
     const published = settings.contextWindow ?? 32768;
     const scale = settings.contextScale ?? 1;
     if (reported < Math.floor(published * scale)) return;
@@ -1404,18 +1424,34 @@ export class ChatService {
     };
   }
 
+  /**
+   * The two numbers a session launches on. The selection's are settled against
+   * the provider and may have moved while this turn was starting, so they are
+   * read again. A chat on a model of its own (user, 04.10) takes that model's
+   * published ones, from the listing the picker read — asked for once if there
+   * is none — and keeps the numbers in Settings when nothing is published.
+   */
+  private async launchLimits(launch: AppSettings): Promise<AppSettings> {
+    const settled = this.store.getSettings();
+    if (limitsKey(launch.endpointUrl, launch.model) === limitsKey(settled.endpointUrl, settled.model))
+      return { ...launch, contextWindow: settled.contextWindow, maxOutputTokens: settled.maxOutputTokens };
+    let published: ModelChoice | undefined;
+    try {
+      const listed = this.listings.get(normalizeEndpoint(launch.endpointUrl))?.listed ?? await this.listed(launch.endpointUrl);
+      published = listed.find(model => model.id === launch.model);
+    } catch {
+      // Unreachable now: the turn itself will say so.
+    }
+    return { ...launch, ...adoptedLimits(published, launch) };
+  }
+
   private async sessionFor(run: SessionRequest, launchSettings: AppSettings): Promise<PiSession> {
     // Take the settled limits before the fingerprint, so a corrected context
     // window legitimately restarts the child rather than reusing one launched
     // on the wrong number. Only those two figures are re-read: an unrelated
     // edit made while this turn was starting is not this turn's contract.
     if (this.settling) await this.settling;
-    const settled = this.store.getSettings();
-    const settings: AppSettings = {
-      ...launchSettings,
-      contextWindow: settled.contextWindow,
-      maxOutputTokens: settled.maxOutputTokens,
-    };
+    const settings = await this.launchLimits(launchSettings);
     run.controller.signal.throwIfAborted();
     const conversation = this.store.getConversation(run.conversationId);
     const resources = await this.resourcesFor(run.conversationId, run.controller.signal);
@@ -1696,8 +1732,8 @@ export class ChatService {
   }
 
   private adoptTurn(conversationId: string, session: PiSession, events: unknown[]): void {
-    try { this.store.getConversation(conversationId); } catch { return; }
-    const settings = this.store.getSettings();
+    let settings: AppSettings;
+    try { settings = this.chatSettings(conversationId); } catch { return; }
     const message: Message = {
       id: randomUUID(), conversationId, role: 'assistant', content: '', parts: [], status: 'streaming', createdAt: Date.now(),
       ...(settings.model ? { model: settings.model } : {}),

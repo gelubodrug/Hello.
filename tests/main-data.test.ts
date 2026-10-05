@@ -382,6 +382,53 @@ describe('the Plan switch of a chat', () => {
   });
 });
 
+// Each chat keeps the model it last used (user, 04.10: "nothing fancy").
+describe('the model a chat runs on', () => {
+  it('is none for a new chat, kept as picked or as a turn ran on it, and cleared on request', () => {
+    const chat = store.createConversation('Mine');
+    expect(chat.model).toBeUndefined();
+    const picked = store.updateConversation(chat.id, { model: { endpointUrl: 'https://one.example/v1/', id: '  one-model ' } });
+    expect(picked.model).toEqual({ endpointUrl: 'https://one.example/v1', id: 'one-model' });
+    expect(store.getConversation(chat.id).model).toEqual({ endpointUrl: 'https://one.example/v1', id: 'one-model' });
+    expect(store.listConversations().find(row => row.id === chat.id)?.model?.id).toBe('one-model');
+    // A title change is not a model change.
+    expect(store.updateConversation(chat.id, { title: 'Still mine' }).model?.id).toBe('one-model');
+
+    // What a turn ran on is kept without moving the chat in the list.
+    const before = store.getConversation(chat.id).updatedAt;
+    store.rememberChatModel(chat.id, { endpointUrl: 'http://127.0.0.1:8000/v1', id: 'local-model' });
+    expect(store.getConversation(chat.id)).toMatchObject({ updatedAt: before, model: { endpointUrl: 'http://127.0.0.1:8000/v1', id: 'local-model' } });
+
+    expect(store.updateConversation(chat.id, { model: null }).model).toBeUndefined();
+    expect(store.getConversation(chat.id).model).toBeUndefined();
+    expect(() => store.updateConversation(chat.id, { model: { endpointUrl: 'not an address', id: 'm' } })).toThrow(/valid HTTP/);
+    expect(() => store.updateConversation(chat.id, { model: { endpointUrl: 'https://one.example/v1', id: '  ' } })).toThrow(/Choose a model/);
+  });
+
+  it('goes with the chat, and with the connection it ran on', () => {
+    store.saveSettings({ endpointUrl: 'https://one.example/v1', model: 'one-model', apiKey: 'key-one' });
+    store.rememberConnection('Provider One');
+    store.saveSettings({ endpointUrl: 'https://two.example/v1', model: 'two-model', apiKey: 'key-two' });
+    const onOne = store.createConversation('On one');
+    const onTwo = store.createConversation('On two');
+    store.updateConversation(onOne.id, { model: { endpointUrl: 'https://one.example/v1', id: 'one-model' } });
+    store.updateConversation(onTwo.id, { model: { endpointUrl: 'https://two.example/v1', id: 'two-model' } });
+
+    // Its key went with the connection: the chat follows the selection again.
+    store.forgetConnection('https://one.example/v1');
+    expect(store.getConversation(onOne.id).model).toBeUndefined();
+    expect(store.getConversation(onTwo.id).model?.id).toBe('two-model');
+
+    store.deleteConversation(onTwo.id);
+    const raw = new Database(store.databasePath, { readonly: true });
+    try {
+      expect(raw.prepare("SELECT COUNT(*) AS count FROM settings WHERE key LIKE 'chat-model:%'").get()).toEqual({ count: 0 });
+    } finally {
+      raw.close();
+    }
+  });
+});
+
 // Runbook and Tasks are switches too, but the other way round: they exist
 // until the human takes one away, so only the departure is stored and every
 // chat that already existed keeps both pages (user, 20.09).

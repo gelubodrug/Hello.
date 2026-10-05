@@ -449,9 +449,22 @@ What the audits asked for and the code lacked, done in Hello's own terms:
   usage: in all, by model and by the costliest chats.
 
 Not done, and why: hover lifts and divider lines (the approved look has
-neither), ⌘W (macOS closes windows with it), a duration *estimate* and a next-turn
-cost (nothing can know them honestly), and a per-folder model (Hello runs one
-connection for every chat; per-chat models are a design decision of their own).
+neither), ⌘W (macOS closes windows with it), and a duration *estimate* and a
+next-turn cost (nothing can know them honestly).
+
+**A model per chat** (user, 04.10: "remember the last model used in that chat
+… nothing fancy"), in place of the audit's per-folder model. A chat keeps
+`{ endpointUrl, id }` in `settings` under `chat-model:<id>`, beside its other
+switches: written when a turn starts (the model it runs on) and when the
+composer's picker is used in it. A pick also stays the selection in Settings,
+which a new chat — or one with no model yet — runs on, and which DSH and the CLI
+workers use. `ChatService.chatSettings` puts the chat's endpoint and model over
+the selection, with the key filed under that endpoint; the selection's learned
+context scale and its subagent model do not carry to another model or
+connection, and `launchLimits` takes the chat's model's published window from
+the listing the picker read. Summarising and a turn Pi starts by itself use the
+same model, so neither replaces the chat's session. Forgetting a connection
+clears the chats on it, and deleting a chat clears its row.
 
 ## Chat awareness: context, attention, search
 

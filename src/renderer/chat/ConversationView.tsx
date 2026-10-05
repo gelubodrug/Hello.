@@ -912,6 +912,15 @@ export function ConversationView({
   // names become the quick filters, and picking a model elsewhere switches to
   // that connection. One that could not answer keeps its place and says why.
   const several = catalog.length > 1;
+  // The model this chat runs on (user, 04.10): the last one used or picked in
+  // it, or the selection in Settings for a chat that has none yet.
+  const chosen = conversation.model ?? { endpointUrl: settings.endpointUrl, id: settings.model };
+  // Its meter reads against that model's window: the one in Settings for the
+  // selection, the published one for a model of the chat's own.
+  const chosenSettings: AppSettings = endpointIdentity(chosen.endpointUrl) === endpointIdentity(settings.endpointUrl) && chosen.id === settings.model
+    ? settings
+    : { ...settings, model: chosen.id, contextWindow: catalog.find(connection => endpointIdentity(connection.endpointUrl) === endpointIdentity(chosen.endpointUrl))
+        ?.models.find(model => model.id === chosen.id)?.contextWindow ?? settings.contextWindow };
   const modelItems: MenuItem[] = catalog.flatMap((connection): MenuItem[] => {
     const name = connection.name || suggestedName(connection.endpointUrl) || connection.endpointUrl;
     const group = several ? name : undefined;
@@ -926,19 +935,24 @@ export function ConversationView({
     // saved an OpenRouter model alone, onto the local server picked a moment
     // before, and every turn after failed with "model not found" (user, 01.10).
     const inUse = endpointIdentity(connection.endpointUrl) === endpointIdentity(settings.endpointUrl);
+    const mine = endpointIdentity(connection.endpointUrl) === endpointIdentity(chosen.endpointUrl);
     return connection.models.map((model) => ({
       id: `${connection.endpointUrl} ${model.id}`,
       label: modelName(model.id),
       detail: [several ? name : '', model.contextWindow ? `${model.contextWindow.toLocaleString('en')} tokens` : '']
         .filter(Boolean).join(' · ') || undefined,
       group,
-      checked: inUse && model.id === settings.model,
+      checked: mine && model.id === chosen.id,
       action: () => {
-        // Only the choice: main reads this model's published limits itself,
-        // so a model reached any other way launches on the same numbers.
+        // This chat's model from its next turn, and the selection a new chat
+        // starts on. Only the choice: main reads this model's published
+        // limits itself, so a model reached any other way launches on the
+        // same numbers.
         void api.settings
           .save(inUse ? { model: model.id } : { endpointUrl: connection.endpointUrl, model: model.id })
           .then(onSettingsChange)
+          .then(() => api.conversations.update(conversation.id, { model: { endpointUrl: connection.endpointUrl, id: model.id } }))
+          .then(onFolderChange)
           .catch(reportError);
       },
     }));
@@ -1207,7 +1221,7 @@ export function ConversationView({
                 items={modelItems}
                 onOpen={() => void loadModels()}
               >
-                <Truncated>{settings.model ? modelName(settings.model) : "Choose model"}</Truncated>
+                <Truncated>{chosen.id ? modelName(chosen.id) : "Choose model"}</Truncated>
                 {modelLoading ? <Loader2 size={13} className="browser-spinner"/> : <ChevronDown size={13} />}
               </MenuButton>
             </div>
@@ -1234,7 +1248,7 @@ export function ConversationView({
           </div>
         </form>
         {extensionUi.below}
-        <ContextMeter messages={messages} settings={settings} conversationId={conversation.id} busy={busy} />
+        <ContextMeter messages={messages} settings={chosenSettings} conversationId={conversation.id} busy={busy} />
       </div>
     </div>
   );

@@ -20,6 +20,7 @@ import type {
   ResourceKind,
   BrowserDownload,
   BrowserTab,
+  ChatModel,
   Conversation,
   Message,
   MessageMatch,
@@ -102,27 +103,38 @@ function title(value: string, fallback: string): string {
   const result = value.trim().slice(0, 250);
   return result || fallback;
 }
+/** A chat's model as it is kept: the endpoint its key is filed under, and the model's id. */
+function chatModel(value: ChatModel): ChatModel {
+  const id = typeof value?.id === 'string' ? value.id.trim().slice(0, 500) : '';
+  if (!id) throw new Error('Choose a model for this chat.');
+  return { endpointUrl: normalizeEndpoint(value.endpointUrl), id };
+}
 /** A chat's switches live in `settings`, keyed by chat: the mode, whether the
- *  model plans, and whether each shared page exists at all. Absent means the
- *  default — chat, no planning, and both pages there. Only the departure from
- *  the default is stored, so every chat that already exists keeps its pages. */
+ *  model plans, whether each shared page exists at all, and the model it runs
+ *  on. Absent means the default — chat, no planning, both pages there, the
+ *  selection in Settings. Only the departure from the default is stored, so
+ *  every chat that already exists keeps its pages. */
 const CONVERSATION_COLUMNS = `SELECT c.*,
     CASE WHEN m.value = 'coder' THEN 'coder' ELSE 'chat' END AS chatMode,
     CASE WHEN p.value = 'on' THEN 1 ELSE 0 END AS planning,
     CASE WHEN r.value = 'off' THEN 0 ELSE 1 END AS runbook,
     CASE WHEN t.value = 'off' THEN 0 ELSE 1 END AS tasks,
-    CAST(f.value AS INTEGER) AS freshFrom
+    CAST(f.value AS INTEGER) AS freshFrom,
+    json_extract(cm.value, '$.endpointUrl') AS modelEndpoint,
+    json_extract(cm.value, '$.id') AS modelId
   FROM conversations c
   LEFT JOIN settings m ON m.key = 'chat-mode:' || c.id
   LEFT JOIN settings p ON p.key = 'chat-plan:' || c.id
   LEFT JOIN settings r ON r.key = 'chat-runbook:' || c.id
   LEFT JOIN settings t ON t.key = 'chat-tasks:' || c.id
-  LEFT JOIN settings f ON f.key = 'chat-fresh:' || c.id`;
-type StoredConversation = Omit<Conversation, 'planning' | 'runbook' | 'tasks' | 'freshFrom'>
-  & { planning: number; runbook: number; tasks: number; freshFrom: number | null };
-const hydrateConversation = ({ freshFrom, ...row }: StoredConversation): Conversation =>
+  LEFT JOIN settings f ON f.key = 'chat-fresh:' || c.id
+  LEFT JOIN settings cm ON cm.key = 'chat-model:' || c.id`;
+type StoredConversation = Omit<Conversation, 'planning' | 'runbook' | 'tasks' | 'freshFrom' | 'model'>
+  & { planning: number; runbook: number; tasks: number; freshFrom: number | null; modelEndpoint: string | null; modelId: string | null };
+const hydrateConversation = ({ freshFrom, modelEndpoint, modelId, ...row }: StoredConversation): Conversation =>
   ({ ...row, planning: row.planning === 1, runbook: row.runbook === 1, tasks: row.tasks === 1,
-    ...(typeof freshFrom === 'number' && freshFrom > 0 ? { freshFrom } : {}) });
+    ...(typeof freshFrom === 'number' && freshFrom > 0 ? { freshFrom } : {}),
+    ...(typeof modelEndpoint === 'string' && typeof modelId === 'string' && modelId ? { model: { endpointUrl: modelEndpoint, id: modelId } } : {}) });
 export const NOTEBOOK_KINDS: readonly NotebookKind[] = ['runbook', 'tasks', 'plan'];
 function validKind(kind: string): asserts kind is NotebookKind {
   if (!(NOTEBOOK_KINDS as readonly string[]).includes(kind))
@@ -509,9 +521,13 @@ export class DataStore {
   }
   updateConversation(
     id: string,
-    patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean },
+    patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null },
   ): Conversation {
     const row = this.getConversation(id);
+    if (patch.model !== undefined) {
+      if (patch.model) row.model = chatModel(patch.model);
+      else delete row.model;
+    }
     if (patch.title !== undefined) row.title = title(patch.title, 'New chat');
     if (patch.folder !== undefined) {
       if (patch.folder !== null && !path.isAbsolute(patch.folder))
@@ -553,10 +569,24 @@ export class DataStore {
       if (patch.planning !== undefined) switchRow(`chat-plan:${id}`, patch.planning, 'on');
       if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, !patch.runbook, 'off');
       if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, !patch.tasks, 'off');
+      if (patch.model !== undefined) this.writeChatModel(id, row.model ?? null);
     })();
     // A section switched off empties its export: a worker's file is not a way around the switch.
     if (patch.planning !== undefined || patch.runbook !== undefined || patch.tasks !== undefined) this.refreshNotebookExports(id);
     return row;
+  }
+  /** The model a turn ran on becomes the one the chat runs on next (user,
+   *  04.10). Not an edit of the chat, so it keeps its place in the list. */
+  rememberChatModel(id: string, model: ChatModel): void {
+    const next = chatModel(model);
+    const current = this.getConversation(id).model;
+    if (current?.endpointUrl !== next.endpointUrl || current.id !== next.id) this.writeChatModel(id, next);
+  }
+  private writeChatModel(id: string, model: ChatModel | null): void {
+    if (model)
+      this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+        .run(`chat-model:${id}`, JSON.stringify(model));
+    else this.db.prepare('DELETE FROM settings WHERE key = ?').run(`chat-model:${id}`);
   }
   /**
    * Messages of every chat that have the words, newest first and at most
@@ -611,8 +641,8 @@ export class DataStore {
   deleteConversation(id: string): void {
     const row = this.getConversation(id);
     this.db.transaction(() => {
-      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?)')
-        .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`);
+      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?)')
+        .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     })();
     // Remove only our known generated exports, never a user repository.
@@ -930,7 +960,11 @@ export class DataStore {
       throw new Error('That connection is no longer saved.');
     return this.writeConnections(
       current.connections.filter(entry => entry.endpointUrl !== wanted).map(strip),
-      () => { this.db.prepare('DELETE FROM secrets WHERE key = ?').run(`apiKey:${wanted}`); },
+      () => {
+        this.db.prepare('DELETE FROM secrets WHERE key = ?').run(`apiKey:${wanted}`);
+        // A chat that ran on it follows the selection again: its key went with it.
+        this.db.prepare("DELETE FROM settings WHERE key LIKE 'chat-model:%' AND json_extract(value, '$.endpointUrl') = ?").run(wanted);
+      },
     );
   }
   private writeConnections(connections: StoredConnection[], also?: () => void): AppSettings {

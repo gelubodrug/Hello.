@@ -66,7 +66,12 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('conversations.create',(title)=>store.createConversation(title===undefined?undefined:str(title,'title',250)));
   handle('conversations.update',(id,value)=>{
     const conversationId=str(id);
-    const patch=record(value);const clean:{title?:string;folder?:string|null;chatMode?:'chat'|'coder';planning?:boolean;runbook?:boolean;tasks?:boolean}={};
+    const patch=record(value);const clean:{title?:string;folder?:string|null;chatMode?:'chat'|'coder';planning?:boolean;runbook?:boolean;tasks?:boolean;model?:{endpointUrl:string;id:string}|null}={};
+    // The model the chat runs on, picked in its composer (user, 04.10); its next turn takes it.
+    if(patch.model!==undefined){
+      if(patch.model===null)clean.model=null;
+      else {const model=record(patch.model);clean.model={endpointUrl:str(model.endpointUrl,'endpoint',2048),id:str(model.id,'model',500)};}
+    }
     if(patch.title!==undefined)clean.title=str(patch.title,'title',250);
     if(patch.folder!==undefined){
       if(patch.folder===null)clean.folder=null;

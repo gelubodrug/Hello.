@@ -1340,3 +1340,57 @@ describe('a call the model keeps making', () => {
     expect(assistant().status).toBe('complete');
   });
 });
+
+// Each chat keeps the model it last used (user, 04.10: "nothing fancy").
+describe('the model a chat runs on', () => {
+  const listing = (...models: Array<{ id: string; context_length?: number }>) =>
+    vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: models }), { headers: { 'content-type': 'application/json' } }));
+
+  it('runs a chat on its own model, on that model’s connection, key and published window', async () => {
+    // A second connection with its own key; the selection goes back to the first.
+    store.saveSettings({ endpointUrl: 'https://other.example/v1', model: 'other-model', apiKey: 'other-key' });
+    store.saveSettings({ endpointUrl: 'https://local-fixture.example/v1', model: 'test-model' });
+    store.updateConversation(conversationId, { model: { endpointUrl: 'https://other.example/v1', id: 'other-model' } });
+    const fetcher = listing({ id: 'other-model', context_length: 65536 });
+    const chat = create({ fetch: fetcher });
+    const send = chat.send(conversationId, 'Hi');
+    const { rpc } = await runtime();
+    expect(rpc.options.args).toEqual(expect.arrayContaining(['--model', 'hello/other-model']));
+    expect(rpc.options.env?.HELLO_PI_API_KEY).toBe('other-key');
+    const models = JSON.parse(readFileSync(path.join(piConversationDir(directory, conversationId), 'agent', 'models.json'), 'utf8'));
+    expect(models.providers.hello.baseUrl).toBe('https://other.example/v1');
+    expect(models.providers.hello.models[0]).toMatchObject({ id: 'other-model', contextWindow: 65536 });
+    // Its limits were asked of its own endpoint, with its own key.
+    expect(fetcher).toHaveBeenCalledWith('https://other.example/v1/models',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer other-key' }) }));
+    settle(rpc, 'Hello.');
+    await send;
+    expect(assistant().model).toBe('other-model');
+    // Summarising keeps the session it has, rather than one on the selection.
+    await chat.compact(conversationId);
+    expect(rpc.request).toHaveBeenCalledWith({ type: 'compact' }, expect.any(Number));
+    expect(harness.instances).toHaveLength(1);
+    // The selection is untouched: a new chat starts on it.
+    expect(store.getSettings()).toMatchObject({ endpointUrl: 'https://local-fixture.example/v1', model: 'test-model' });
+  });
+
+  it('keeps the model a turn ran on, so a selection changed elsewhere leaves the chat where it was', async () => {
+    const chat = create({ fetch: listing({ id: 'test-model' }, { id: 'newer-model' }) });
+    const first = chat.send(conversationId, 'First');
+    const current = await runtime();
+    settle(current.rpc, 'One.');
+    await first;
+    expect(store.getConversation(conversationId).model).toEqual({ endpointUrl: 'https://local-fixture.example/v1', id: 'test-model' });
+
+    // Another chat picks another model: the selection moves, this chat does not.
+    store.saveSettings({ model: 'newer-model' });
+    const second = chat.send(conversationId, 'Second');
+    await vi.waitFor(() => expect(harness.instances.at(-1)?.prompt).toHaveBeenCalledWith('Second'));
+    const latest = harness.instances.at(-1)!;
+    expect(latest.options.args).toEqual(expect.arrayContaining(['--model', 'hello/test-model']));
+    settle(latest, 'Two.');
+    await second;
+    expect(assistant().model).toBe('test-model');
+    expect(store.getConversation(conversationId).model?.id).toBe('test-model');
+  });
+});

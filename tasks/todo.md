@@ -734,8 +734,12 @@ A doua părere (04.10):
 - [x] Costuri și tokeni în Settings › App: total, pe model, cele mai scumpe 5 chaturi.
 - [x] „Save to Runbook” pe un răspuns terminat (titlul din primul heading, sursele păstrate).
 - [x] Regula terminalelor scrisă în `WorkspacePrefs`: un terminal e într-un singur loc.
-- [ ] Nefăcut, de decis: model implicit per folder (Hello are o singură conexiune pentru toate chaturile).
-- [ ] Nevalidat în aplicație: toate cele de mai sus.
+- [x] Model per chat în loc de per folder (utilizator, 04.10: „ultimul model folosit în acel chat… nimic
+      fancy”): chatul ține minte modelul cu care a rulat ultima tură sau pe care l-ai ales în el, pe
+      conexiunea lui și cu cheia ei. Alegerea rămâne și selecția din Settings, pentru chaturile noi, DSH
+      și CLI-uri. Rezumarea și turele pornite de Pi folosesc același model.
+- [ ] Nevalidat în aplicație: toate cele de mai sus; mai ales două chaturi pe modele diferite, unul
+      pornit în timp ce celălalt răspunde.
 
 ## Faza 7 — Pluginuri făcute în Hello și tema Hello publicată · M
 

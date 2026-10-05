@@ -1151,6 +1151,28 @@ describe("the model picker after switching connections", () => {
   });
 });
 
+// Each chat keeps the model it last used (user, 04.10: "nothing fancy").
+describe("the model a chat runs on", () => {
+  it("shows the chat's own model, and a pick is this chat's from its next turn and the selection for a new one", async () => {
+    mocks.catalog.mockResolvedValue([
+      { name: "OpenRouter", endpointUrl: "https://openrouter.ai/api/v1", active: false, models: [{ id: "qwen/qwen3-coder:free", free: true }] },
+      { name: "Local", endpointUrl: settings.endpointUrl, active: true, models: [{ id: "test-model", free: true }, { id: "second-model", free: true }] },
+    ]);
+    const onFolderChange = vi.fn();
+    const own = { ...conversation, model: { endpointUrl: "https://openrouter.ai/api/v1", id: "qwen/qwen3-coder:free" } };
+    await render(createElement(ConversationView, { ...view().props, conversation: own, onFolderChange }));
+    // The chat's model, not the selection in Settings.
+    expect(button("Choose model").textContent).toContain("qwen/qwen3-coder:free");
+    await click(button("Choose model"));
+    expect(menuItem("qwen/qwen3-coder:free").querySelector("svg")).not.toBeNull();
+    expect(menuItem("test-model").querySelector("svg")).toBeNull();
+    await click(menuItem("second-model"));
+    expect(mocks.settingsSave).toHaveBeenCalledWith({ model: "second-model" });
+    await vi.waitFor(() => expect(mocks.conversationUpdate).toHaveBeenCalledWith(own.id, { model: { endpointUrl: settings.endpointUrl, id: "second-model" } }));
+    await vi.waitFor(() => expect(onFolderChange).toHaveBeenCalledWith(expect.objectContaining({ model: { endpointUrl: settings.endpointUrl, id: "second-model" } })));
+  });
+});
+
 // Free first (user, 01.10): the picker opens on the models that cost nothing —
 // the person's own servers and those priced at zero — and the rest come back
 // with the pill switched off.
