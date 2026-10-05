@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -82,6 +83,7 @@ export function IconButton({
   className?: string;
   "aria-expanded"?: boolean;
   "aria-pressed"?: boolean;
+  onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <button
@@ -604,6 +606,8 @@ export function Dialog({
   wide = false,
   className = "",
   dismissOnBackdrop = false,
+  initialFocus,
+  returnFocus = true,
 }: {
   open: boolean;
   title: string;
@@ -613,17 +617,24 @@ export function Dialog({
   className?: string;
   /** A viewer, not a form: nothing typed is lost by a click beside it. */
   dismissOnBackdrop?: boolean;
+  /** What takes focus on opening, in place of the first control (the Close button). */
+  initialFocus?: RefObject<HTMLElement>;
+  /** False when what the dialog chose takes focus itself, so closing does not
+   *  hand it back to where it was; read as the dialog closes. */
+  returnFocus?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const present = usePresence(open, ref);
   const titleId = useId();
+  const giveBack = useRef(returnFocus);
+  giveBack.current = returnFocus;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const release = holdAppInert();
-    focusables(ref.current)[0]?.focus();
+    (initialFocus?.current ?? focusables(ref.current)[0])?.focus();
     // The app takes focus again before it is given back.
-    return () => { release(); previous?.focus(); };
+    return () => { release(); if (giveBack.current) previous?.focus(); };
   }, [open, present]);
   return present
     ? createPortal(

@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -34,10 +35,14 @@ import type {
   TerminalSession,
   WorkerId,
 } from "../shared/types";
-import type { MarketKind, MenuAction, MessageMatch, QueuedMessage } from "../shared/types";
+import type { MarketKind, MenuAction, MessageMatch, PendingInput, PendingRequest, QueuedMessage } from "../shared/types";
 import type { FindJump } from "./chat/ChatFind";
 import { api } from './api';
-import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, strongest, type AttentionKind, type Seen } from "./attention";
+import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, requestKind, requestNotice, strongest, type AttentionKind, type Seen } from "./attention";
+import { AttentionDialog } from "./ui/AttentionDialog";
+import { CommandPalette } from "./ui/CommandPalette";
+import type { GoToItem } from "./go-to";
+import { REVEAL_REQUEST } from "./chat/ExtensionPanel";
 import { chatForMenu } from "./menu-chats";
 import {
   Dialog,
@@ -66,7 +71,7 @@ import {
   type WorkspacePrefs,
   type WorkspaceUpdate,
 } from "./workspace/Workspace";
-import { hasExpandedPane, navigationShown } from "./workspace/navigation";
+import { hasExpandedPane, navigationShown, transcriptShown } from "./workspace/navigation";
 import { filesTabId } from '../shared/files';
 
 interface ShellState {
@@ -216,15 +221,31 @@ function Application() {
   // What each chat is waiting for from the person, until they look at it: an
   // approval, a worker's question, a reply that failed or is ready.
   const [attention, setAttention] = useState<Record<string, AttentionKind>>({});
+  // What chats wait for the person to answer (audit A1): main's open requests,
+  // apart from the news above — looking at a chat answers none of them.
+  const [pending, setPending] = useState<PendingRequest[]>([]);
+  const pendingRevision = useRef(-1);
+  const notifiedRequests = useRef(new Set<string>());
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [goToOpen, setGoToOpen] = useState(false);
+  const pendingLive = typeof api.chat.pendingInput === "function";
+  // Light or Dark sets data-theme on the root, which the tokens answer; System
+  // leaves the choice to macOS through prefers-color-scheme (audit B2).
+  const appearance = boot?.settings.appearance ?? "system";
+  useEffect(() => {
+    const root = document.documentElement;
+    if (appearance === "system") delete root.dataset.theme;
+    else root.dataset.theme = appearance;
+  }, [appearance]);
   // The sidebar search reads what was said, not only titles: the first match per chat.
   const [hits, setHits] = useState<Record<string, MessageMatch>>({});
   const [jump, setJump] = useState<FindJump | null>(null);
   const [windowFocused, setWindowFocused] = useState(true);
   const seenReplies = useRef(new Map<string, Seen>());
   const queues = useRef(new Map<string, QueuedMessage[]>());
-  const viewing = useRef<{ id: string | null; focused: boolean }>({ id: null, focused: true });
   const titles = useRef(new Map<string, string>());
   const raise = useRef<(conversationId: string, kind: AttentionKind, message: Message | null, question?: string) => void>(() => {});
+  const sees = useRef<(conversationId: string) => boolean>(() => false);
   const controllerRef =
     useRef<ReturnType<typeof createPreviewLayoutMotion<ShellState>>>();
   if (!controllerRef.current)
@@ -571,12 +592,16 @@ function Application() {
     setDshOpen(false);
     request((current) => ({ ...current, activeId: id }));
   };
-  // Who is looking at what, for the moment something becomes news.
-  viewing.current = { id: shell.activeId ?? null, focused: windowFocused };
   titles.current = new Map((boot?.conversations ?? []).map((row) => [row.id, row.title]));
+  /** Whether the person sees this chat's transcript now: the window focused,
+   *  no DSH surface over it, and its workspace showing the Chat page (A1). */
+  const seesTranscript = (id: string) => windowFocused && !dshOpen && shell.activeId === id &&
+    transcriptShown({ ...defaultWorkspacePrefs(), ...shell.workspaces[id] }, compact);
+  sees.current = seesTranscript;
   raise.current = (conversationId, kind, message, question) => {
-    const now = viewing.current;
-    if (now.focused && now.id === conversationId) return;
+    if (sees.current(conversationId)) return;
+    // A tool's approval is an open request, told by main with the others.
+    if (kind === "approval" && pendingLive) return;
     setAttention((current) => ({ ...current, [conversationId]: strongest(current[conversationId], kind)! }));
     void api.system
       .notify?.({ title: titles.current.get(conversationId) ?? "Hello.", body: attentionNotice(kind, message, question), conversationId })
@@ -613,20 +638,85 @@ function Application() {
     if (hit) setJump({ conversationId: id, messageId: hit.messageId, query: search.trim(), nonce: Date.now() });
   };
   // Looking at a chat is having seen what it was waiting with.
+  const activeLayout = shell.workspaces[shell.activeId ?? ""];
   useEffect(() => {
     const id = shell.activeId;
-    if (!id || !windowFocused) return;
+    if (!id || !seesTranscript(id)) return;
     setAttention((current) => {
       if (!(id in current)) return current;
       const next = { ...current };
       delete next[id];
       return next;
     });
-  }, [shell.activeId, windowFocused]);
+  }, [shell.activeId, windowFocused, dshOpen, compact, activeLayout]);
+  // The open requests, from main: subscribed before the snapshot, a later
+  // revision always winning, so an answer that arrives late brings nothing back.
+  useEffect(() => {
+    const apply = (state: PendingInput) => {
+      if (state.revision <= pendingRevision.current) return;
+      // What was already open when the window started is not news to notify.
+      if (pendingRevision.current < 0) for (const request of state.requests) notifiedRequests.current.add(request.requestId);
+      pendingRevision.current = state.revision;
+      setPending(state.requests);
+    };
+    const stop = api.chat.onPendingInput?.(apply);
+    void api.chat.pendingInput?.().then(apply).catch(() => {});
+    return () => stop?.();
+  }, []);
+  // Each request is notified once, unless its transcript is in front of the person.
+  useEffect(() => {
+    const open = new Set(pending.map(request => request.requestId));
+    for (const request of pending) {
+      if (notifiedRequests.current.has(request.requestId)) continue;
+      notifiedRequests.current.add(request.requestId);
+      if (sees.current(request.conversationId)) continue;
+      void api.system.notify?.({ title: titles.current.get(request.conversationId) ?? "Hello.", body: requestNotice(request), conversationId: request.conversationId })
+        .catch(() => {});
+    }
+    for (const id of notifiedRequests.current) if (!open.has(id)) notifiedRequests.current.delete(id);
+  }, [pending]);
+  const requestKinds = useMemo(() => {
+    const kinds = new Map<string, AttentionKind>();
+    for (const request of pending) kinds.set(request.conversationId, strongest(kinds.get(request.conversationId), requestKind(request))!);
+    return kinds;
+  }, [pending]);
+  // Chats waiting for the person: an open request, or news not yet seen — once each.
+  const waitingChats = useMemo(() => new Set([...Object.keys(attention), ...requestKinds.keys()]), [attention, requestKinds]);
   // The Dock says how many chats are waiting.
   useEffect(() => {
-    void api.system.badge?.(Object.keys(attention).length).catch(() => {});
-  }, [attention]);
+    void api.system.badge?.(waitingChats.size).catch(() => {});
+  }, [waitingChats]);
+  /** A chat's own page in front (A1, A2): its chat, out of the DSH surface, the
+   *  chat pane open and unminimized, its Chat or Notebook shown. */
+  const showPage = (id: string, page: "chat" | "notebook") => {
+    select(id);
+    updateUI(id, { chatOpen: true, minimized: false, toolsExpanded: false, chatTab: page, chatTerminal: null, focus: "chat" });
+  };
+  /** An open tab, where it lives: in the chat pane when it was set as a chat
+   *  tab, in Tools otherwise. Showing it never creates or relaunches it. */
+  const showTool = (tool: BrowserTab | TerminalSession) => {
+    select(tool.conversationId);
+    const docked = (shell.workspaces[tool.conversationId]?.chatTerminals ?? []).some(tab => tab.id === tool.id);
+    updateUI(tool.conversationId, docked
+      ? { chatOpen: true, minimized: false, toolsExpanded: false, chatTerminal: tool.id, focus: "chat" }
+      : { toolsOpen: true, toolsMinimized: false, expanded: false, toolId: tool.id, focus: "tools" });
+  };
+  /**
+   * To where a request is answered (A1): its chat's Chat page, then the
+   * control itself.
+   */
+  const openRequest = (request: PendingRequest) => {
+    setAttentionOpen(false);
+    showPage(request.conversationId, "chat");
+    window.dispatchEvent(new CustomEvent(REVEAL_REQUEST, { detail: request.requestId }));
+    let tries = 0;
+    const reveal = () => {
+      const target = document.querySelector<HTMLElement>(`[data-request-id="${CSS.escape(request.requestId)}"]`);
+      if (target) { target.scrollIntoView({ block: "center" }); target.focus({ preventScroll: true }); return; }
+      if (++tries < 60) requestAnimationFrame(reveal);
+    };
+    requestAnimationFrame(reveal);
+  };
   // A notification clicked brings its chat forward.
   const selectRef = useRef(select);
   selectRef.current = select;
@@ -666,13 +756,64 @@ function Application() {
   menuRef.current = (action) => {
     if (action === 'new-chat') { void newChat(); return; }
     if (action === 'toggle-sidebar') { toggleSidebarPin(); return; }
+    if (action === 'go-to') { setGoToOpen(true); return; }
     // ⌘J looks through every chat; the others go by the list as it is shown.
     const order = (action === 'attention-chat' ? boot?.conversations ?? [] : listed).map(row => row.id);
-    const target = chatForMenu(action, order, shell.activeId ?? null, new Set(Object.keys(attention)));
+    const target = chatForMenu(action, order, shell.activeId ?? null, waitingChats);
     if (target) select(target);
     else if (action === 'attention-chat') setNotice('No chat is waiting.');
   };
   useEffect(() => api.system.onMenu?.((action) => menuRef.current(action)) ?? (() => {}), []);
+  /**
+   * What "Go to…" offers (audit A2): commands, every chat, every open tab with
+   * its chat and kind beside it, and — searched as one types — messages.
+   */
+  const goToItems = (): GoToItem[] => {
+    if (!boot) return [];
+    const active = boot.conversations.find(row => row.id === shell.activeId);
+    const titleOf = (id: string) => titles.current.get(id) ?? "Chat";
+    const command = (id: string, label: string, run: () => void, detail?: string): GoToItem =>
+      ({ id: `command:${id}`, group: "Commands", label, run, ...(detail ? { detail } : {}) });
+    return [
+      command("new-chat", "New chat", () => void newChat()),
+      ...(active ? [
+        command("show-chat", "Show Chat", () => showPage(active.id, "chat"), active.title),
+        command("show-notebook", "Show Notebook", () => showPage(active.id, "notebook"), active.title),
+        command("open-files", "Open Files", () => {
+          select(active.id);
+          updateUI(active.id, { filesOpen: true, toolsOpen: true, toolsMinimized: false, expanded: false, toolId: filesTabId(active.id), focus: "tools" });
+        }, active.title),
+        command("new-browser", "New browser tab", () => void launch(active, "browser"), active.title),
+        command("new-terminal", "New terminal", () => void launch(active, "terminal"), active.title),
+      ] : []),
+      command("settings", "Settings", () => setSettingsOpen(true)),
+      ...(api.market ? [command("dsh-market", "DSH market", () => setMarket({ open: "dsh" }))] : []),
+      ...((api as Partial<typeof api>).piMarket ? [command("pi-market", "Pi market", () => setMarket({ open: "pi" }))] : []),
+      command("dsh", "Show DSH", () => setDshOpen(true)),
+      command("attention", "Needs your attention", () => setAttentionOpen(true), pending.length ? `${pending.length} waiting` : "Nothing waiting"),
+      ...boot.conversations.map((row): GoToItem => ({
+        id: `chat:${row.id}`, group: "Chats", label: row.title, recent: row.updatedAt, run: () => showPage(row.id, "chat"),
+        ...(row.folder ? { detail: row.folder.split("/").filter(Boolean).at(-1) } : {}),
+      })),
+      ...[...boot.browsers, ...boot.terminals].map((tool): GoToItem => ({
+        id: `tab:${tool.id}`, group: "Open tabs", label: tool.title || ("url" in tool ? tool.url : "Terminal"),
+        detail: `${titleOf(tool.conversationId)} · ${"url" in tool ? "Browser" : tool.kind === "worker" ? "CLI" : "Terminal"}`,
+        run: () => showTool(tool),
+      })),
+    ];
+  };
+  /** Messages with the words, each opening its chat's transcript on it. */
+  const searchGoTo = async (query: string): Promise<GoToItem[]> => {
+    if (typeof api.conversations.search !== "function") return [];
+    return (await api.conversations.search(query)).map((match): GoToItem => ({
+      id: `message:${match.messageId}`, group: "Matching messages", label: match.snippet, recent: match.createdAt,
+      detail: `${titles.current.get(match.conversationId) ?? "Chat"} · ${match.role === "user" ? "you" : "reply"}`,
+      run: () => {
+        showPage(match.conversationId, "chat");
+        setJump({ conversationId: match.conversationId, messageId: match.messageId, query, nonce: Date.now() });
+      },
+    }));
+  };
   const launch = async (
     conversation: Conversation,
     kind: "browser" | "terminal",
@@ -924,6 +1065,14 @@ function Application() {
               )}
             </div>
           )}
+          {pending.length > 0 && (
+            <button type="button" className="sidebar-attention" onClick={() => setAttentionOpen(true)}
+              aria-label={`Needs your attention: ${pending.length} ${pending.length === 1 ? "request" : "requests"}`}>
+              <span className="status-dot attention-dot" data-kind={[...requestKinds.values()].reduce<AttentionKind | undefined>((kind, next) => strongest(kind, next), undefined)} aria-hidden />
+              <span className="truncate">Needs your attention</span>
+              <span className="sidebar-attention-count" aria-hidden>{pending.length}</span>
+            </button>
+          )}
           <span className="sidebar-section-label">Chats</span>
           <nav className="chat-list" aria-label="Conversations">
             {listed
@@ -950,7 +1099,11 @@ function Application() {
                         </span>
                       )}
                     </span>
-                    {messages[conversation.id]?.some(
+                    {/* An open request shows even while the reply that asked it runs. */}
+                    {requestKinds.get(conversation.id) ? (
+                      <span className="status-dot attention-dot" role="img" data-kind={requestKinds.get(conversation.id)}
+                        aria-label={attentionLabel[requestKinds.get(conversation.id)!]} title={attentionLabel[requestKinds.get(conversation.id)!]} />
+                    ) : messages[conversation.id]?.some(
                       (message) => message.status === "streaming",
                     ) ? <span className="status-dot busy-dot" role="img" aria-label="Working" />
                       : attention[conversation.id] && (
@@ -1157,6 +1310,10 @@ function Application() {
         ))}
       </main>
       <KeyboardShortcuts />
+      <AttentionDialog open={attentionOpen} requests={pending} titles={titles.current}
+        onOpenRequest={openRequest} onClose={() => setAttentionOpen(false)} />
+      <CommandPalette open={goToOpen} items={goToOpen ? goToItems() : []} searchMessages={searchGoTo}
+        onClose={() => setGoToOpen(false)} />
       <Dialog
         open={noticeOpen && !!appMessage}
         title={error ? "Something needs attention" : "Workspace notification"}

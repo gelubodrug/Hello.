@@ -61,6 +61,9 @@ function RunRows({ runs, depth }: { runs: SubagentRun[]; depth: number }) {
 
 const empty = (conversationId: string): ExtensionUiState => ({ conversationId, widgets: [], statuses: [], notices: [], dialogs: [] });
 
+/** Asks for a waiting request's control by its id: a plugin's question comes to the front. */
+export const REVEAL_REQUEST = 'hello:reveal-request';
+
 export function useExtensionUi({ conversationId, onEditorText, onError }: {
   conversationId: string;
   /** Text a plugin put in the composer. */
@@ -70,6 +73,16 @@ export function useExtensionUi({ conversationId, onEditorText, onError }: {
   const chat = (api as Partial<typeof api>).chat;
   const [state, setState] = useState<ExtensionUiState>(() => empty(conversationId));
   const [now, setNow] = useState(() => Date.now());
+  // The question an attention row asked for comes to the front (audit A1).
+  const [front, setFront] = useState<string | null>(null);
+  useEffect(() => {
+    const reveal = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (typeof id === 'string') setFront(id);
+    };
+    window.addEventListener(REVEAL_REQUEST, reveal);
+    return () => window.removeEventListener(REVEAL_REQUEST, reveal);
+  }, []);
   useEffect(() => {
     setState(empty(conversationId));
     let alive = true;
@@ -101,7 +114,7 @@ export function useExtensionUi({ conversationId, onEditorText, onError }: {
     )];
     return [<pre key={widget.key} className="extension-widget" aria-label={`Shown by a plugin: ${widget.key}`}>{read.lines.join('\n')}</pre>];
   });
-  const dialog = state.dialogs[0];
+  const dialog = state.dialogs.find(item => item.id === front) ?? state.dialogs[0];
   const aboveWidgets = widgets('aboveEditor');
   const hasAbove = aboveWidgets.length || state.statuses.length || fresh.length || dialog;
   const above = hasAbove ? (
@@ -126,7 +139,7 @@ function ExtensionQuestion({ dialog, waiting, onAnswer }: { dialog: ExtensionDia
   const [value, setValue] = useState(dialog.prefill ?? '');
   const cancel = <button type="button" className="text-button" onClick={() => onAnswer({ cancelled: true })}>Dismiss</button>;
   return (
-    <section className="extension-question" role="group" aria-label={`A plugin asks: ${dialog.title}`}>
+    <section className="extension-question" role="group" aria-label={`A plugin asks: ${dialog.title}`} data-request-id={dialog.id} tabIndex={-1}>
       <header>
         <span className="extension-question-from">A plugin asks</span>
         {waiting > 0 && <span className="extension-question-more">{waiting} more waiting</span>}

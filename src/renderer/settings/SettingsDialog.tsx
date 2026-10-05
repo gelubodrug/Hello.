@@ -281,7 +281,9 @@ export function SettingsDialog({
       {section === 'extensions' ? (
         <ExtensionsSection />
       ) : section === 'app' ? (
-        <AppAuditSection dataPath={dataPath} version={version} endpointUrl={settings.endpointUrl} extensionsLoaded={extensionsCount} />
+        <AppAuditSection dataPath={dataPath} version={version} endpointUrl={settings.endpointUrl} extensionsLoaded={extensionsCount}
+          appearance={settings.appearance ?? 'system'}
+          onAppearance={appearance => void api.settings.save({ appearance }).then(onSaved).catch(reason => setError(errorText(reason)))} />
       ) : section === 'advanced' ? (
       <div className="settings-form">
         <div className="settings-numbers">

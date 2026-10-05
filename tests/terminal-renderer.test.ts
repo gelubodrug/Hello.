@@ -122,6 +122,8 @@ describe("terminal key routing", () => {
     expect(terminalKeyVerdict(key({ key: "9", metaKey: true }), false)).toBe("app");
     expect(terminalKeyVerdict(key({ key: "}", metaKey: true, shiftKey: true }), false)).toBe("app");
     expect(terminalKeyVerdict(key({ key: "[", metaKey: true, shiftKey: true }), false)).toBe("app");
+    // ⌘⇧P, "Go to…" (audit A2).
+    expect(terminalKeyVerdict(key({ key: "P", metaKey: true, shiftKey: true }), false)).toBe("app");
     // Ctrl+1 and ⌘0 stay the shell's; ⌘] without Shift is not a menu key.
     expect(terminalKeyVerdict(key({ key: "1", ctrlKey: true }), false)).toBe("terminal");
     expect(terminalKeyVerdict(key({ key: "0", metaKey: true }), false)).toBe("terminal");

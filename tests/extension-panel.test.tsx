@@ -17,7 +17,7 @@ vi.mock('../src/renderer/api', () => ({
   },
 }));
 
-import { useExtensionUi } from '../src/renderer/chat/ExtensionPanel';
+import { REVEAL_REQUEST, useExtensionUi } from '../src/renderer/chat/ExtensionPanel';
 
 let host: HTMLDivElement;
 let root: Root;
@@ -107,5 +107,22 @@ describe('what a chat’s plugins show beside the composer', () => {
     await push(blank({ editorText: { text: 'suggested prompt', at: 1 } }));
     await push(blank({ editorText: { text: 'suggested prompt', at: 1 } }));
     expect(texts).toEqual(['suggested prompt']);
+  });
+});
+
+// Audit A1: "Open request" on the second question brings it to the front.
+describe('a question asked for from the attention list', () => {
+  it('comes to the front, ready to be focused where it is answered', async () => {
+    await push(blank({ dialogs: [
+      { id: 'ask-1', method: 'confirm', title: 'First?' },
+      { id: 'ask-2', method: 'input', title: 'Second?' },
+    ] }));
+    expect(host.querySelector('[data-request-id]')?.getAttribute('data-request-id')).toBe('ask-1');
+    await act(async () => { window.dispatchEvent(new CustomEvent(REVEAL_REQUEST, { detail: 'ask-2' })); });
+    const shown = host.querySelector<HTMLElement>('[data-request-id]')!;
+    expect(shown.getAttribute('data-request-id')).toBe('ask-2');
+    expect(shown.tabIndex).toBe(-1);
+    expect(host.textContent).toContain('Second?');
+    expect(host.textContent).toContain('1 more waiting');
   });
 });

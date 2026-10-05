@@ -1,17 +1,26 @@
-import { Anchor, Copy, FolderOpen, HardDrive, Info, Plug, Server, CheckCircle, AlertCircle, Coins } from 'lucide-react';
-import type { UsageSummary } from '../../shared/types';
+import { Anchor, Copy, FolderOpen, HardDrive, Info, Plug, Server, CheckCircle, AlertCircle, Coins, ChevronDown, SunMoon } from 'lucide-react';
+import type { AppSettings, UsageSummary } from '../../shared/types';
 import { api } from '../api';
-import { IconButton } from '../ui/primitives';
+import { IconButton, MenuButton } from '../ui/primitives';
 import { useEffect, useState } from 'react';
 import { dollars, tokens } from '../chat/ContextMeter';
 import { modelName } from './presets';
 
+type Appearance = NonNullable<AppSettings['appearance']>;
 interface Props {
   dataPath: string;
   version: string;
   endpointUrl: string;
   extensionsLoaded: number;
+  /** Light, Dark or as macOS is (audit B2): applied the moment it is chosen. */
+  appearance?: Appearance;
+  onAppearance?: (appearance: Appearance) => void;
 }
+const APPEARANCES: Array<{ value: Appearance; label: string }> = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
 
 /**
  * What every reply has cost and moved, by model and by chat (user, 04.10, the
@@ -53,7 +62,7 @@ function UsageCard({ usage }: { usage: UsageSummary }) {
   );
 }
 
-export function AppAuditSection({ dataPath, version, endpointUrl, extensionsLoaded }: Props) {
+export function AppAuditSection({ dataPath, version, endpointUrl, extensionsLoaded, appearance = 'system', onAppearance }: Props) {
   const [copyOk, setCopyOk] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   useEffect(() => {
@@ -79,6 +88,19 @@ export function AppAuditSection({ dataPath, version, endpointUrl, extensionsLoad
       </p>
 
       <div className="audit-grid">
+        {onAppearance && (
+          <div className="audit-card">
+            <div className="audit-card-head">
+              <SunMoon size={16} aria-hidden />
+              <span>Appearance</span>
+            </div>
+            <MenuButton label="Appearance" className="settings-select" align="start"
+              items={APPEARANCES.map(option => ({ id: option.value, label: option.label, checked: appearance === option.value, action: () => onAppearance(option.value) }))}>
+              <span>{APPEARANCES.find(option => option.value === appearance)?.label}</span>
+              <ChevronDown size={14} />
+            </MenuButton>
+          </div>
+        )}
         <div className="audit-card">
           <div className="audit-card-head">
             <HardDrive size={16} aria-hidden />

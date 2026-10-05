@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions } from '../src/main/chat/pi-rpc';
 import type { PiToolBridgeOptions } from '../src/main/chat/pi-tool-bridge';
-import type { ChatEvent, ExtensionUiState } from '../src/shared/types';
+import type { ChatEvent, ExtensionUiState, PendingInput } from '../src/shared/types';
 
 // Never a real Pi child: a fake that emits what Pi emits. This suite checks a
 // turn Pi begins on its own — a plugin woke it (user, 29.09) — after a reply.
@@ -73,6 +73,7 @@ let service: ChatService;
 let conversationId: string;
 const events: ChatEvent[] = [];
 const shown: ExtensionUiState[] = [];
+const told: PendingInput[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -85,9 +86,11 @@ beforeEach(() => {
   store = createDataStore(directory, { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() });
   store.saveSettings({ model: 'test-model', endpointUrl: 'https://local-fixture.example/v1' });
   conversationId = store.createConversation().id;
-  service = new ChatService({ store, emit: event => events.push(structuredClone(event)), emitExtensionUi: state => shown.push(structuredClone(state)) });
+  service = new ChatService({ store, emit: event => events.push(structuredClone(event)), emitExtensionUi: state => shown.push(structuredClone(state)),
+    emitPending: state => told.push(structuredClone(state)) });
   events.length = 0;
   shown.length = 0;
+  told.length = 0;
 });
 afterEach(async () => {
   await service.dispose();
@@ -209,6 +212,24 @@ describe('what a chat’s plugins show, while Pi runs headless', () => {
     expect(pi.respondToExtension).toHaveBeenLastCalledWith({ id: 'ask-2', confirmed: false });
     expect(service.extensionUiState(conversationId).dialogs).toEqual([]);
     await expect(service.answerExtension(conversationId, 'ask-1', { value: 'Allow' })).rejects.toThrow(/no longer waiting/);
+  });
+
+  // Audit A1: a plugin's question is a request waiting for the person, told by main.
+  it('tells the window a plugin’s question waits, until it is answered or its Pi goes', async () => {
+    const pi = await reply('go');
+    pi.emit({ type: 'extension_ui_request', id: 'ask-p', method: 'confirm', title: 'Clear session?' } as unknown as PiRpcEvent);
+    await vi.waitFor(() => expect(told.at(-1)?.requests).toMatchObject([
+      { requestId: 'ask-p', conversationId, kind: 'question', label: 'Clear session?', target: { dialogId: 'ask-p' } },
+    ]));
+    expect(service.pendingInput().requests).toEqual(told.at(-1)!.requests);
+    await service.answerExtension(conversationId, 'ask-p', { confirmed: true });
+    await vi.waitFor(() => expect(told.at(-1)?.requests).toEqual([]));
+    pi.emit({ type: 'extension_ui_request', id: 'ask-q', method: 'input', title: 'Name?' } as unknown as PiRpcEvent);
+    await vi.waitFor(() => expect(told.at(-1)?.requests).toHaveLength(1));
+    await pi.dispose();
+    await vi.waitFor(() => expect(told.at(-1)?.requests).toEqual([]));
+    // Each telling is one revision newer than the last.
+    expect(told.map(state => state.revision)).toEqual(told.map((_, index) => told[0].revision + index));
   });
 
   it('lets a question with a timeout go when Pi answers it by itself', async () => {

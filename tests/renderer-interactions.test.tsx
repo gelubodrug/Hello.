@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   attach: vi.fn(),
   attachClipboard: vi.fn(),
   chooseFiles: vi.fn(),
+  filesList: vi.fn(),
+  resolvePaths: vi.fn(),
+  skillsList: vi.fn(),
   pathsForFiles: vi.fn(),
   conversationUpdate: vi.fn(),
   stop: vi.fn(),
@@ -81,6 +84,8 @@ vi.mock("../src/renderer/api", () => ({
     },
     system: { pathsForFiles: mocks.pathsForFiles, chooseFiles: mocks.chooseFiles, openExternal: vi.fn().mockResolvedValue(undefined), copy: mocks.copy },
     conversations: { update: mocks.conversationUpdate },
+    files: { list: mocks.filesList, resolvePaths: mocks.resolvePaths },
+    skills: { list: mocks.skillsList, search: vi.fn(), use: vi.fn() },
     extensions: {
       list: mocks.extensionsList,
       active: mocks.extensionsActive,
@@ -221,6 +226,14 @@ beforeEach(() => {
   mocks.attach.mockResolvedValue({ attachments: [{ id: 'image-id', name: 'diagram.png', kind: 'image', size: 100 }] });
   mocks.pathsForFiles.mockReturnValue(['/drops/diagram.png']);
   mocks.conversationUpdate.mockImplementation(async (id, patch) => ({ ...conversation, id, ...patch }));
+  mocks.filesList.mockResolvedValue({ root: "/repo", entries: [
+    { path: "README.md", name: "README.md", kind: "file" },
+    { path: "docs", name: "docs", kind: "directory" },
+    { path: "docs/read-me-later.md", name: "read-me-later.md", kind: "file" },
+  ], limited: false, skipped: 0 });
+  mocks.resolvePaths.mockImplementation(async (_id: string, paths: string[]) => paths.map(path => `/repo/${path}`));
+  mocks.skillsList.mockResolvedValue([]);
+  mocks.extensionsActive.mockResolvedValue([]);
   mocks.stop.mockResolvedValue(undefined);
   mocks.approve.mockResolvedValue(undefined);
   mocks.models.mockResolvedValue([{ id: "test-model" }, { id: "second-model" }]);
@@ -551,6 +564,10 @@ describe("compact activity timeline", () => {
     await show(needsAttention);
     expect(reveal().dataset.open).toBe('true');
     expect(button("Allow once").disabled).toBe(false);
+    // Audit A1: the attention list's "Open request" lands on this control by its id.
+    const answer = host.querySelector<HTMLElement>('[data-request-id="approval-1"]')!;
+    expect(answer.tabIndex).toBe(-1);
+    expect(answer.contains(button("Allow once"))).toBe(true);
     await click(summary());
     await show({ ...needsAttention, content: "Updated answer" });
     expect(reveal().dataset.open).toBe('false');
@@ -727,6 +744,54 @@ describe("the composer's history", () => {
   });
 });
 
+// Audit A3: @name in the composer attaches a file of the chat's folder.
+describe("mentioning a file", () => {
+  const composer = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  const press = async (key: string) => {
+    await act(async () => { composer().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    await settle();
+  };
+  it("lists the folder's files for the words after @, attaches the chosen one and takes the token out", async () => {
+    await render(createElement(ConversationView, { ...view().props, conversation: { ...conversation, folder: "/repo" } }));
+    await fill(composer(), "see @rea");
+    // Past the pause after typing, inside act: the answer lands as a render.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    expect(document.querySelector(".file-mention [role=\"listbox\"]")).not.toBeNull();
+    expect(mocks.filesList).toHaveBeenLastCalledWith(conversation.id, "", "rea");
+    // Files only: a folder is not offered.
+    expect([...document.querySelectorAll(".file-mention .menu-item-copy small")].map(node => node.textContent)).toEqual(["README.md", "docs/read-me-later.md"]);
+    await press("ArrowDown");
+    await press("Enter");
+    await vi.waitFor(() => expect(mocks.attach).toHaveBeenCalledWith(conversation.id, ["/repo/docs/read-me-later.md"]));
+    expect(mocks.resolvePaths).toHaveBeenCalledWith(conversation.id, ["docs/read-me-later.md"]);
+    expect(composer().value).toBe("see ");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+  it("opens nothing in a chat without a folder, or for an @ inside a word", async () => {
+    await render(view());
+    await fill(composer(), "@rea");
+    await settle();
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(document.querySelector(".file-mention")).toBeNull();
+    expect(mocks.filesList).not.toHaveBeenCalled();
+  });
+  // S209 F1 and A3 beside the / menu: when it is open, it has the arrows.
+  it("leaves the arrows to the / menu while it is open", async () => {
+    mocks.skillsList.mockResolvedValue([
+      { id: "local:/skills/review", name: "review", description: "Review steps", source: "Claude Code", origin: "local" },
+      { id: "local:/skills/release", name: "release", description: "Release steps", source: "Claude Code", origin: "local" },
+    ]);
+    const said: Message = { id: "u1", conversationId: conversation.id, role: "user", content: "An earlier message", status: "complete", createdAt: 1 };
+    await render(createElement(ConversationView, { ...view([said]).props, conversation: { ...conversation, folder: "/repo" } }));
+    await fill(composer(), "/");
+    await vi.waitFor(() => expect(document.querySelector(".skill-commands [role=\"listbox\"]")).not.toBeNull());
+    await press("ArrowUp");
+    // The menu moved; the composer did not bring back the earlier message.
+    expect(composer().value).toBe("/");
+    expect(document.querySelector(".file-mention")).toBeNull();
+  });
+});
+
 // S209 F4: attachments by paste and by the native picker, the same as a drop.
 describe("attaching by paste and by the picker", () => {
   const composer = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
@@ -770,6 +835,12 @@ describe("attaching by paste and by the picker", () => {
     expect(mocks.attach).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Attach up to 8 files per message");
   });
+  it("is not offered while a reply runs (S209 F4)", async () => {
+    await render(view([{ id: "m1", conversationId: conversation.id, role: "assistant", content: "Working", status: "streaming", createdAt: 1 }]));
+    expect(button("Attach files…").disabled).toBe(true);
+    await click(button("Attach files…"));
+    expect(mocks.chooseFiles).not.toHaveBeenCalled();
+  });
 });
 
 // Second review (05.10): Edit left focus on a button that had just gone.
@@ -801,6 +872,20 @@ describe("a slow copy", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Audit B2: Appearance is chosen in Settings › App and applied at once.
+describe("the app's appearance", () => {
+  it("saves System, Light or Dark the moment one is chosen", async () => {
+    const onSaved = vi.fn();
+    await render(createElement(SettingsDialog, { open: true, settings, onSaved, onClose: vi.fn(), dataPath: "/test/data", version: "0.1.0", extensionsCount: 0 }));
+    await click(button("App"));
+    expect(button("Appearance").textContent).toContain("System");
+    await click(button("Appearance"));
+    await click(menuItem("Dark"));
+    expect(mocks.settingsSave).toHaveBeenCalledWith({ appearance: "dark" });
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ appearance: "dark" })));
   });
 });
 

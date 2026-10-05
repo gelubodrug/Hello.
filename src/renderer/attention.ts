@@ -1,4 +1,4 @@
-import type { Message, QueuedMessage } from '../shared/types';
+import type { Message, PendingRequest, QueuedMessage } from '../shared/types';
 
 /**
  * What in a chat is waiting for the person, most pressing first: an action the
@@ -6,8 +6,8 @@ import type { Message, QueuedMessage } from '../shared/types';
  * that failed, a reply that is ready. A chat keeps its most pressing one until
  * the person looks at it.
  */
-export type AttentionKind = 'approval' | 'question' | 'error' | 'done';
-const rank: Record<AttentionKind, number> = { approval: 4, question: 3, error: 2, done: 1 };
+export type AttentionKind = 'approval' | 'plugin' | 'question' | 'error' | 'done';
+const rank: Record<AttentionKind, number> = { approval: 5, plugin: 4, question: 3, error: 2, done: 1 };
 
 export function strongest(a: AttentionKind | undefined, b: AttentionKind | undefined): AttentionKind | undefined {
   if (!a) return b;
@@ -52,8 +52,22 @@ export function notice(kind: AttentionKind, message: Pick<Message, 'content' | '
   return firstLine(message?.content ?? '') || 'The reply is ready.';
 }
 
+/**
+ * An open request (audit A1) is not news that looking at a chat answers: it
+ * stays until it is answered, runs out or its reply ends. Its dot is a tool's
+ * approval, or a plugin's question.
+ */
+export const requestKind = (request: Pick<PendingRequest, 'kind'>): AttentionKind =>
+  request.kind === 'approval' ? 'approval' : 'plugin';
+/** The words of the one notification an open request gets. */
+export function requestNotice(request: Pick<PendingRequest, 'kind' | 'label'>): string {
+  const words = request.label.replace(/\s+/g, ' ').trim().slice(0, 140);
+  return request.kind === 'approval' ? `Needs your approval: ${words.replace(/_/g, ' ')}.` : `A plugin asks: ${words}`;
+}
+
 export const attentionLabel: Record<AttentionKind, string> = {
   approval: 'Needs your approval',
+  plugin: 'A plugin is asking',
   question: 'A worker is asking',
   error: 'The reply failed',
   done: 'Reply ready',

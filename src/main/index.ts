@@ -13,6 +13,7 @@ import type { TerminalSession } from '../shared/types';
 import { createWorkerNotebookContext } from './terminal/notebook-context';
 import { BrowserManager } from './browser/manager';
 import { pageMenu } from './browser/context-menu';
+import { appearanceGround } from './appearance';
 import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
 import { PageModeController } from './browser/page-mode';
@@ -123,6 +124,8 @@ else {
       // Between chats from the keyboard, wherever focus is (S209): ⌘1–9 by place
       // in the list, ⌘⇧] and ⌘⇧[ next and previous, ⌘J the next one waiting.
       {label:'Go',submenu:[
+        {label:'Go to…',accelerator:'CmdOrCtrl+Shift+P',click:()=>mainWindow?.webContents.send('hello:menu','go-to')},
+        {type:'separator'},
         {label:'Next Chat',accelerator:'CmdOrCtrl+Shift+]',click:()=>mainWindow?.webContents.send('hello:menu','next-chat')},
         {label:'Previous Chat',accelerator:'CmdOrCtrl+Shift+[',click:()=>mainWindow?.webContents.send('hello:menu','previous-chat')},
         {label:'Next Waiting Chat',accelerator:'CmdOrCtrl+J',click:()=>mainWindow?.webContents.send('hello:menu','attention-chat')},
@@ -145,7 +148,8 @@ else {
         ...(process.env.HELLO_TEST_API_KEY?{apiKey:process.env.HELLO_TEST_API_KEY}:{}),
       });
     }
-    const window=new BrowserWindow({width:1440,height:960,minWidth:680,minHeight:540,title:'Hello.',backgroundColor:'#101112',titleBarStyle:'hiddenInset',trafficLightPosition:{x:20,y:18},show:false,webPreferences:{preload:join(bundleDir,'../preload/index.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,webviewTag:true}});
+    // Its ground is the chosen appearance's from the first frame (audit B2).
+    const window=new BrowserWindow({width:1440,height:960,minWidth:680,minHeight:540,title:'Hello.',backgroundColor:appearanceGround(store.getSettings().appearance),titleBarStyle:'hiddenInset',trafficLightPosition:{x:20,y:18},show:false,webPreferences:{preload:join(bundleDir,'../preload/index.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,webviewTag:true}});
     mainWindow=window;
     window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
     window.webContents.on('will-navigate',event=>event.preventDefault());
@@ -250,7 +254,7 @@ else {
       search:(query:string,options:{online?:boolean;signal?:AbortSignal})=>skillCatalog.search(query,options),
       use:async(id:string,conversationId:string,signal?:AbortSignal)=>{const used=await skillCatalog.use(id,conversationId,signal);emit('hello:extensions-changed',{});return used;},
     };
-    const chat=chatService=new ChatService({store,mcp,library,skillCatalog:skills,piEntry:()=>piEngine.entry(),emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),emitExtensionUi:state=>emit('hello:chat-extension-ui',state),browser:browserHooks,workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
+    const chat=chatService=new ChatService({store,mcp,library,skillCatalog:skills,piEntry:()=>piEngine.entry(),emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),emitExtensionUi:state=>emit('hello:chat-extension-ui',state),emitPending:state=>emit('hello:chat-pending',state),browser:browserHooks,workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
     // Settle the selected model's published limits once at startup, so a
     // profile stored before this app knew how to ask still launches on the
     // model's real context window rather than the shipped default.

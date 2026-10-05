@@ -1,4 +1,4 @@
-import type { FileDocument, FileListing } from './files';
+import type { ContentSearch, FileDocument, FileListing } from './files';
 import type { AnnotationShot } from './page-mode-format';
 /** A chat's notebook has three sections: Runbooks, Tasks and Plans (the steps plan_write keeps). */
 export type NotebookKind = 'runbook' | 'tasks' | 'plan';
@@ -126,7 +126,7 @@ export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 export type ApprovalMode = 'ask' | 'writes' | 'all';
 /** A provider the user asked this app to keep, so switching is a click and not a retyped URL. Its key lives under its endpoint, never in this record. */
 export interface SavedConnection { name: string; endpointUrl: string; model: string; apiKeySet: boolean; }
-export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; connections: SavedConnection[]; }
+export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; /** Light, dark, or as macOS is (audit B2); unset is System. */ appearance?: 'system' | 'light' | 'dark'; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; connections: SavedConnection[]; }
 export type SettingsPatch = Partial<Omit<AppSettings, 'apiKeySet' | 'connections'>> & { apiKey?: string };
 /** Where a message the person wrote during a run is meant to land. */
 export type QueuedMode = 'steer' | 'next' | 'later';
@@ -241,10 +241,26 @@ export interface ChatQuoteExtra {
 }
 export interface ChatQuote extends ChatQuoteExtra { text: string; }
 export interface ChatEvent { conversationId: string; message: Message; }
+/** Something a chat waits for the person to answer before it can go on (audit
+ *  A1): a tool asking for approval, or a plugin's question. Main's own runtime
+ *  registers, never parsed from what was said; none survives a restart. */
+export interface PendingRequest {
+  requestId: string;
+  conversationId: string;
+  kind: 'approval' | 'question';
+  createdAt: number;
+  expiresAt?: number;
+  /** In a few words: the tool, or the plugin's title. */
+  label: string;
+  /** Where it is answered: the reply and its tool step, or the plugin's dialog. */
+  target: { messageId: string; toolPartId: string } | { dialogId: string };
+}
+/** Every request open now; a later revision always wins over an earlier one. */
+export interface PendingInput { revision: number; requests: PendingRequest[] }
 /** What an app menu item asks the window for (src/main/index.ts): ⌘N a new chat,
  *  ⌘B the sidebar, ⌘⇧] / ⌘⇧[ the next or previous chat, ⌘J the next chat
  *  waiting, ⌘1–9 a chat by its place in the list (S209). */
-export type MenuAction = 'new-chat' | 'toggle-sidebar' | 'next-chat' | 'previous-chat' | 'attention-chat'
+export type MenuAction = 'new-chat' | 'toggle-sidebar' | 'go-to' | 'next-chat' | 'previous-chat' | 'attention-chat'
   | `chat-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 /** The waiting list after main changed it on its own: a steer said, a held message delivered. */
 export interface ChatQueueEvent { conversationId: string; items: QueuedMessage[]; }
@@ -268,6 +284,10 @@ export interface HelloAPI {
     open(conversationId: string, path: string): Promise<void>;
     reveal(conversationId: string, path: string): Promise<void>;
     resolvePaths(conversationId: string, paths: string[]): Promise<string[]>;
+    /** The lines of the chat's folder that hold the words (audit A3b). Optional for an older preload. */
+    searchContents?(conversationId: string, requestId: string, query: string, options?: { matchCase?: boolean }): Promise<ContentSearch>;
+    /** Stops the chat's search of the contents, if one runs. */
+    cancelSearch?(conversationId: string): Promise<void>;
   };
   bootstrap(): Promise<Bootstrap>;
   conversations: {
@@ -304,7 +324,11 @@ export interface HelloAPI {
   };
   chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>;
     /** The picture on the clipboard, read by main and kept like a dropped image. Optional for an older preload. */
-    attachClipboard?(conversationId: string): Promise<ChatDropResult>; /** A data: URL of one of this chat's image attachments. */ previewAttachment(conversationId: string, attachmentId: string): Promise<string>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; /** A row that is already gone is not an error: the chat's current list comes back. */ dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; onQueue?(listener: (event: ChatQueueEvent) => void): () => void; /** What the chat's plugins show. Optional for an older preload. */ extensionUi?(conversationId: string): Promise<ExtensionUiState>; onExtensionUi?(listener: (state: ExtensionUiState) => void): () => void; /** Answers a plugin's question. */ answerExtension?(conversationId: string, dialogId: string, answer: ExtensionAnswer): Promise<void>; /** The slash commands the chat's plugins added, as its running Pi last said; null before it ever ran. */ commands?(conversationId: string): Promise<PluginCommand[] | null>; /** Summarises the conversation now, as Pi does by itself near the limit. Optional for an older preload. */ compact?(conversationId: string): Promise<{ tokensBefore: number; tokensAfter?: number }>; };
+    attachClipboard?(conversationId: string): Promise<ChatDropResult>;
+    /** What every chat waits for the person to answer, now. Optional for an older preload. */
+    pendingInput?(): Promise<PendingInput>;
+    /** The same, again, whenever it changes. Optional for an older preload. */
+    onPendingInput?(listener: (state: PendingInput) => void): () => void; /** A data: URL of one of this chat's image attachments. */ previewAttachment(conversationId: string, attachmentId: string): Promise<string>; send(conversationId: string, text: string, attachmentIds?: string[]): Promise<void>; queue(conversationId: string, text: string, mode: QueuedMode): Promise<QueuedMessage[]>; queued(conversationId: string): Promise<QueuedMessage[]>; reviseQueued(id: string, patch: { text?: string; mode?: QueuedMode }): Promise<QueuedMessage[]>; /** A row that is already gone is not an error: the chat's current list comes back. */ dropQueued(id: string, conversationId?: string): Promise<QueuedMessage[]>; stop(conversationId: string): Promise<void>; retry(conversationId: string): Promise<void>; approve(approvalId: string, allow: boolean): Promise<void>; onEvent(listener: (event: ChatEvent) => void): () => void; onQueue?(listener: (event: ChatQueueEvent) => void): () => void; /** What the chat's plugins show. Optional for an older preload. */ extensionUi?(conversationId: string): Promise<ExtensionUiState>; onExtensionUi?(listener: (state: ExtensionUiState) => void): () => void; /** Answers a plugin's question. */ answerExtension?(conversationId: string, dialogId: string, answer: ExtensionAnswer): Promise<void>; /** The slash commands the chat's plugins added, as its running Pi last said; null before it ever ran. */ commands?(conversationId: string): Promise<PluginCommand[] | null>; /** Summarises the conversation now, as Pi does by itself near the limit. Optional for an older preload. */ compact?(conversationId: string): Promise<{ tokensBefore: number; tokensAfter?: number }>; };
   notebooks: { list(conversationId: string, kind: NotebookKind): Promise<NotebookEntry[]>; save(input: { id?: string; conversationId: string; kind: NotebookKind; title: string; body: string; expectedUpdatedAt?: number }): Promise<NotebookEntry>; delete(id: string): Promise<void>; /** A chapter's switch. Leaves its revision alone, so an open draft stays valid. Optional for an older preload. */ share?(id: string, shared: boolean): Promise<NotebookEntry>; paths(conversationId: string): Promise<NotebookPaths>; onChange?(listener: (event: NotebookChange) => void): () => void; };
   extensions: {
     list(): Promise<LibraryResource[]>;

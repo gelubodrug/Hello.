@@ -40,3 +40,18 @@
 .files-pane[data-narrow='true'][data-tree-visible='true'] .files-document { display: none; }
 .files-pane[data-narrow='true'] .files-tree { flex: 1; border-left: 0; }
 .files-pane[data-narrow='true'] .files-document { padding: var(--sp-16); }
+/* Names / Contents and the lines a search of the contents found (audit A3b). */
+.files-scope { margin-top: var(--sp-4); }
+.files-case { display: grid; place-items: center; flex: none; width: var(--control-md); height: var(--control-md); padding: 0; border: 0; border-radius: var(--r-6); background: transparent; color: var(--ink-tertiary); }
+.files-case:hover { color: var(--ink-secondary); background: var(--surface-hover); }
+.files-case[aria-pressed='true'] { color: var(--ink-primary); background: var(--surface-hover); }
+.files-results { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-8); overscroll-behavior: contain; }
+.files-results-status { margin: 0; padding: var(--sp-4); color: var(--ink-tertiary); font-size: var(--fs-12); }
+.files-result-file { display: flex; flex-direction: column; min-width: 0; }
+.files-result-path { display: flex; align-items: center; gap: var(--sp-8); min-width: 0; margin: 0; padding: var(--sp-4); color: var(--ink-secondary); font-size: var(--fs-12); font-weight: 500; }
+.files-result { display: flex; align-items: baseline; gap: var(--sp-8); width: 100%; min-width: 0; padding: var(--sp-4) var(--sp-8); border: 0; border-radius: var(--r-8); background: transparent; color: var(--ink-secondary); font: inherit; font-size: var(--fs-12); text-align: left; cursor: default; }
+.files-result:hover { background: var(--surface-hover); color: var(--ink-primary); }
+.files-result:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -2px; }
+.files-result-line { flex: none; min-width: 3ch; color: var(--ink-tertiary); font-family: var(--font-mono); text-align: right; }
+.files-result-text { min-width: 0; overflow: hidden; white-space: pre; text-overflow: ellipsis; font-family: var(--font-mono); }
+.files-result mark { background: color-mix(in srgb, var(--color-warning) 30%, transparent); color: var(--ink-primary); border-radius: 2px; }

@@ -206,11 +206,19 @@ The human **Files** viewer is separate from automatic agent file tools. Its
 `files.*` IPC accepts only the trusted main window/frame and derives the root
 from the selected conversation's attached folder. It never accepts a new root
 from a document link, follows an escaping symlink, executes Markdown/HTML, or
-grants model/browser permissions. Search enumerates filenames, not contents;
-reads are bounded UTF-8 regular files. Filenames that may contain credentials
-are not hidden from the human, but nothing from this viewer is automatically
-sent to the model or saved to message history. Copy is an explicit clipboard
-write. The viewer does not add file write/delete/rename APIs.
+grants model/browser permissions. Names search enumerates filenames; reads are
+bounded UTF-8 regular files. Contents search (`files.searchContents`) runs in
+main over the same root: it reads regular UTF-8 files within fixed limits,
+opened with `O_NOFOLLOW`, never follows a link, passes over binary files and
+dependency/build/.git folders, and returns only a path, a line and a short
+snippet per match — no whole bodies, no index, no log. The query is validated
+in main (2–300 characters, one line); one search runs per conversation and a
+new one or `files.cancelSearch` stops it. Filenames and lines that may contain
+credentials are not hidden from the human, but nothing from this viewer is
+automatically sent to the model or saved to message history: "Add selection to
+chat" only adds the selected words to that conversation's draft, which the
+person may edit or discard before sending. Copy is an explicit clipboard write.
+The viewer does not add file write/delete/rename APIs.
 
 Local links open only the viewer. Default-app opening and Finder reveal require
 separate explicit UI actions and revalidate containment in main. Open prompts

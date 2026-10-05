@@ -1,4 +1,5 @@
 import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, Notification, type BrowserWindow } from 'electron';
+import { applyAppearance } from './appearance';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +50,13 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     return files.list(str(id), path, search);
   });
   handle('files.read', (id, path) => files.read(str(id), str(path, 'path', 8192)));
+  handle('files.searchContents', (id, requestId, query, options = {}) => {
+    if (typeof query !== 'string' || query.trim().length < 2 || query.length > 300 || /[\u0000-\u001f]/.test(query)) throw new Error('Search for 2 to 300 characters on one line.');
+    const { matchCase = false } = record(options);
+    if (typeof matchCase !== 'boolean') throw new Error('Invalid request.');
+    return files.searchContents(str(id), str(requestId, 'request', 100), query, matchCase);
+  });
+  handle('files.cancelSearch', id => files.cancelSearch(str(id)));
   handle('files.resolvePaths', (id, paths) => resolveDropPaths(store.getConversation(str(id)).folder, paths));
   handle('files.reveal', async (id, path) => { const target = await files.target(str(id), str(path, 'path', 8192)); shell.showItemInFolder(target.absolute); });
   handle('files.open', async (id, path) => {
@@ -120,8 +128,11 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.maxOutputTokens!==undefined)clean.maxOutputTokens=Number(patch.maxOutputTokens);
     if(patch.modelCompatibility!==undefined)clean.modelCompatibility=patch.modelCompatibility as SettingsPatch['modelCompatibility'];
     if(patch.approvals!==undefined)clean.approvals=patch.approvals as SettingsPatch['approvals'];
+    if(patch.appearance!==undefined){if(!['system','light','dark'].includes(patch.appearance as string))throw new Error('Appearance is System, Light or Dark.');clean.appearance=patch.appearance as SettingsPatch['appearance'];}
     if(patch.subagentModel!==undefined){if(typeof patch.subagentModel!=='string'||patch.subagentModel.length>500)throw new Error('Invalid subagent model.');clean.subagentModel=patch.subagentModel;}
     const saved=store.saveSettings(clean);
+    // The app's look follows at once: native menus, and what pages read as prefers-color-scheme.
+    if(clean.appearance!==undefined)applyAppearance(window,saved.appearance);
     // A new selection asks the provider what this model holds, in the background:
     // saving must not wait on a network round trip, and the next turn awaits it.
     if(clean.model!==undefined||clean.endpointUrl!==undefined)void chat.settleModelLimits();
@@ -135,6 +146,8 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.usage',()=>store.usageSummary());
   handle('settings.localServers',()=>chat.localServers(true));
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
+  // What every chat waits for the person to answer (audit A1): read-only.
+  handle('chat.pendingInput',()=>chat.pendingInput());
   // A picture pasted into the composer (S209): read here, in main, only when the
   // person pastes, so its bytes never pass through the window and are never logged.
   handle('chat.attachClipboard',async(id)=>{

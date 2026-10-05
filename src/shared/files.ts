@@ -10,6 +10,21 @@ export interface FileListing {
   limited: boolean;
   skipped: number;
 }
+/** A line of a file that holds the words searched for (audit A3b): where, and
+ *  a short piece of it with the match's place inside that piece. Never a body. */
+export interface ContentMatch { path: string; line: number; snippet: string; start: number; end: number }
+/** What a search of a folder's contents found, and how far it got. */
+export interface ContentSearch {
+  requestId: string;
+  matches: ContentMatch[];
+  /** It stopped before the end: too many results, files, bytes or seconds. */
+  limited: boolean;
+  reasons: Array<'results' | 'entries' | 'bytes' | 'time'>;
+  filesScanned: number;
+  bytesScanned: number;
+  /** Folders and files passed over: dependencies, links, binary, too large, unreadable. */
+  skipped: number;
+}
 export interface FileDocument {
   path: string;
   absolutePath: string;

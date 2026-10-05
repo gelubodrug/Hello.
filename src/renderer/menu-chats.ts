@@ -6,7 +6,7 @@ import type { MenuAction } from "../shared/types";
  * waiting for the person after the one open, round the end. Null: none.
  */
 export function chatForMenu(
-  action: Exclude<MenuAction, "new-chat" | "toggle-sidebar">,
+  action: Exclude<MenuAction, "new-chat" | "toggle-sidebar" | "go-to">,
   order: readonly string[],
   activeId: string | null,
   waiting: ReadonlySet<string>,

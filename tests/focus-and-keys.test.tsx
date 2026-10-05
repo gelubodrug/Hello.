@@ -9,6 +9,7 @@ import { Dialog } from '../src/renderer/ui/primitives';
 import { KeyboardShortcuts } from '../src/renderer/ui/KeyboardShortcuts';
 import { SidebarChrome } from '../src/renderer/ui/SidebarChrome';
 import { chatForMenu } from '../src/renderer/menu-chats';
+import { AttentionDialog } from '../src/renderer/ui/AttentionDialog';
 
 // The second UI review (05.10): what focus does when surfaces come and go,
 // and the keys the app tells a person about.
@@ -55,6 +56,21 @@ describe('a dialog', () => {
   });
 });
 
+describe('a dialog that chose where focus goes', () => {
+  it('opens on the element it names, and leaves focus alone when told not to give it back', async () => {
+    const before = document.createElement('button');
+    document.body.append(before);
+    before.focus();
+    const field = { current: null as HTMLInputElement | null };
+    const view = (open: boolean, returnFocus: boolean) => createElement(Dialog, { open, title: 'Pick', onClose: () => {}, initialFocus: field as never, returnFocus,
+      children: createElement('input', { ref: (node: HTMLInputElement | null) => { field.current = node; }, 'aria-label': 'Field' }) });
+    await act(async () => root.render(view(true, false)));
+    expect(document.activeElement).toBe(field.current);
+    await act(async () => root.render(view(false, false)));
+    expect(document.activeElement).not.toBe(before);
+  });
+});
+
 describe('the keyboard shortcuts', () => {
   it('lists the keys the app answers to, the transcript’s among them, and nothing it does not do', async () => {
     await act(async () => root.render(createElement(KeyboardShortcuts)));
@@ -68,6 +84,7 @@ describe('the keyboard shortcuts', () => {
     expect(text).toContain('Find in the chat or the notebook on screen');
     expect(text).toContain('Find in the scrollback (terminal focused)');
     expect(text).toContain('Reuse a previous message');
+    expect(text).toContain('Go to a chat, tab, message or command');
     expect(text).not.toContain('command palette');
     expect(text).not.toContain('Step through your earlier messages');
   });
@@ -106,5 +123,31 @@ describe('the menu keys between chats', () => {
     expect(chatForMenu('attention-chat', order, 'b', new Set(['b']))).toBe('b');
     expect(chatForMenu('attention-chat', order, null, new Set(['c']))).toBe('c');
     expect(chatForMenu('attention-chat', order, 'b', new Set())).toBeNull();
+  });
+});
+
+// Audit A1: the list of what waits for the person, by chat, oldest first.
+describe('the attention list', () => {
+  const request = (requestId: string, conversationId: string, createdAt: number, kind: 'approval' | 'question', label: string) =>
+    ({ requestId, conversationId, createdAt, kind, label, target: kind === 'approval' ? { messageId: 'm', toolPartId: 't' } : { dialogId: requestId } });
+  it('groups requests by chat, the oldest first, and leads to the one chosen', async () => {
+    const opened: string[] = [];
+    const requests = [
+      request('r3', 'b', 3, 'approval', 'command_run'),
+      request('r1', 'a', 1, 'approval', 'file_edit'),
+      request('r2', 'a', 2, 'question', 'Clear session?'),
+    ];
+    await act(async () => root.render(createElement(AttentionDialog, { open: true, requests, titles: new Map([['a', 'Release'], ['b', 'Docs']]),
+      onOpenRequest: chosen => opened.push(chosen.requestId), onClose: () => {} })));
+    expect([...document.querySelectorAll('.attention-group h2')].map(node => node.textContent)).toEqual(['Release', 'Docs']);
+    expect([...document.querySelectorAll('.attention-row-label')].map(node => node.textContent)).toEqual(['file edit', 'Clear session?', 'command run']);
+    expect(document.querySelector('.attention-summary')?.textContent).toBe('3 requests wait for your answer.');
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.attention-row button')];
+    await act(async () => { buttons[1].click(); });
+    expect(opened).toEqual(['r2']);
+  });
+  it('says plainly when nothing waits', async () => {
+    await act(async () => root.render(createElement(AttentionDialog, { open: true, requests: [], titles: new Map(), onOpenRequest: () => {}, onClose: () => {} })));
+    expect(document.querySelector('.attention-summary')?.textContent).toBe('Nothing is waiting for you.');
   });
 });

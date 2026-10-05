@@ -2,6 +2,21 @@ import type { WorkspacePrefs } from './Workspace';
 
 type PaneLayout = Pick<WorkspacePrefs, 'toolsOpen' | 'chatOpen' | 'expanded' | 'toolsExpanded'>;
 
+/**
+ * Whether a chat's transcript is what its workspace shows (audit A1): the chat
+ * pane open, not minimized, not under expanded tools or a compact layout
+ * showing tools, and the Chat page in front — not the Notebook or a terminal
+ * tab. The window's focus and the DSH surface are the caller's to add.
+ */
+export function transcriptShown(ui: WorkspacePrefs, compact: boolean): boolean {
+  const toolsFill = ui.toolsOpen && ui.toolsExpanded;
+  const chatFills = ui.toolsOpen && ui.chatOpen && ui.expanded;
+  if (!ui.chatOpen || toolsFill) return false;
+  if (ui.minimized && !chatFills) return false;
+  if (compact && ui.toolsOpen && !chatFills && !ui.toolsMinimized && ui.focus === 'tools') return false;
+  return !ui.chatTerminal && ui.chatTab === 'chat';
+}
+
 export function hasExpandedPane(ui: PaneLayout): boolean {
   // Solo Chat expands inside its original right-hand stage. Full-workspace
   // focus mode belongs to the two-pane Tools layout only.

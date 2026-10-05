@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message, QueuedMessage } from '../src/shared/types';
-import { attentionFor, newWorkerQuestions, notice, strongest } from '../src/renderer/attention';
+import { attentionFor, newWorkerQuestions, notice, requestKind, requestNotice, strongest } from '../src/renderer/attention';
 
 const reply = (status: Message['status'], extra: Partial<Message> = {}): Message =>
   ({ id: 'r1', conversationId: 'c', role: 'assistant', content: 'Saved all four invoices.', status, createdAt: 1, ...extra });
@@ -43,5 +43,18 @@ describe('what needs the person', () => {
     expect(notice('error', reply('error', { error: 'The provider\nwent away' }))).toBe('The reply failed: The provider went away');
     expect(notice('done', reply('complete'))).toBe('Saved all four invoices.');
     expect(notice('done', reply('complete', { content: '' }))).toBe('The reply is ready.');
+  });
+});
+
+// Audit A1: an open request is not news that looking at a chat answers.
+describe('a request waiting for the person', () => {
+  it('ranks a plugin’s question below an approval and above everything else, and says each in a line', () => {
+    expect(requestKind({ kind: 'approval' })).toBe('approval');
+    expect(requestKind({ kind: 'question' })).toBe('plugin');
+    expect(strongest('plugin', 'approval')).toBe('approval');
+    expect(strongest('question', 'plugin')).toBe('plugin');
+    expect(strongest('done', 'plugin')).toBe('plugin');
+    expect(requestNotice({ kind: 'approval', label: 'file_edit' })).toBe('Needs your approval: file edit.');
+    expect(requestNotice({ kind: 'question', label: 'Allow   dangerous\ncommand?' })).toBe('A plugin asks: Allow dangerous command?');
   });
 });

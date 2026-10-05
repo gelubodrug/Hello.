@@ -229,6 +229,11 @@ describe('searching the notebook', () => {
     await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
     expect(field.value).toBe('');
     expect(host.querySelector('.notebook-section')).not.toBeNull();
+    expect(document.activeElement).toBe(field);
+    // With no words left, a second Escape goes back to writing (S209 F3).
+    await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(document.activeElement).not.toBe(field);
+    expect(host.querySelector('.notebook-editor')!.contains(document.activeElement)).toBe(true);
   });
 });
 

@@ -162,3 +162,17 @@ describe("annotations arriving in the composer", () => {
     expect(document.body.textContent).toContain("The page picture was not attached");
   });
 });
+
+describe("any quote arriving in the composer", () => {
+  it("audit A3b: words that would make the message longer than main takes are refused with the next step; the draft stays", async () => {
+    const kept = "k".repeat(199_990);
+    localStorage.setItem(`hello.draft.${conversation.id}`, kept);
+    const consumed = vi.fn();
+    await act(async () => { root.render(view({ text: "From `notes.txt` (line 2):\n```\nbeta\n```", verbatim: true }, consumed)); });
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+    expect(field.value).toBe(kept);
+    expect(consumed).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Adding this would make the message longer than 200,000 characters. Send or shorten the draft, then add it again.");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});

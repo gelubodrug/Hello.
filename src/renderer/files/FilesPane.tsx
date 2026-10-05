@@ -1,12 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Tree, type NodeRendererProps, type TreeApi } from 'react-arborist';
-import { Check, ChevronDown, ChevronRight, Copy, File, FileText, Folder, FolderOpen, PanelRight, RefreshCw, Search } from 'lucide-react';
-import type { Conversation } from '../../shared/types';
-import { fileLanguage, type FileDocument, type FileEntry, type FileLink, type FileListing } from '../../shared/files';
+import { CaseSensitive, Check, ChevronDown, ChevronRight, Copy, File, FileText, Folder, FolderOpen, MessageSquareQuote, PanelRight, RefreshCw, Search } from 'lucide-react';
+import type { ChatQuoteExtra, Conversation } from '../../shared/types';
+import { fileLanguage, type ContentSearch, type FileDocument, type FileEntry, type FileLink, type FileListing } from '../../shared/files';
 import { api } from '../api';
 import { CodeBlock, Markdown } from '../chat/Markdown';
-import { ErrorNote, IconButton, MenuButton, Truncated, errorText } from '../ui/primitives';
+import { ContextMenu, ErrorNote, IconButton, MenuButton, Truncated, errorText } from '../ui/primitives';
 import { FileTypeIcon } from './FileTypeIcon';
+import { ContentResults, contentNotice } from './ContentResults';
+import { QUOTE_LIMIT, fileSelection, hasSelectionIn, selectionQuote, type FileSelection } from './selection';
 import { setInternalFileDrop } from '../drop';
 import './files.css';
 
@@ -45,8 +47,10 @@ function FileNode({ node, style }: NodeRendererProps<TreeEntry>) {
   </div>;
 }
 
-export function FilesPane({ conversation, visible, request, onChooseFolder }: {
+export function FilesPane({ conversation, visible, request, onChooseFolder, onQuote }: {
   conversation: Conversation; visible: boolean; request: FileRequest | null; onChooseFolder: () => void;
+  /** Adds words to this chat's draft and shows Chat; never sends them. */
+  onQuote?: (text: string, extra?: ChatQuoteExtra) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const treeBox = useRef<HTMLDivElement>(null);
@@ -74,6 +78,17 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
   const [treeSize, setTreeSize] = useState({ width: 240, height: 1 });
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Names filters the tree; Contents searches inside the files (audit A3b).
+  const [scope, setScope] = useState<'names' | 'contents'>('names');
+  const [matchCase, setMatchCase] = useState(false);
+  const [found, setFound] = useState<ContentSearch | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const searchSequence = useRef(0);
+  const [selecting, setSelecting] = useState(false);
+  const [menu, setMenu] = useState<{ position: { x: number; y: number }; selected: FileSelection | null; file: FileDocument } | null>(null);
+  const contents = scope === 'contents' && Boolean(api.files.searchContents);
+  const names = contents ? '' : query;
+  const contentQuery = contents && query.trim().length >= 2 ? query : '';
   const requestHandled = useRef<number>();
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; readSequence.current++; }; }, []);
   useLayoutEffect(() => {
@@ -114,16 +129,34 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
   }, [visible, conversation.folder, listed, loadDirectory]);
 
   useEffect(() => {
-    if (!query.trim() || !visible || !conversation.folder) { setResults(null); setSearching(false); return; }
+    if (!names.trim() || !visible || !conversation.folder) { setResults(null); setSearching(false); return; }
     let current = true;
     setSearching(true); setResults(null);
     const timer = setTimeout(() => {
-      void api.files.list(conversation.id, '', query).then(list => { if (current) setResults(list); })
+      void api.files.list(conversation.id, '', names).then(list => { if (current) setResults(list); })
         .catch(reason => { if (current) setError(errorText(reason)); })
         .finally(() => { if (current) setSearching(false); });
     }, 250);
     return () => { current = false; clearTimeout(timer); };
-  }, [conversation.id, conversation.folder, query, visible, refreshEpoch]);
+  }, [conversation.id, conversation.folder, names, visible, refreshEpoch]);
+  useEffect(() => {
+    const search = api.files.searchContents;
+    if (!contentQuery || !visible || !conversation.folder || !search) { setFound(null); setScanning(false); return; }
+    let current = true;
+    const requestId = String(++searchSequence.current);
+    setScanning(true); setFound(null);
+    const timer = setTimeout(() => {
+      void search(conversation.id, requestId, contentQuery, { matchCase })
+        .then(result => { if (current && result.requestId === requestId) setFound(result); })
+        .catch(reason => { if (current) setError(errorText(reason)); })
+        .finally(() => { if (current) setScanning(false); });
+    }, 250);
+    return () => {
+      current = false; clearTimeout(timer);
+      // Typing on, hiding Files, leaving Contents or the folder: the older scan stops in main too.
+      void api.files.cancelSearch?.(conversation.id)?.catch(() => undefined);
+    };
+  }, [conversation.id, conversation.folder, contentQuery, matchCase, visible, refreshEpoch]);
 
   const readFile = useCallback(async (target: FileLink, refresh = false) => {
     const sequence = ++readSequence.current;
@@ -154,7 +187,7 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
     void readFile(request);
   }, [request, conversation.folder, readFile]);
 
-  const data = useMemo(() => hierarchy(query.trim() ? results?.entries ?? [] : entries), [entries, results, query]);
+  const data = useMemo(() => hierarchy(names.trim() ? results?.entries ?? [] : entries), [entries, results, names]);
   useEffect(() => {
     if (!document || !tree.current) return;
     tree.current.openParents(document.path);
@@ -163,6 +196,15 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
   }, [document?.path, data]);
   const markdown = !!document && /\.(?:md|markdown|mdx)$/i.test(document.name);
   const preview = markdown && mode === 'preview' && (document?.content?.length ?? 0) <= 200_000;
+  // Whether words are selected in the viewer, for "Add selection to chat".
+  useEffect(() => {
+    const area = viewport.current;
+    if (!area) return;
+    const changed = () => setSelecting(hasSelectionIn(area));
+    changed();
+    area.ownerDocument.addEventListener('selectionchange', changed);
+    return () => area.ownerDocument.removeEventListener('selectionchange', changed);
+  }, [conversation.folder, document, preview]);
   useEffect(() => {
     if (!document || !viewport.current) return;
     const area = viewport.current;
@@ -190,6 +232,18 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
     if (!document) return;
     try { await api.files.open(conversation.id, document.path); } finally { }
   });
+  /** The selection, taken before the button or the menu had focus, into this chat's draft. */
+  const quote = (selected: FileSelection | null, file: FileDocument | null) => {
+    if (!onQuote) return;
+    setError(null);
+    if (!selected || !file) { setError('Select some text in the file first.'); return; }
+    if (file !== documentRef.current) { setError('The file changed after the text was selected. Select it again.'); return; }
+    if (selected.text.length > QUOTE_LIMIT) {
+      setError(`The selection has ${selected.text.length.toLocaleString('en-US')} characters; up to ${QUOTE_LIMIT.toLocaleString('en-US')} can be added to the chat. Select less, or attach the file instead.`);
+      return;
+    }
+    onQuote(selectionQuote(selected, fileLanguage(file.name)), { verbatim: true });
+  };
   const treeVisible = (showTree && (!narrow || !mobileReading)) || (!document && !reading);
 
   return <div className="files-pane" ref={root} data-narrow={narrow} data-tree-visible={treeVisible}>
@@ -202,6 +256,10 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
           <button className="text-button" aria-pressed={preview} disabled={document.content.length > 200_000} onClick={() => setMode('preview')}>Preview</button>
           <button className="text-button" aria-pressed={!preview} onClick={() => setMode('source')}>Source</button>
         </div>}
+        {onQuote && <IconButton label="Add selection to chat" disabled={!selecting}
+          // The words stay selected while the button is pressed.
+          onMouseDown={event => event.preventDefault()}
+          onClick={() => quote(viewport.current && fileSelection(viewport.current, document, !preview), document)}><MessageSquareQuote size={15} /></IconButton>}
         <IconButton label={copied ? 'File copied' : 'Copy file content'} onClick={() => void copy()}>{copied ? <Check size={15} /> : <Copy size={15} />}</IconButton>
       </>}
       {document && <MenuButton label="Open file options" className="pill" items={[
@@ -214,7 +272,14 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
     <ErrorNote error={error} />
     {!conversation.folder ? <div className="files-empty"><FolderOpen size={28} /><h2>Files from this conversation</h2><p>Choose a working folder to browse documents and source code. Files stay on your computer.</p><button className="pill" onClick={onChooseFolder}>Choose folder</button></div>
       : <div className="files-body">
-        <div className="files-document" ref={viewport} aria-label="File contents" aria-busy={reading} tabIndex={0}>
+        <div className="files-document" ref={viewport} aria-label="File contents" aria-busy={reading} tabIndex={0}
+          onContextMenu={event => {
+            if (!document || document.content == null || reading) return;
+            event.preventDefault();
+            // Taken now, before the menu has focus.
+            const bounds = event.currentTarget.getBoundingClientRect();
+            setMenu({ position: { x: event.clientX || bounds.left + 16, y: event.clientY || bounds.top + 16 }, selected: fileSelection(event.currentTarget, document, !preview), file: document });
+          }}>
           {reading ? <div className="files-empty" role="status">Reading file…</div>
             : document ? document.content == null ? <div className="files-empty"><File size={28} /><h2>{document.name}</h2><p>{document.reason}</p><button className="pill" onClick={() => void external()}>Open in default app</button></div>
               : <>{markdown && document.content.length > 200_000 && <p className="files-notice">Large Markdown document — showing source to keep the viewer responsive.</p>}
@@ -224,9 +289,17 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
         </div>
         <aside className="files-tree" aria-label="Conversation files">
           <div className="files-root"><Folder size={16} /><Truncated title={conversation.folder}>{conversation.folder.replace(/\/$/, '').split('/').pop() || conversation.folder}</Truncated>
-            <IconButton label="Refresh files and document" disabled={!!listingBusy || reading || searching} onClick={() => void refresh()}><RefreshCw size={14} /></IconButton></div>
-          <label className="files-filter"><Search size={15} /><input aria-label="Filter files" placeholder="Filter files…" maxLength={300} value={query} onChange={event => setQuery(event.target.value)} /></label>
-          <div className="files-tree-box" ref={treeBox} aria-busy={!!listingBusy || searching}
+            <IconButton label="Refresh files and document" disabled={!!listingBusy || reading || searching || scanning} onClick={() => void refresh()}><RefreshCw size={14} /></IconButton></div>
+          {api.files.searchContents && <div className="files-modes files-scope" role="group" aria-label="Search files by">
+            <button className="text-button" aria-pressed={!contents} onClick={() => setScope('names')}>Names</button>
+            <button className="text-button" aria-pressed={contents} onClick={() => setScope('contents')}>Contents</button>
+          </div>}
+          <label className="files-filter"><Search size={15} />
+            <input aria-label={contents ? 'Search file contents' : 'Filter files'} placeholder={contents ? 'Search in files…' : 'Filter files…'} maxLength={300} value={query} onChange={event => setQuery(event.target.value)} />
+            {contents && <button type="button" className="files-case" aria-pressed={matchCase} aria-label="Match case" title="Match case" onClick={() => setMatchCase(value => !value)}><CaseSensitive size={15} /></button>}
+          </label>
+          {contentQuery && <ContentResults found={found} scanning={scanning} onOpen={match => void readFile({ path: match.path, line: match.line })} />}
+          <div className="files-tree-box" ref={treeBox} aria-busy={!!listingBusy || searching} hidden={Boolean(contentQuery)}
             onKeyDownCapture={event => {
               if (event.key === 'Enter' && tree.current?.focusedNode) {
                 event.preventDefault(); event.stopPropagation(); tree.current.focusedNode.activate();
@@ -234,14 +307,25 @@ export function FilesPane({ conversation, visible, request, onChooseFolder }: {
             }}>
             <FileDragConversation.Provider value={conversation.id}><Tree<TreeEntry> ref={tree} data={data} idAccessor="path" width={treeSize.width} height={treeSize.height} rowHeight={32} indent={16} overscanCount={8}
               aria-label="Files in conversation folder" openByDefault={false} disableEdit disableDrag disableDrop disableMultiSelection
-              searchTerm={query} searchMatch={(node, term) => node.data.path.toLocaleLowerCase().includes(term.trim().toLocaleLowerCase())}
-              onToggle={path => { if (!query.trim()) void loadDirectory(path); }}
+              searchTerm={names} searchMatch={(node, term) => node.data.path.toLocaleLowerCase().includes(term.trim().toLocaleLowerCase())}
+              onToggle={path => { if (!names.trim()) void loadDirectory(path); }}
               onActivate={node => { if (node.isInternal) node.toggle(); else void readFile({ path: node.id }); }}
               selection={document?.path}>{FileNode}</Tree></FileDragConversation.Provider>
-            {!data.length && <p className="files-tree-empty" role="status">{searching ? 'Filtering files…' : listingBusy ? 'Loading files…' : query ? 'No matching files.' : listed ? 'This folder is empty.' : 'Use Refresh to load files.'}</p>}
+            {!data.length && <p className="files-tree-empty" role="status">{searching ? 'Filtering files…' : listingBusy ? 'Loading files…' : names ? 'No matching files.' : listed ? 'This folder is empty.' : 'Use Refresh to load files.'}</p>}
           </div>
-          {(query.trim() || listNotice) && <p className="files-notice">{query.trim() ? `${results?.limited ? 'Partial results. ' : ''}Filters names and paths; skips dependency, build and .git folders.${results?.skipped ? ` ${results.skipped} folders skipped.` : ''}` : listNotice}</p>}
+          {(contents || names.trim() || listNotice) && <p className="files-notice">{contents ? contentNotice(found, query) : names.trim() ? `${results?.limited ? 'Partial results. ' : ''}Filters names and paths; skips dependency, build and .git folders.${results?.skipped ? ` ${results.skipped} folders skipped.` : ''}` : listNotice}</p>}
         </aside>
       </div>}
+    <ContextMenu position={menu?.position ?? null} ariaLabel="File text actions"
+      items={menu ? [
+        ...(onQuote ? [{ id: 'quote', label: 'Add selection to chat', icon: MessageSquareQuote, disabled: !menu.selected, action: () => quote(menu.selected, menu.file) }] : []),
+        { id: 'copy', label: 'Copy', icon: Copy, shortcut: '⌘ C', disabled: !menu.selected, action: () => void act(() => api.system.copy({ text: menu.selected?.text ?? '' })) },
+      ] : []}
+      onClose={reason => {
+        // Back to the file after Escape, or after an action that left focus in the menu.
+        if (reason === 'escape' || (reason === 'action' && viewport.current?.ownerDocument.activeElement?.closest('.menu-popup')))
+          viewport.current?.focus({ preventScroll: true });
+        setMenu(null);
+      }} />
   </div>;
 }

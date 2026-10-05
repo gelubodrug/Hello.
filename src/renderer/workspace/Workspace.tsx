@@ -709,7 +709,7 @@ export function Workspace(props: WorkspaceProps) {
             <div className="tool-host" id={`tool-host-${filesTool.id}`} data-tool-host={filesTool.id} hidden={!ui.filesOpen || currentTool?.id !== filesTool.id}>
               <FilesPane key={conversation.folder ?? 'no-folder'} conversation={conversation}
                 visible={toolsVisible && !toolsMinimized && !!ui.filesOpen && currentTool?.id === filesTool.id}
-                request={fileRequest} onChooseFolder={() => void chooseFilesFolder()} />
+                request={fileRequest} onChooseFolder={() => void chooseFilesFolder()} onQuote={props.onQuote} />
             </div>
             {props.browsers.map((tab) => (
               <div

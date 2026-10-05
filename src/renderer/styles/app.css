@@ -1369,6 +1369,27 @@ svg {
   padding: var(--sp-8) 0;
   color: var(--ink-tertiary);
 }
+/* A code step, readably (audit B1): the path, then its diff, file or shell
+   line. − and + are in the text as well as in the colour. */
+.tool-code { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+.tool-code-path { margin: 0; color: var(--ink-secondary); font: var(--fs-12)/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.tool-code-path span { color: var(--ink-tertiary); font-family: var(--font-ui); }
+.tool-code-note { margin: 0; color: var(--ink-tertiary); font-size: var(--fs-11); }
+.tool-diff {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: var(--sp-8) 0;
+  border-radius: var(--r-8);
+  background: var(--surface-raised);
+  color: var(--ink-primary);
+  font: var(--fs-12)/1.6 var(--font-mono);
+}
+.tool-diff-line { display: block; padding: 0 var(--sp-12); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-diff-line[data-kind="del"] { background: var(--color-error-subtle); }
+.tool-diff-line[data-kind="add"] { background: var(--color-success-subtle); }
+.tool-diff-line[data-kind="same"] { color: var(--ink-secondary); }
+
 .tool-detail {
   padding: var(--sp-8) 0;
 }
@@ -1521,7 +1542,57 @@ svg {
 /* Waiting for the person: ready, asking, or failed. Steady, where "working" pulses. */
 .attention-dot { width: 7px; height: 7px; }
 .attention-dot[data-kind="done"] { background: var(--color-accent); }
-.attention-dot[data-kind="approval"], .attention-dot[data-kind="question"] { background: var(--color-warning); }
+.attention-dot[data-kind="approval"], .attention-dot[data-kind="plugin"], .attention-dot[data-kind="question"] { background: var(--color-warning); }
+/* What chats wait for the person to answer (audit A1): one quiet row above the
+   list, and the list it opens. */
+.sidebar-attention {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  min-height: var(--control-md);
+  margin-bottom: var(--sp-8);
+  padding: 0 var(--sp-8);
+  border: 0;
+  border-radius: var(--r-8);
+  background: transparent;
+  color: var(--ink-primary);
+  font-size: var(--fs-12);
+  text-align: left;
+}
+.sidebar-attention:hover { background: var(--surface-hover); }
+.sidebar-attention:active { background: var(--surface-active); }
+.sidebar-attention .status-dot { flex: none; }
+.sidebar-attention-count { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-11); font-variant-numeric: tabular-nums; }
+.attention-dialog .attention-summary { margin: 0 0 var(--sp-12); }
+/* "Go to…" (audit A2): one field, then the places it finds, grouped. */
+.go-to { width: min(600px, 100%); }
+.go-to-field {
+  width: 100%;
+  min-height: var(--control-lg);
+  padding: 0 var(--sp-12);
+  border: var(--border-hairline) solid var(--surface-edge);
+  border-radius: var(--r-8);
+  background: var(--surface-raised);
+  color: var(--ink-primary);
+  font-size: var(--fs-13);
+}
+.go-to-status { margin: var(--sp-8) 0 var(--sp-4); color: var(--ink-tertiary); font-size: var(--fs-11); }
+.go-to-list { display: flex; flex-direction: column; max-height: min(420px, 55dvh); margin: 0; padding: 0; overflow-y: auto; list-style: none; overscroll-behavior: contain; }
+.go-to-group { padding: var(--sp-8) var(--sp-8) var(--sp-4); color: var(--ink-tertiary); font-size: var(--fs-11); font-weight: 600; }
+.go-to-row { display: flex; align-items: baseline; gap: var(--sp-8); min-height: var(--control-md); padding: var(--sp-4) var(--sp-8); border-radius: var(--r-8); cursor: default; }
+.go-to-row[aria-selected="true"] { background: var(--surface-hover); }
+.go-to-label { flex: 1; min-width: 0; color: var(--ink-primary); font-size: var(--fs-13); }
+.go-to-detail { flex: none; max-width: 45%; color: var(--ink-tertiary); font-size: var(--fs-11); }
+.go-to-more { margin-top: var(--sp-8); }
+.attention-group + .attention-group { margin-top: var(--sp-12); }
+.attention-group h2 { margin: 0 0 var(--sp-4); color: var(--ink-secondary); font-size: var(--fs-12); font-weight: 600; }
+.attention-group ul { display: flex; flex-direction: column; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
+.attention-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-8); }
+.attention-row-text { display: flex; flex-direction: column; min-width: 0; }
+.attention-row-kind { color: var(--ink-tertiary); font-size: var(--fs-11); }
+.attention-row-label { color: var(--ink-primary); font-size: var(--fs-13); }
+.attention-row-age { color: var(--ink-tertiary); font-size: var(--fs-11); white-space: nowrap; }
 .attention-dot[data-kind="error"] { background: var(--color-error); }
 .jump-to-latest {
   align-self: center;

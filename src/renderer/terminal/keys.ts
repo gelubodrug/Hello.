@@ -48,7 +48,7 @@ export function terminalKeyVerdict(
   if (event.metaKey && APP_SHORTCUT_KEYS.has(event.key.toLowerCase())) {
     return "app";
   }
-  if (event.metaKey && event.shiftKey && APP_SHIFTED_KEYS.has(event.key)) {
+  if (event.metaKey && event.shiftKey && (APP_SHIFTED_KEYS.has(event.key) || event.key.toLowerCase() === "p")) {
     return "app";
   }
 

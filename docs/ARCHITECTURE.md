@@ -93,7 +93,8 @@ whose pane is closed. Header controls remain in the app renderer.
 ## Conversation Files tool
 
 `src/main/files/service.ts` owns lazy directory listings, bounded filename/path
-search and bounded UTF-8 reads under the current conversation folder. Every
+search, a bounded search of the contents (below, A3b) and bounded UTF-8 reads
+under the current conversation folder. Every
 operation derives its root from the main store; paths are checked lexically and
 after realpath, with escaping symlinks rejected. Search does not follow symlink
 directories. Directory limits and skipped folders are returned as metadata.
@@ -101,7 +102,7 @@ Reads open only regular files, reject a final symlink swapped after validation,
 and cap bytes/lines before renderer IPC. This is not an OS sandbox against a
 hostile local process changing parent directories concurrently.
 
-`files.list/read/open/reveal` use the trusted main-frame IPC gate. No general
+`files.list/read/searchContents/cancelSearch/open/reveal` use the trusted main-frame IPC gate. No general
 filesystem bridge, model tool or automatic content injection is added. External
 Open is a separate human action; unfamiliar/executable file types prompt before
 the default app is invoked. It does not execute a constructed shell command.
@@ -494,6 +495,48 @@ clears the chats on it, and deleting a chat clears its row.
   mapped to their cells (`terminal/find.ts`), the newest first, Enter older and
   Shift+Enter newer, kept current as output arrives or the terminal reflows. A
   full-screen program has no scrollback to search, and says so.
+
+## The UI audit (05.10)
+
+`docs/ui-audit-2026-10-05.md` proposed six features; all six are in.
+
+- **Needs your attention (A1).** Main keeps what waits for the person — a tool
+  approval, a plugin's question — in registers that announce their own changes
+  (`approvals`, `extensionAsks` in `ChatService`) and sends a snapshot with a
+  rising revision whenever one is added or settled (`chat.pendingInput`,
+  `hello:chat-pending`). The renderer subscribes before it asks, ignores an older
+  revision, and lists the requests by chat, oldest first (`ui/AttentionDialog.tsx`);
+  "Open request" shows that chat's transcript and focuses the waiting control
+  (`data-request-id`). Looking at a chat clears a finished reply's dot, never a
+  request; each request notifies once. Nothing is persisted: after a restart
+  there is nothing left to approve.
+- **Readable code steps (B1).** `file_edit` shows a line diff (`chat/diff.ts`,
+  LCS, at most 500 lines a side, otherwise Old and New), `file_write` the file's
+  code, `command_run` a shell block (`chat/ToolCode.tsx`); any other tool, or input
+  that does not parse, stays JSON. The − and + are text, not only colour.
+- **Appearance (B2).** Settings › App › Appearance: System, Light or Dark sets
+  `data-theme` on the document root (absent for System), and main sets
+  `nativeTheme.themeSource` and the window's ground (`main/appearance.ts`).
+- **Go to… (A2).** ⌘⇧P lists commands, chats, open tabs and, from two
+  characters, matching messages, ranked by `go-to.ts`; typing only filters, Enter
+  or a click acts (`ui/CommandPalette.tsx`).
+- **@ a file (A3).** `@words` in the composer lists the files of the chat's
+  folder whose path holds them (`files.list`); Enter attaches one through the
+  same snapshot path as a drop and takes the token out (`chat/FileMention.tsx`).
+- **Find in files, add a selection (A3b).** Files › Contents searches inside the
+  files of the chat's folder, in main (`WorkspaceFiles.searchContents`): literal,
+  Match case on request, one search per chat — a newer one, a hidden pane, a left
+  Contents or another folder stops the older (`files.cancelSearch`), and the
+  renderer drops any answer that is not the latest. It reads regular UTF-8 files
+  of at most 2 MiB and 20,000 lines, opened without following links; links,
+  binary files and dependency/build/.git folders are passed over; it stops at
+  200 lines, 10,000 entries, 20 MiB or 4 seconds and says which. It returns paths,
+  lines and short snippets, keeps nothing, and a result opens its line in Source.
+  "Add selection to chat" (the toolbar, or the viewer's menu, which takes the
+  selection before it has focus) adds the words to this chat's draft with their
+  path and, in Source, their exact lines, taken from the file rather than the
+  page (`files/selection.ts`). At most 20,000 characters, never past the 200,000
+  a message may hold; nothing is sent until the person sends it.
 
 ## Chat awareness: context, attention, search
 

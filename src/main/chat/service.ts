@@ -17,6 +17,8 @@ import type {
   MessagePart,
   QueuedMessage,
   QueuedMode,
+  PendingInput,
+  PendingRequest,
 } from '../../shared/types';
 import { limitsKey, normalizeEndpoint, type DataStore } from '../data/store';
 import { detectLocalServers, listeningPorts } from './local-servers';
@@ -159,6 +161,18 @@ interface PiSession {
 interface PendingApproval {
   run: Run;
   settle(allow: boolean): void;
+  /** When it was asked; it answers itself, refused, five minutes later. */
+  at: number;
+}
+/** How long a tool's approval waits before it is refused. */
+const APPROVAL_WAIT_MS = 5 * 60_000;
+/** A map that says when what it holds changes: the open requests are told to
+ *  the window from every place one is added or taken, whatever took it. */
+class WatchedMap<K, V> extends Map<K, V> {
+  constructor(private readonly changed: () => void) { super(); }
+  override set(key: K, value: V): this { super.set(key, value); this.changed?.(); return this; }
+  override delete(key: K): boolean { const had = super.delete(key); if (had) this.changed(); return had; }
+  override clear(): void { const had = this.size > 0; super.clear(); if (had) this.changed(); }
 }
 export interface ChatServiceOptions {
   store: DataStore;
@@ -167,6 +181,8 @@ export interface ChatServiceOptions {
   emitQueue?(event: ChatQueueEvent): void;
   /** What a chat's plugins show changed: their widgets, statuses, notices and questions. */
   emitExtensionUi?(state: ExtensionUiState): void;
+  /** The requests waiting for the person changed (audit A1). */
+  emitPending?(state: PendingInput): void;
   browser?: BrowserHooks;
   /** The terminal and worker panes open beside a chat. */
   workers?: WorkerHooks;
@@ -464,10 +480,13 @@ export class ChatService {
   private readonly emit: ChatServiceOptions['emit'];
   private readonly emitQueue?: ChatServiceOptions['emitQueue'];
   private readonly emitExtensionUi?: ChatServiceOptions['emitExtensionUi'];
+  private readonly emitPending?: ChatServiceOptions['emitPending'];
+  private pendingRevision = 0;
+  private pendingQueued = false;
   /** Per chat, what its plugins show; it belongs to the Pi process that drew it. */
   private readonly extensionUi = new Map<string, ExtensionUiState>();
   /** A question → the Pi process that asked it, which alone can take the answer. */
-  private readonly extensionAsks = new Map<string, { conversationId: string; rpc: PiRpcProcess; timer?: ReturnType<typeof setTimeout> }>();
+  private readonly extensionAsks = new WatchedMap<string, { conversationId: string; rpc: PiRpcProcess; timer?: ReturnType<typeof setTimeout>; at: number; title: string; expiresAt?: number }>(() => this.pendingChanged());
   private readonly browser?: BrowserHooks;
   private readonly workers?: WorkerHooks;
   private readonly fetcher: typeof globalThis.fetch;
@@ -485,7 +504,7 @@ export class ChatService {
    *  picker asks on every open. */
   private found?: { at: number; servers: Promise<LocalServer[]> };
   private settling?: Promise<void>;
-  private readonly approvals = new Map<string, PendingApproval>();
+  private readonly approvals = new WatchedMap<string, PendingApproval>(() => this.pendingChanged());
   /** Each chat's plugin commands, as its Pi last said (pluginCommands). */
   private readonly commandsSaid = new Map<string, PluginCommand[]>();
   private readonly attachments: ChatAttachments;
@@ -521,6 +540,7 @@ export class ChatService {
     this.emit = options.emit;
     this.emitQueue = options.emitQueue;
     this.emitExtensionUi = options.emitExtensionUi;
+    this.emitPending = options.emitPending;
     this.browser = options.browser;
     this.workers = options.workers;
     this.fetcher = options.fetch ?? globalThis.fetch;
@@ -875,6 +895,39 @@ export class ChatService {
     if (!run) return;
     run.controller.abort(new Error(reason));
     await run.promise;
+  }
+  /**
+   * Every request waiting for the person now (audit A1), from the registers
+   * that hold them while they are open: a tool's approval with its reply and
+   * step, a plugin's question with its dialog. Oldest first.
+   */
+  pendingInput(): PendingInput {
+    const requests: PendingRequest[] = [];
+    for (const [id, pending] of this.approvals) {
+      const run = pending.run;
+      const part = run.message.parts?.find(item => item.type === 'tool' && item.approvalId === id);
+      requests.push({
+        requestId: id, conversationId: run.conversationId, kind: 'approval', createdAt: pending.at, expiresAt: pending.at + APPROVAL_WAIT_MS,
+        label: part?.type === 'tool' ? part.name : 'A tool',
+        target: { messageId: run.message.id, toolPartId: part?.type === 'tool' ? part.id : '' },
+      });
+    }
+    for (const [id, ask] of this.extensionAsks)
+      requests.push({
+        requestId: id, conversationId: ask.conversationId, kind: 'question', createdAt: ask.at,
+        ...(ask.expiresAt ? { expiresAt: ask.expiresAt } : {}), label: ask.title, target: { dialogId: id },
+      });
+    return { revision: this.pendingRevision, requests: requests.sort((a, b) => a.createdAt - b.createdAt) };
+  }
+  /** Changes in one turn of the loop are told once, under a new revision. */
+  private pendingChanged(): void {
+    if (this.pendingQueued || !this.emitPending) return;
+    this.pendingQueued = true;
+    queueMicrotask(() => {
+      this.pendingQueued = false;
+      this.pendingRevision += 1;
+      this.emitPending?.(this.pendingInput());
+    });
   }
   approve(approvalId: string, allow: boolean): void {
     const pending = this.approvals.get(approvalId);
@@ -1650,7 +1703,7 @@ export class ChatService {
       };
       // Pi answers a question with a timeout by itself when it runs out.
       const timer = dialog.expiresAt ? setTimeout(() => this.dropExtensionAsk(id), dialog.expiresAt - Date.now()) : undefined;
-      this.extensionAsks.set(id, { conversationId, rpc, ...(timer ? { timer } : {}) });
+      this.extensionAsks.set(id, { conversationId, rpc, ...(timer ? { timer } : {}), at: Date.now(), title: dialog.title, ...(dialog.expiresAt ? { expiresAt: dialog.expiresAt } : {}) });
       this.changeExtensionUi(conversationId, state => { state.dialogs = [...state.dialogs.filter(item => item.id !== id), dialog].slice(-10); });
       return;
     }
@@ -2103,7 +2156,7 @@ export class ChatService {
     part.status = 'approval';
     part.approvalId = id;
     return new Promise<boolean>((resolve, reject) => {
-      const timeout = setTimeout(() => finish(false), 5 * 60_000);
+      const timeout = setTimeout(() => finish(false), APPROVAL_WAIT_MS);
       const abort = () => {
         cleanup();
         reject(signal.reason);
@@ -2120,7 +2173,7 @@ export class ChatService {
         delete part.approvalId;
         resolve(allow);
       };
-      this.approvals.set(id, { run, settle: finish });
+      this.approvals.set(id, { run, settle: finish, at: Date.now() });
       run.approvalIds.add(id);
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) {

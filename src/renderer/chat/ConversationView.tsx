@@ -48,6 +48,8 @@ import {
   type MenuItem,
 } from "../ui/primitives";
 import { CodeBlock, Markdown } from "./Markdown";
+import { toolCode } from "./ToolCode";
+import { useFileMention } from "./FileMention";
 import { fetchedSources, readWebResult, sourcesForMessage, withSourceLinks, type WebSource } from '../../shared/web';
 import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolIcon, webToolTitle } from './WebResearch';
 import { activityLayout, activityRows, liveTail, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
@@ -61,6 +63,8 @@ import { useSkillCommands } from './SkillCommands';
 import { useExtensionUi } from './ExtensionPanel';
 
 const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
+/** The longest message main accepts (ChatService refuses a longer one). */
+const MESSAGE_LIMIT = 200_000;
 /** Chips main can show as a picture: an image snapshot, or a draft chip whose name says it is one. */
 function previewableAttachment(item: ChatAttachment): boolean {
   return item.kind === 'image' || IMAGE_NAME.test(item.name);
@@ -226,7 +230,7 @@ export function ToolPart({
           <span className="meta-label">Input</span>
           {WebIcon && webToolArgument(part) !== null
             ? <p className="web-tool-argument">{webToolArgument(part)}</p>
-            : <CodeBlock code={readableJson(part.input)} language="json" />}
+            : toolCode(part) ?? <CodeBlock code={readableJson(part.input)} language="json" />}
           {part.output !== undefined && (
             <>
               <span className="meta-label">Output</span>
@@ -234,7 +238,8 @@ export function ToolPart({
             </>
           )}
           {part.status === "approval" && (
-            <div className="approval-actions">
+            <div className="approval-actions" role="group" aria-label={`${webToolTitle(part)} asks for your approval`}
+              data-request-id={part.approvalId} tabIndex={-1}>
               <p>This tool is asking for your approval.</p>
               <button
                 type="button"
@@ -795,6 +800,7 @@ export function ConversationView({
     }
     return false;
   };
+  const [caret, setCaret] = useState<number | null>(null);
   const commands = useSkillCommands({
     conversationId: conversation.id, draft, setDraft, onError: reportError,
     focus: () => requestAnimationFrame(() => {
@@ -802,6 +808,17 @@ export function ConversationView({
       input?.focus();
       input?.setSelectionRange(input.value.length, input.value.length);
     }),
+  });
+  // @name attaches a file of the chat's folder (audit A3); the / menu keeps the keys while it is open.
+  const mention = useFileMention({
+    conversationId: conversation.id, folder: conversation.folder, draft, caret, blocked: commands.expanded,
+    setDraft: (text, at) => {
+      setDraft(text);
+      setCaret(at);
+      requestAnimationFrame(() => field.current?.setSelectionRange(at, at));
+    },
+    onAttach: paths => void importPaths(paths),
+    onError: reportError,
   });
   // The waiting list is main's, not this component's: it survives a reload, and
   // main decides when a held message is finally said.
@@ -841,7 +858,14 @@ export function ConversationView({
     const body = quote.verbatim
       ? quote.text
       : quote.text.split("\n").map((line) => `> ${line}`).join("\n");
-    setDraft((current) => `${current}${current ? "\n\n" : ""}${body}\n\n`);
+    // Words that would make the message longer than main takes are refused
+    // with the next step, never cut (audit A3b).
+    setDraft((current) => {
+      const next = `${current}${current ? "\n\n" : ""}${body}\n\n`;
+      if (next.length <= MESSAGE_LIMIT) return next;
+      setError(`Adding this would make the message longer than ${MESSAGE_LIMIT.toLocaleString("en-US")} characters. Send or shorten the draft, then add it again.`);
+      return current;
+    });
     const added = quote.attachments ?? [];
     if (added.length) {
       // Measured against the list as it is now, not as this effect last saw it.
@@ -1248,18 +1272,20 @@ export function ConversationView({
             </div>
           )}
           {commands.popup}
+          {mention.popup}
           <textarea
             ref={field}
             aria-label="Message"
             aria-autocomplete="list"
-            aria-controls={commands.expanded ? commands.listId : undefined}
-            aria-activedescendant={commands.activeId}
+            aria-controls={commands.expanded ? commands.listId : mention.expanded ? mention.listId : undefined}
+            aria-activedescendant={commands.activeId ?? mention.activeId}
             // While it works, saying what Enter will do is the whole affordance:
             // steering is otherwise invisible until something is already queued.
             placeholder={busy ? "Say it now — it reaches this reply" : "Ask anything"}
             value={draft}
             rows={2}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => { setDraft(event.target.value); setCaret(event.target.selectionStart); }}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
             onPaste={(event) => {
               const data = event.clipboardData;
               // A file copied in Finder has a path: it is attached as a drop is.
@@ -1275,6 +1301,7 @@ export function ConversationView({
             }}
             onKeyDown={(event) => {
               if (commands.onKeyDown(event)) return;
+              if (mention.onKeyDown(event)) return;
               if (recallKey(event)) { event.preventDefault(); return; }
               if (
                 event.key === "Enter" &&

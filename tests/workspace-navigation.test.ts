@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { navigationShown } from '../src/renderer/workspace/navigation';
+import { navigationShown, transcriptShown } from '../src/renderer/workspace/navigation';
+import type { WorkspacePrefs } from '../src/renderer/workspace/Workspace';
 
 const chat = { toolsOpen: false, chatOpen: true, expanded: false, toolsExpanded: false };
 const tools = { ...chat, toolsOpen: true };
@@ -25,5 +26,24 @@ describe('the chats sidebar', () => {
     // The person's own choice, and a window too narrow for it, still hide it.
     expect(navigationShown('hidden', chat, 1600, true)).toBe(false);
     expect(navigationShown('auto', chat, 700, true)).toBe(false);
+  });
+});
+
+// Audit A1: a chat is seen only when its transcript is what its workspace shows.
+describe('whether a chat’s transcript is in front', () => {
+  const ui: WorkspacePrefs = { chatOpen: true, toolsOpen: false, minimized: false, expanded: false, toolsMinimized: false,
+    toolsExpanded: false, chatTab: 'chat', notebookTabs: ['runbook', 'tasks'], toolId: null, focus: 'chat', split: 0.35 };
+  it('is, with the Chat page of an open, unminimized pane', () => {
+    expect(transcriptShown(ui, false)).toBe(true);
+    expect(transcriptShown({ ...ui, toolsOpen: true, expanded: true }, false)).toBe(true);
+  });
+  it('is not behind the Notebook, a terminal tab, expanded tools, a minimized pane or a compact Tools view', () => {
+    expect(transcriptShown({ ...ui, chatTab: 'notebook' }, false)).toBe(false);
+    expect(transcriptShown({ ...ui, chatTerminal: 'term-1' }, false)).toBe(false);
+    expect(transcriptShown({ ...ui, toolsOpen: true, toolsExpanded: true }, false)).toBe(false);
+    expect(transcriptShown({ ...ui, minimized: true }, false)).toBe(false);
+    expect(transcriptShown({ ...ui, chatOpen: false }, false)).toBe(false);
+    expect(transcriptShown({ ...ui, toolsOpen: true, focus: 'tools' }, true)).toBe(false);
+    expect(transcriptShown({ ...ui, toolsOpen: true, focus: 'tools' }, false)).toBe(true);
   });
 });

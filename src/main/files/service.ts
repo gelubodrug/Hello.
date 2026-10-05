@@ -1,17 +1,116 @@
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileDocument, FileEntry, FileListing } from '../../shared/files';
+import type { ContentMatch, ContentSearch, FileDocument, FileEntry, FileListing } from '../../shared/files';
 
 const MAX_ENTRIES = 10_000;
 const MAX_BYTES = 2 * 1024 * 1024;
 const SEARCH_SKIP = new Set(['.git', 'node_modules', '.next', '.venv', 'venv', 'dist', 'out', 'build', 'coverage']);
+/** How far a search of the contents goes (audit A3b): starting limits, not measurements. */
+export const CONTENT_SEARCH_LIMITS = { results: 200, entries: MAX_ENTRIES, depth: 24, bytes: 20 * 1024 * 1024, ms: 4000, fileBytes: MAX_BYTES, fileLines: 20_000 } as const;
+/** A line longer than this is shown as a piece around its match. */
+const SNIPPET = 160;
 const inside = (root: string, target: string) => { const path = relative(root, target); return !path || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)); };
 const portable = (path: string) => path.split(sep).join('/');
 
 /** No renderer-supplied root, arbitrary filesystem IPC, writes or agent tool. */
 export class WorkspaceFiles {
+  /** One search of the contents at a time per chat: a newer one stops the older. */
+  private searches = new Map<string, { requestId: string; controller: AbortController }>();
   constructor(private folder: (conversationId: string) => string | null) {}
+
+  /** Stops the chat's search of the contents, if one runs (Files hidden, folder changed). */
+  cancelSearch(conversationId: string): void {
+    this.searches.get(conversationId)?.controller.abort();
+    this.searches.delete(conversationId);
+  }
+
+  /**
+   * The lines of the chat's folder that hold the words, literally (audit A3b):
+   * regular UTF-8 text files within the limits, read once each and kept
+   * nowhere; links are not followed, and dependency, build and .git folders
+   * are passed over. It stops at a limit with what it has, and says which.
+   */
+  async searchContents(conversationId: string, requestId: string, query: string, matchCase = false): Promise<ContentSearch> {
+    this.cancelSearch(conversationId);
+    const controller = new AbortController();
+    this.searches.set(conversationId, { requestId, controller });
+    const result: ContentSearch = { requestId, matches: [], limited: false, reasons: [], filesScanned: 0, bytesScanned: 0, skipped: 0 };
+    const stop = (reason: ContentSearch['reasons'][number]) => { result.limited = true; if (!result.reasons.includes(reason)) result.reasons.push(reason); };
+    const needle = matchCase ? query : query.toLocaleLowerCase();
+    try {
+      const target = await this.target(conversationId, '');
+      const deadline = Date.now() + CONTENT_SEARCH_LIMITS.ms;
+      const pending = [{ absolute: target.absolute, depth: 0 }];
+      let visited = 0;
+      // A stopped search ends where it is; nobody reads what it found.
+      for (let index = 0; index < pending.length && !result.limited && !controller.signal.aborted; index++) {
+        const directory = pending[index];
+        try {
+          // A folder swapped for a link while the search ran is not followed.
+          if ((await realpath(directory.absolute)) !== directory.absolute || !inside(target.root, directory.absolute)) { result.skipped++; continue; }
+          const stream = await opendir(directory.absolute);
+          for await (const entry of stream) {
+            if (controller.signal.aborted) break;
+            if (++visited > CONTENT_SEARCH_LIMITS.entries) { stop('entries'); break; }
+            if (Date.now() > deadline) { stop('time'); break; }
+            const absolute = resolve(directory.absolute, entry.name);
+            if (entry.isDirectory()) {
+              if (SEARCH_SKIP.has(entry.name) || directory.depth >= CONTENT_SEARCH_LIMITS.depth) result.skipped++;
+              else pending.push({ absolute, depth: directory.depth + 1 });
+              continue;
+            }
+            if (!entry.isFile()) { result.skipped++; continue; }
+            const text = await this.searchable(absolute, result, stop);
+            if (text === null) continue;
+            result.filesScanned++;
+            const path = portable(relative(target.root, absolute));
+            const lines = text.split(/\r?\n/);
+            for (let at = 0; at < lines.length; at++) {
+              const line = lines[at];
+              const folded = matchCase ? line : line.toLocaleLowerCase();
+              // A line whose lower case changes its length is searched as written.
+              const found = (folded.length === line.length ? folded : line).indexOf(needle);
+              if (found < 0) continue;
+              if (result.matches.length >= CONTENT_SEARCH_LIMITS.results) { stop('results'); break; }
+              result.matches.push(snippetOf(path, at + 1, line, found, needle.length));
+            }
+            if (result.limited) break;
+          }
+        } catch (error) { if (!index) throw error; result.skipped++; }
+      }
+      return result;
+    } finally {
+      if (this.searches.get(conversationId)?.controller === controller) this.searches.delete(conversationId);
+    }
+  }
+
+  /** A file's text when it is a regular UTF-8 file within the limits; null, and counted as passed over, when not. */
+  private async searchable(absolute: string, result: ContentSearch, stop: (reason: ContentSearch['reasons'][number]) => void): Promise<string | null> {
+    let handle;
+    try { handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    catch { result.skipped++; return null; }
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size > CONTENT_SEARCH_LIMITS.fileBytes) { result.skipped++; return null; }
+      if (result.bytesScanned + stat.size > CONTENT_SEARCH_LIMITS.bytes) { stop('bytes'); return null; }
+      const buffer = Buffer.alloc(Math.min(stat.size, CONTENT_SEARCH_LIMITS.fileBytes) + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const read = await handle.read(buffer, length, buffer.length - length, null);
+        if (!read.bytesRead) break;
+        length += read.bytesRead;
+      }
+      result.bytesScanned += length;
+      if (length > CONTENT_SEARCH_LIMITS.fileBytes) { result.skipped++; return null; }
+      const bytes = buffer.subarray(0, length);
+      if (bytes.includes(0)) { result.skipped++; return null; }
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      if (text.split('\n', CONTENT_SEARCH_LIMITS.fileLines + 2).length > CONTENT_SEARCH_LIMITS.fileLines) { result.skipped++; return null; }
+      return text;
+    } catch { result.skipped++; return null; }
+    finally { await handle.close(); }
+  }
 
   async target(conversationId: string, path: string) {
     const folder = this.folder(conversationId);
@@ -97,4 +196,17 @@ export class WorkspaceFiles {
       return document;
     } finally { await handle.close(); }
   }
+}
+
+/** A line, or the piece of it around the match, with the match's place in what is shown. */
+function snippetOf(path: string, line: number, text: string, found: number, length: number): ContentMatch {
+  if (text.length <= SNIPPET) return { path, line, snippet: text, start: found, end: found + length };
+  let from = Math.max(0, Math.min(found - 60, text.length - SNIPPET));
+  let to = from + SNIPPET;
+  // A character written as two code units stays whole at either edge.
+  if (from > 0 && /[\uDC00-\uDFFF]/.test(text[from])) from--;
+  if (to < text.length && /[\uD800-\uDBFF]/.test(text[to - 1])) to++;
+  const lead = from > 0 ? '…' : '';
+  const start = found - from + lead.length;
+  return { path, line, snippet: `${lead}${text.slice(from, to)}${to < text.length ? '…' : ''}`, start, end: start + Math.min(length, to - found) };
 }

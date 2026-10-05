@@ -27,6 +27,7 @@ const GROUPS: Group[] = [
   ]},
   { title: 'Navigation', items: [
     { keys: `${mod} + /`, label: 'Show keyboard shortcuts' },
+    { keys: `${mod} + Shift + P`, label: 'Go to a chat, tab, message or command' },
     { keys: `${mod} + N`, label: 'New chat' },
     { keys: `${mod} + 1–9`, label: 'Go to the chat at that place in the list' },
     { keys: `${mod} + Shift + ] / [`, label: 'Next or previous chat' },

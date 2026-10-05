@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions } from '../src/main/chat/pi-rpc';
 import type { PiToolBridgeOptions } from '../src/main/chat/pi-tool-bridge';
-import type { BrowserTab, ChatEvent, ChatQueueEvent, Message, MessagePart } from '../src/shared/types';
+import type { BrowserTab, ChatEvent, ChatQueueEvent, Message, MessagePart, PendingInput } from '../src/shared/types';
 
 // This suite exercises Hello's lifecycle/tool policy, never a real Pi child,
 // loopback listener, model server or CLI. Keep the transport mocks unconditional.
@@ -133,7 +133,7 @@ afterEach(async () => {
   }
 });
 
-function create(options: Pick<ChatServiceOptions, 'fetch' | 'browser' | 'localServers' | 'piEntry'> = {}): ChatService {
+function create(options: Pick<ChatServiceOptions, 'fetch' | 'browser' | 'localServers' | 'piEntry' | 'emitPending'> = {}): ChatService {
   // Never the real lsof and the real ports of the machine running the tests.
   service = new ChatService({ store, emit: event => events.push(structuredClone(event)),
     emitQueue: event => queueEvents.push(structuredClone(event)), localServers: async () => [], ...options });
@@ -366,6 +366,30 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
         status: asks || spawns ? 'error' : 'complete',
       }),
     ]);
+  });
+
+  // Audit A1: what waits for the person is told from main's registers, under a rising revision.
+  it('tells the window which approval waits, and takes it away once answered', async () => {
+    store.updateConversation(conversationId, { folder: directory });
+    store.saveSettings({ approvals: 'ask' });
+    const told: PendingInput[] = [];
+    const chat = create({ emitPending: state => told.push(structuredClone(state)) });
+    const running = chat.send(conversationId, 'Write a file');
+    const current = await runtime();
+    const write = tool(current, 'file_write', { path: 'pending.txt', content: 'x' }, 'write-pending');
+    const allowed = expect(write).resolves.toContain('Wrote');
+    await vi.waitFor(() => expect(told.at(-1)?.requests).toHaveLength(1));
+    const [request] = told.at(-1)!.requests;
+    expect(request).toMatchObject({ conversationId, kind: 'approval', label: 'file_write',
+      target: { messageId: expect.any(String), toolPartId: 'write-pending' } });
+    expect(request.expiresAt! - request.createdAt).toBe(5 * 60_000);
+    expect(chat.pendingInput().requests).toEqual([request]);
+    chat.approve(request.requestId, true);
+    await allowed;
+    await vi.waitFor(() => expect(told.at(-1)?.requests).toEqual([]));
+    expect(told.at(-1)!.revision).toBeGreaterThan(told[0].revision);
+    settle(current.rpc, 'Done.');
+    await running;
   });
 
   it('Stop cancels pending approvals and closes the runtime before releasing the run', async () => {

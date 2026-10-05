@@ -61,6 +61,7 @@ const DEFAULT_SETTINGS: StoredSettings = {
   modelCompatibility: 'auto',
   approvals: 'all',
   connections: [],
+  appearance: 'system',
 };
 
 const strip = ({ apiKeySet: _apiKeySet, ...entry }: SavedConnection): StoredConnection => entry;
@@ -866,6 +867,7 @@ export class DataStore {
       maxOutputTokens: patch.maxOutputTokens ?? current.maxOutputTokens ?? 4096,
       modelCompatibility: patch.modelCompatibility ?? current.modelCompatibility ?? 'auto',
       approvals: patch.approvals ?? current.approvals ?? 'all',
+      appearance: patch.appearance ?? current.appearance ?? 'system',
       subagentModel: patch.subagentModel !== undefined ? (patch.subagentModel.trim().slice(0, 500) || undefined) : current.subagentModel,
       // What was learned about one model does not carry to the next.
       contextScale: patch.contextScale ?? current.contextScale,
@@ -906,6 +908,8 @@ export class DataStore {
       throw new Error('Invalid model compatibility.');
     if (!['ask', 'writes', 'all'].includes(next.approvals!))
       throw new Error('Invalid approval mode.');
+    if (!['system', 'light', 'dark'].includes(next.appearance!))
+      throw new Error('Appearance is System, Light or Dark.');
     // A remembered entry for this endpoint follows the model saved for it, so
     // switching away and back does not silently restore an older model.
     next.connections = next.connections.map(entry =>

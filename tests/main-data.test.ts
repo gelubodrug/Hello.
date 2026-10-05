@@ -339,6 +339,16 @@ describe('new application persistence', () => {
     expect(store.rememberConnection('Renamed').connections[0]).toMatchObject({ name: 'Renamed' });
     expect(store.getSettings().connections).toHaveLength(12);
   });
+  // Audit B2: System, Light or Dark, kept between runs.
+  it('keeps the appearance chosen, System until one is, and refuses anything else', () => {
+    expect(store.getSettings().appearance).toBe('system');
+    expect(store.saveSettings({ appearance: 'dark' }).appearance).toBe('dark');
+    // Another change does not move it.
+    expect(store.saveSettings({ temperature: 0.4 }).appearance).toBe('dark');
+    expect(() => store.saveSettings({ appearance: 'sepia' as never })).toThrow(/System, Light or Dark/);
+    expect(store.getSettings().appearance).toBe('dark');
+  });
+
   it('fails closed if encryption fails and validates settings', () => {
     store.close();
     store = createDataStore(directory, {

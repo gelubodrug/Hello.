@@ -10,7 +10,6 @@ aplicația acum: `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PROVENANCE.md
 - [ ] Subagenții pi-subagents rulează cu uneltele Pi (bash, edit, write) fără aprobările Hello. Îi
       restrânge Hello (de exemplu `subagents.agentOverrides` cu tools)?
 - [ ] Butonul primar e albastru în repaus: așa e în referința aprobată, revizia S202 l-a semnalat.
-- [ ] Pi 1.0.3 în `package.json` și lockfile, schimbat din afara sesiunii, necomis.
 - [ ] Checkpoint-urile aplicația-soră (`the tooling’s checkpoint refs`): păstrate sau șterse.
 - [ ] O cheie OpenRouter (`HELLO_QA_API_KEY`) e comisă în primele rânduri din `.gitignore`, din 10.09:
       de rotit la OpenRouter și de mutat în `.env` (ignorat); istoricul git o păstrează.
@@ -46,9 +45,16 @@ aplicația acum: `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PROVENANCE.md
 
 - Low/Medium/High ajung la MTPLX doar ca „gândire pornită”; `reasoning_effort` nu e trimis (Kimi la fel).
 - Extensia OpenViking publicată nu se importă: nu are `pi` în package.json; merge doar împachetată.
+- Files › Contents caută literal: un text scris cu diacritice descompuse (NFD) nu se potrivește cu unul tastat
+  compus (NFC), iar o linie a cărei literă mică își schimbă lungimea (de exemplu „İ”) e căutată doar așa cum e scrisă.
 
 ## De verificat în aplicație (utilizatorul)
 
+- [ ] Auditul UI din 05.10 (toate șase sunt implementate, testate unitar, neverificate în aplicație):
+      „Needs your attention” cu două aprobări în chaturi diferite și o întrebare de plugin cât Notebook sau
+      DSH acoperă chatul, apoi „Open request”; diff-ul la o aprobare `file_edit`; Settings › App › Appearance;
+      ⌘⇧P „Go to…”; `@nume` în composer; Files › Contents (Match case, click pe un rezultat), apoi
+      „Add selection to chat” din bara Files și din click dreapta, inclusiv cu Chat minimizat.
 - [ ] Modelul per chat: două chaturi pe modele diferite, unul pornit în timp ce celălalt răspunde.
 - [ ] 05.10: meniurile, rezumarea, overlay-ul ⌘/, focusul după Edit, dialogurile, „Open tools”,
       secțiunile Notebook oprite într-un chat nou, tabul „Chat”, click dreapta în browser.
