@@ -7,7 +7,7 @@ below were consulted read-only; no old user database or credentials were copied.
 
 `/Users/q/Documents/app chat local models first/design/mockup/` was copied as a
 complete source snapshot into `design/reference/`. Its manifest records the
-original source hashes. `design/LOOK.md` pins the approved appearance. Production
+original source hashes. `design/reference/design/LOOK.md` pins the approved appearance. Production
 reuses the approved tokens and animation primitives; the app/state/IPC are new.
 
 ## Chat page label reveal — 2026-09-10
@@ -101,7 +101,7 @@ Explicit Open / Show in Finder use Electron's
 
 ## Extensions library, MCP client and examples — 2026-09-10
 
-Implemented from `docs/NIGHT-PLAN-2026-09-10.md` against Hello's own code and
+Implemented from `docs/archive/NIGHT-PLAN-2026-09-10.md` against Hello's own code and
 the installed Pi documentation (`docs/skills.md`, `docs/packages.md`,
 `docs/extensions.md`, `docs/rpc.md`, `docs/usage.md` in
 `@earendil-works/pi-coding-agent` 0.85.1). No sibling-app source was consulted for
@@ -133,7 +133,7 @@ dependencies (`yaml` 2.9.0, `minimatch` 10.2.6). It consulted the installed Pi
 0.85.1 package loader and prompt-template documentation. MCP lifecycle, tools
 pagination/capabilities and cancellation were checked against the official
 2025-06-18 specification; links, repairs and validation results are recorded in
-[EXTENSIONS-VERIFICATION-2026-09-10](EXTENSIONS-VERIFICATION-2026-09-10.md).
+[EXTENSIONS-VERIFICATION-2026-09-10](archive/EXTENSIONS-VERIFICATION-2026-09-10.md).
 
 ## Dependencies and assets
 

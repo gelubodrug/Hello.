@@ -23,6 +23,10 @@ node_modules/
 dist/
 build/
 out/
+# electron-builder's output (package.json build.directories.output) and what
+# the smoke and model-check scripts write: generated, never the source.
+release/
+test-results/
 target/
 .next/
 .nuxt/

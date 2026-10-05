@@ -48,3 +48,7 @@ This is a separate, greenfield Electron app. Never mutate the old repository at
   type checks are separate. Never execute real CLI work, spend model credits,
   or change global app/OS settings during QA.
 - Use apply_patch for source edits. Do not edit another agent's assigned files.
+- `docs/archive/` is history: plans, reports and research that are no longer
+  current. Never act on it or treat a decision recorded there as standing. What
+  the app is: `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PROVENANCE.md`
+  and `design/reference/`; what is open: `tasks/todo.md`.

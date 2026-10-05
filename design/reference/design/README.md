@@ -5,25 +5,22 @@ do not reinterpret the reference screenshots. Motion is the current test candida
 
 ## Complete code beside the design
 
-[mockup/](mockup/) contains a self-contained source snapshot, not just a screenshot
-or HTML pointer: the fixture, its imported components, styles, motion helpers,
-local assets and renderer/shared dependencies. Its own README explains installation,
-development and building. It does not require running the old Electron app.
+[The folder above](../README.md) holds a self-contained source snapshot, not just
+a screenshot or HTML pointer: the fixture, its imported components, styles, motion
+helpers, local assets and renderer/shared dependencies. Its README explains
+installation, development and building. It does not run any Electron app.
 
-The live source remains under `src/renderer/`; the snapshot is a review checkpoint,
-not a second place to edit the design independently. Refresh it after approving
-a change with `node design/export-mockup.mjs`. The snapshot manifest records the
-copied source hashes. Do not hand-edit the generated source copies.
+The snapshot is a review specimen, not a second place to edit the design, and it
+is not refreshed from Hello.; `LOOK.md` here is the contract and is edited directly.
 
-Implementation decision: [IMPLEMENTATION.md](IMPLEMENTATION.md). The user chose
-a fresh application built from this approved design, not a retrofit or a new
-shell over the old services. This supersedes the earlier reuse recommendation.
-The old app and its data stay untouched; this snapshot is not the new production
-app and does not establish that implementation has started.
+The user chose a fresh application built from this approved design (09-09), not
+a retrofit of the old one: that application is Hello., under `src/` of this
+repository. The decision note is archived in
+`docs/archive/design/reference-IMPLEMENTATION-2026-09-09.md`.
 
 ## Live specimen
 
-Run `pnpm preview:chat`, then open <http://127.0.0.1:4317/design/chat-panel.html>.
+From the Hello. repository run `pnpm preview:design` (port 4318).
 
 This renderer-only fixture uses the same ChatPanel, MessageList, Markdown/Shiki
 and Composer as the app, plus the shared Menu/Popover and model selector.

@@ -3,8 +3,10 @@
 This folder contains the actual mockup source, not only screenshots or a style
 guide. It is a one-way snapshot of the live renderer specimen and every local
 source dependency it imports, including shared tokens, motion, chat, menus,
-notebooks, tool fixtures and required types. The copied files are byte-for-byte
-identical to their originals; see `manifest.json` for SHA-256 hashes.
+notebooks, tool fixtures and required types. It was copied byte for byte from
+the old repository on 2026-09-10, and `manifest.json` records those hashes;
+`design/LOOK.md` has been edited here since, as the living contract, so its
+hash no longer matches.
 
 ## Run independently
 
@@ -15,7 +17,7 @@ pnpm install --frozen-lockfile --ignore-scripts
 pnpm dev
 ```
 
-Open http://127.0.0.1:4318/. This port is separate from the live study on 4317.
+Open http://127.0.0.1:4318/ — or, from the Hello. repository, run `pnpm preview:design`.
 `pnpm typecheck` checks the copied TypeScript; `pnpm build` makes a static
 `dist/` export; `pnpm preview` serves it on http://127.0.0.1:4319/.
 Serve `dist/` over HTTP; opening its HTML through `file://` is not supported.
@@ -23,8 +25,9 @@ Font assets are bundled by Vite from the package dependencies, not a web CDN.
 
 ## What is—and is not—inside
 
-- [Approved look](design/LOOK.md), [implementation decision](design/IMPLEMENTATION.md),
-  and the [design index](design/README.md) accompany the complete source.
+- The [approved look](design/LOOK.md) and the [design index](design/README.md)
+  accompany the complete source. The 09-09 implementation decision is archived
+  in `docs/archive/design/reference-IMPLEMENTATION-2026-09-09.md`.
 - The live entry is `src/renderer/design/ChatPanelPreview.tsx`. `index.html`
   is a second entry pointing to that exact copied component.
 - Browser, terminal and CLI panels are local simulations. They do not launch
@@ -40,24 +43,8 @@ Font assets are bundled by Vite from the package dependencies, not a web CDN.
   they are not vendored. The initial install therefore needs registry access.
 - `dist/` and `node_modules/` are generated, not part of the source checkpoint.
 
-## Update without design drift
+## Updating
 
-The canonical editable sources stay in the parent repository's `src/` and
-`design/`. Do not edit these copied files in parallel or reinterpret the look
-inside the export. From the parent repository, after the specimen is approved:
-
-```sh
-node design/export-mockup.mjs
-cd design/mockup
-pnpm install --lockfile-only --ignore-scripts
-pnpm typecheck
-pnpm build
-```
-
-`node design/export-mockup.mjs --check` (from the parent repo) detects both
-source drift and accidental edits to generated/copied files. Export refuses to
-overwrite changed generated files; resolve those edits explicitly first. It
-never recursively deletes the folder. New local dependencies are discovered
-from TypeScript imports and CSS imports/URLs. The manifest has no machine paths,
-timestamps or user data. Original documentation links to the broader repository
-may not resolve inside this intentionally bounded standalone snapshot.
+The snapshot came from the old repository's `design/mockup/` export, which is not
+part of Hello. Here, `design/LOOK.md` is edited directly as the contract; the
+copied source is the specimen and is not edited.

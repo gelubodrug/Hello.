@@ -3,8 +3,9 @@
 These are rules, not a plan. They were read off a transcript the user approved as
 the target on 2026-09-11, next to Hello.'s own, which the user rejected in the
 same breath: *"arată ca un app de pe internet, nu ca un app osx nativ."* Anything
-in `CHAT-ACTIVITY.md` that contradicts a rule here is superseded — that document
-is the history of how we got here, this one is what we hold to.
+in `docs/archive/design/CHAT-ACTIVITY-2026-09-10.md` that contradicts a rule here
+is superseded — that document is the history of how we got here, this one is
+what we hold to.
 
 Read this before touching the timeline. A change that breaks a rule is a
 regression even when someone asked for it in the moment; say so and propose the
@@ -110,7 +111,8 @@ These sizes come from the existing tokens; use the tokens, not the numbers.
 ## R11 — Its own work, and only its own
 
 A document the model generated opens with Agent control at Full, so it can look
-at what it made. Nothing else does. The grant is attached to the document: the
+at what it made — and since 29.09 so does every tab the model opens for its work
+(AGENTS.md). The grant on a generated document is attached to the document: the
 moment that tab shows anything else — navigated by the model, by the reader, or
 by the page sending itself away — it is Off again.
 

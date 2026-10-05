@@ -15,10 +15,10 @@ The motion study below is separate and still awaits user testing.
   [typography.css](../src/renderer/styles/typography.css) and
   [motion.css](../src/renderer/styles/motion.css). Use their variables. A mismatch
   is something to reconcile, not permission to add local color or timing values.
-- The renderer-only [live specimen](http://127.0.0.1:4317/design/chat-panel.html)
-  uses the real [ChatPanel](../src/renderer/chat/ChatPanel.tsx), composer and menus.
-  Run `pnpm preview:chat` if the local preview is not running. It does not launch
-  Electron. The fixture composition is not proof of a completed workspace refactor.
+- The renderer-only live specimen uses the real
+  [ChatPanel](../src/renderer/chat/ChatPanel.tsx), composer and menus. From the
+  Hello. repository, `pnpm preview:design` serves it on port 4318. It does not
+  launch Electron, and it is not proof of what the app ships.
 
 ## Character, type and density
 
@@ -233,6 +233,70 @@ Pointer and keyboard use the same roving active row; never light two rows at
 once. Disabled rows and separators are not keyboard stops. Delete stays neutral
 in its final menu group; destructive confirmation stays explicit and red.
 The model picker shares this dropdown surface without losing search or metadata.
+
+## The app's refinements — 2026-09-09/10, carried over 2026-10-05
+
+The production look kept these on top of the contract above; they are what the
+app ships. (The production file they came from is archived as
+`docs/archive/design/LOOK-production-2026-09-10.md`; where it disagrees with this
+section or with `design/CHAT-ACTIVITY-RULES.md`, it is the archive that is out of date.)
+
+- **Window chrome.** Navigation holds only the top-left 272 × 48px: native traffic
+  lights, Hello., Search, New and Pin sidebar; Settings sits at the sidebar
+  bottom. Hidden navigation hides its header too; a quiet 4px left-edge target
+  reveals the whole sidebar as an overlay with the shared fade and a 24px slide,
+  and leaving it, an outside click or Escape dismisses it. Pin/Unpin is one 16px
+  outlined left-panel glyph in the shared 28px icon button, with `aria-pressed`.
+  Pane tab rows are 48px; the first pane reserves the 96px traffic-light
+  footprint when navigation is hidden. Open tools, with the tools closed, is the
+  two-column icon alone (user, 05.10).
+- **Tools tabs** share the strip: up to 210px each, down to a 32px icon. Names
+  fade as space contracts; under 96px the inline X yields, at 52px only the icon
+  remains; full names stay in tooltips. Close stays available by right-click,
+  middle-click or Delete on a focused tab. Only icon-width tabs may scroll.
+- **File drops** use the hover material and edge token locally, in the composer
+  or the terminal, with a compact hint only while dragging or importing. Draft
+  attachments are removable pills: 12px labels, 14px glyphs, 24px remove buttons.
+  A drop never sends a message or types into a terminal.
+- **Transcript edge.** A static 24px top fade (`--chat-transcript-top-fade`,
+  `--chat-transcript-mask`) softens content into the panel below the Chat and
+  Notebook row; the composer and notebook stay outside it; forced colors turn it off.
+- **Thinking and activity headers** are text-only, Inter regular 15px, with a
+  trailing 16px chevron at a 1.75 stroke. Active reasoning reads “Thinking” with a
+  restrained monochrome shimmer (2.2s, the one status-only motion exception);
+  done, “Thought”, “Thought briefly” or “Thought 2s” from the supplied duration,
+  the exact time in the tooltip. Disclosures open down and close up with the 4px
+  reveal offset, 160ms enter and 120ms exit; closing content stays mounted
+  through the exit, is inert at once, and returns focus to its trigger. Reduced
+  motion turns off the shimmer and the disclosure motion.
+- **Browser AI Mode pill**: 104 × 24px inside the right end of the 32px address
+  bar, inset 4px, with the 16px magnifier/sparkle glyph and Inter medium 13px;
+  solid grey for Off, warm orange for Read, red for Full (`--browser-ai-*`). The
+  mode is in its tooltip, accessible name and the checked item of the AI Mode menu.
+- **CLI context row** above xterm: 12px Inter, the launch folder by name with the
+  path as tooltip, “Hello connected” while a connected session runs, and “Open in
+  <folder>” when the chat's folder differs, which opens another CLI beside it.
+- **Notebook.** Rich text by default, Markdown as storage; no Edit/Preview toggle.
+  A formatting command applies to the whole selection; undo belongs to the entry.
+  Right-click offers Copy (formatted, with plain text) and Copy Markdown. A save
+  that conflicts with newer content keeps the draft and offers “Save draft as
+  new” and “Reload latest…”, the latter behind the confirmation dialog.
+- **Files tool**: document left, tree right (32%, 200–320px, 32px rows, 16px
+  indents, one quiet divider), a 40px path/Preview/Source/Copy/Open/tree toolbar,
+  and below 600px the two switch instead of squeezing. File-type icons from the
+  bundled Symbols family are the one colour exception, for type identity only.
+- **Composer selector**: transparent at rest, a grey oval on hover or while open
+  (`--composer-selector-hover-fill`), a stronger tonal fill for keyboard focus
+  (`--composer-selector-focus-fill`); `--r-pill`, 12px padding, 8px gap, 28px
+  high, no outline, border or shadow.
+- **Chat/Coder switch**, the first composer action: a 28px glass control, 2px
+  inset, 28 × 24px segments, 32px wide at rest and 60px open, from the
+  `--mode-switch-*` roles, without outlines; it opens on click or tap, not hover.
+  The first pane pill always reads **Chat**; only its icon follows the mode,
+  MessageCircle or CodeXml (user, 05.10). Reduced motion makes the change instant.
+- **Page pill labels.** The selected pill shows icon and title, the others only
+  their icon; hover or focus reveals a title with `--motion-tab-label` (80ms) and
+  `--ease-tab-label`, no translate or delay; accessible names stay complete.
 
 ## Motion candidate — test before approval
 

@@ -1,7 +1,7 @@
 /* The width-reveal switch: collapsed it shows the side you are on, and opens
    to show both. Chat/Coder was the first; Plan on/off is the same control,
    because it is the same kind of choice — one that stays (user, 17.09).
-   The user-requested local width-reveal exception is recorded in LOOK.md.
+   The user-requested local width-reveal exception is recorded in design/reference/design/LOOK.md.
    Shared material, spacing, focus, and motion roles remain authoritative. */
 .pill-switch {
   display: inline-flex;

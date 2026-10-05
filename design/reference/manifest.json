@@ -11,12 +11,6 @@
       "bytes": 361
     },
     {
-      "source": "design/IMPLEMENTATION.md",
-      "file": "design/IMPLEMENTATION.md",
-      "sha256": "79b8e4f119f9ac28050ce9482eab363e65db81fd04b83dc32790255da00d3418",
-      "bytes": 4809
-    },
-    {
       "source": "design/LOOK.md",
       "file": "design/LOOK.md",
       "sha256": "9d3a775b3e9364263a550ada73dc24df5e5d2b1a03efd4bab20afb6f29ecb62c",

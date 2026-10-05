@@ -15,7 +15,7 @@ boundary is recorded in
 | Preload | Explicit typed `window.hello` methods and event subscriptions; no general-purpose IPC exposure | [`preload/index.ts`](../src/preload/index.ts), [`shared/types.ts`](../src/shared/types.ts) |
 | App renderer | Conversation UI, notebooks, tool pills, layout, local drafts, Markdown and terminal display | [`renderer/`](../src/renderer/) |
 | Web content | Remote pages in `<webview>` guests, separately sandboxed and without the app preload; every preference written by main at attach | [`browser/manager.ts`](../src/main/browser/manager.ts) |
-| Chat child (manual validation pending) | Pinned Pi 0.85.1 in persistent RPC mode; agent execution and session context | [`chat/pi-rpc.ts`](../src/main/chat/pi-rpc.ts), [`chat/pi-extension.ts`](../src/main/chat/pi-extension.ts) |
+| Chat child | Pi in persistent RPC mode — the version pinned in package.json, or one updated from the sidebar into `<data>/pi/runtime`; agent execution and session context | [`chat/pi-rpc.ts`](../src/main/chat/pi-rpc.ts), [`chat/pi-extension.ts`](../src/main/chat/pi-extension.ts) |
 | Terminal children | Interactive shells and explicitly launched CLI clients; separate from the chat engine | [`terminal/`](../src/main/terminal/) |
 | DSH host (utility process) | One DeepSeek Harness profile (`hello`), booted like dsh's own desktop host; runs dsh plugins, third-party code | [`dsh/host-entry.ts`](../src/main/dsh/host-entry.ts), [`dsh/service.ts`](../src/main/dsh/service.ts) |
 | DSH surface (web content) | dsh's own web client in one `<webview>` of partition `persist:hello-dsh`, no preload; src and every preference from main | [`dsh/surface.ts`](../src/main/dsh/surface.ts), [`renderer/dsh/DshView.tsx`](../src/renderer/dsh/DshView.tsx) |
@@ -37,9 +37,11 @@ Notebook (user, 29.09: one button beside Chat, not one per section). The
 notebook is one pane: a tree of three sections — Runbooks, Tasks and Plans —
 each with its chapters, beside the editor. A section's switch is the chat's own
 Runbook, Tasks or Plan setting (Plans holds the plan `plan_write` keeps and is
-on while Plan is); each chapter has a switch of its own. The model and CLI
-workers see only the chapters that are on, in sections that are on; what is off
-stays visible and editable, quieter. A saved Runbook or Tasks page opens the
+on while Plan is); each chapter has a switch of its own. All three sections are
+off in a new chat (user, 05.10); a chat made while Runbook and Tasks started on
+keeps them (database version 15). The model and CLI workers see only the
+chapters that are on, in sections that are on; what is off stays visible and
+editable, quieter. A saved Runbook or Tasks page opens the
 notebook. The tool area
 contains browser, terminal and CLI-worker session pills. Only one tool surface
 is visible at a time. With
@@ -56,8 +58,8 @@ The first pane reserves 96px for native window controls when navigation is hidde
 pointer/keyboard edge. Hovering reveals the complete navigation as a temporary
 overlay with the shared fade and a 24px leftward slide. The sidebar's Show button
 pins it into layout. Peeking never changes pane geometry or saved preferences.
-The drawer owns a measured native-occlusion region through its exit animation;
-only intersecting native content is hidden, never closed or reloaded.
+The drawer is CSS above the page beneath it: that page stays mounted, and is
+never hidden, closed or reloaded to make room.
 
 Without Tools, the original cloud panel contains workspace context and an optional
 working folder at left, with a 600px chat stage inset 16px at right. Chat defaults
@@ -175,9 +177,9 @@ to the menu. Copy supplies HTML and plain text; Copy Markdown supplies source
 text. The main process accepts a bounded, write-only clipboard request from the
 trusted app main frame. It does not grant embedded websites clipboard access.
 
-## Pi chat engine — source integrated, manual validation pending
+## Pi chat engine
 
-The replacement for the custom HTTP/tool loop is **Pi 0.85.1 headless**,
+The replacement for the custom HTTP/tool loop is **Pi headless**,
 using the sibling app’s existing persistent-RPC chat patterns. The integration is wired
 into [ChatService](../src/main/chat/service.ts); these are its source contracts,
 not a claim of live acceptance or complete CLI parity. Hello retains endpoint
@@ -244,7 +246,7 @@ answers. Same-model/same-prompt validation is still required.
 The first profile requires at least 20,480 actual server context tokens;
 the output cap can raise this minimum. Smaller profiles need separate tuning.
 
-The pinned startup contract disables AGENTS.md/CLAUDE.md discovery with Pi 0.85.1's
+The pinned startup contract disables AGENTS.md/CLAUDE.md discovery with Pi's
 `-nc`; extension/skill/prompt discovery stays disabled with `-ne`, `-ns` and `-np`.
 It disables only native tools with `--no-builtin-tools`, while explicitly loading
 the Hello tool extension. `--no-tools` would disable extension tools too and is
@@ -351,9 +353,9 @@ names and descriptions. MCP keeps one process per configured server, shared by
 activated chats; access is checked at both discovery and call time. Pending
 starts are owned and stopped on disconnect/dispose too. Its stdio client validates
 the protocol version and tools capability, follows bounded tool pagination and
-refreshes a changed tool catalog between turns. See the
-[verification report](EXTENSIONS-VERIFICATION-2026-09-10.md) for tested boundaries
-and compatibility limits.
+refreshes a changed tool catalog between turns. Its trust boundaries and limits
+are in [SECURITY.md](SECURITY.md); the 10.09 verification report is archived
+([archive](archive/EXTENSIONS-VERIFICATION-2026-09-10.md)).
 
 Tools cover bounded folder listing/reading, approved file writes and shell
 commands, notebook discovery/editing, independent public web research, and gated
@@ -466,6 +468,33 @@ the listing the picker read. Summarising and a turn Pi starts by itself use the
 same model, so neither replaces the chat's session. Forgetting a connection
 clears the chats on it, and deleting a chat clears its row.
 
+## Keys, search and attachments (S209, 05.10)
+
+- **The composer's history.** ↑ in an empty composer brings back what was sent
+  in this chat, newest first; ↑ and ↓ walk through it (a recalled message's own
+  lines first), Esc clears it, and any other change to the words leaves the walk.
+  The `/` menu keeps its arrows.
+- **Between chats.** The app menu's Go holds ⌘⇧] / ⌘⇧[ (next and previous in the
+  list as shown, round the end), ⌘J (the next chat waiting, after the open one)
+  and ⌘1–9 (by place). Menu accelerators reach the window from a page or a
+  terminal; the terminal lets these keys through (`terminal/keys.ts`), and the
+  mapping is `renderer/menu-chats.ts`.
+- **Notebook search.** A field above the tree searches every chapter's title and
+  words, drafts and switched-off sections included, with a snippet; the results
+  stand in for the tree, Enter opens the first, Escape clears and then returns to
+  the editor. ⌘F or ⌘K reaches it while the notebook is the page on screen, as
+  find in chat does while the transcript is.
+- **Attach by paste and picker.** A file copied in Finder pastes as a drop does,
+  by its path; a picture alone (a screenshot) is read by main from the clipboard
+  (`chat.attachClipboard`) and kept like a dropped image; words paste as words.
+  "Attach files…" opens a native picker for files, never folders. All three go
+  through one import path in the composer: one at a time, at most eight.
+- **Find in a terminal.** ⌘F (Ctrl+Shift+F elsewhere) with the terminal focused
+  opens a field over it: matches across soft wraps, wide characters and emoji
+  mapped to their cells (`terminal/find.ts`), the newest first, Enter older and
+  Shift+Enter newer, kept current as output arrives or the terminal reflows. A
+  full-screen program has no scrollback to search, and says so.
+
 ## Chat awareness: context, attention, search
 
 A reply records the model that wrote it (`messages.model`, database version 7)
@@ -556,11 +585,18 @@ A page adopted because an operation was waiting is loaded by that operation, so 
 tab loads once. `detach` names the page it created, so a pane unmounting late
 cannot close a page a newer one has already put in its place.
 
-`setWindowOpenHandler` accepts web destinations and answers with a child window
-carrying the same preferences and the opener's partition. A `<webview>` cannot
-adopt an existing `WebContents`, so a popup is a window rather than a tab; that
-keeps `window.opener`, `postMessage` and form posts, which reopening the URL as a
-tab would have broken.
+`setWindowOpenHandler` refuses the native window a page asks for and opens a tab
+beside its opener instead (user, 22.09: an invoice's "View" opened a window the
+person had to hunt for and the agent could not see). The tab takes the opener's
+partition and its grant — it is the opener's page carrying on — and only http(s)
+destinations are opened; a blank popup is refused. What a child window would
+have kept — `window.opener`, `postMessage`, a prepared POST body — is given up.
+
+A right-click on a page opens a native menu that main builds
+(`browser/context-menu.ts`, user 05.10): Look Up, Copy and Select All for
+selected words, Cut, Copy and Paste in a field, a link's address, and an
+image's Copy, Save (a download of the chat, like any other) and address.
+Chromium asks for it only when the page did not draw a menu of its own.
 
 The payload-only `hello:browser-lifecycle` subscription adds and selects foreground
 children in Tools without switching conversations or stealing focus from another
@@ -729,7 +765,8 @@ Installed list updates and removes what it installed.
   use: about 0.5 GB. `node-addon-require-builtin`, which reads Node's internal
   module loader through a native addon that recognises only exact Electron
   builds, is replaced by Hello's shim (`assets/dsh/shims/`), which answers the same
-  calls through `--expose-internals` (see [`DSH-SPIKE.md`](DSH-SPIKE.md)).
+  calls through `--expose-internals` (the spike that found it is archived:
+  [`DSH-SPIKE-2026-09-28.md`](archive/DSH-SPIKE-2026-09-28.md)).
   The install panel is live: counters against pnpm's `Packages: +N`, elapsed time,
   pnpm's latest line in plain words (a retry, a slow download, a build) and, past
   twenty seconds of silence, how long it has been quiet. Every pnpm run is taken
@@ -785,11 +822,10 @@ Installed list updates and removes what it installed.
 
 ## Validation boundary
 
-For the Pi migration, no real model/CLI work, automated tests, build, packaging
-or app restart has been performed. Non-emitting static checking is separate and
-must not be reported as runtime validation. The first live acceptance is the
-owner's previously failing prompt with the same model and materials, followed
-by Stop, approvals, continuation, restart and compaction checks.
+Every change is checked with the unit tests and the type check; what the app
+looks like and does live is checked by the owner, in the app (AGENTS.md). No
+test does real model or CLI work, spends credits or needs credentials, and a
+static check is never reported as runtime validation.
 
 `pnpm test` runs automated tests with the Electron-compatible native runtime.
 `pnpm typecheck` and `pnpm build` check the application bundles. The native smoke
