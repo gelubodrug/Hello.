@@ -65,6 +65,8 @@ import { useExtensionUi } from './ExtensionPanel';
 const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
 /** The longest message main accepts (ChatService refuses a longer one). */
 const MESSAGE_LIMIT = 200_000;
+/** A send main refused, kept whole: its words still paired with its attachments. */
+type UnsentMessage = { id: string; text: string; attachments: ChatAttachment[] };
 /** Chips main can show as a picture: an image snapshot, or a draft chip whose name says it is one. */
 function previewableAttachment(item: ChatAttachment): boolean {
   return item.kind === 'image' || IMAGE_NAME.test(item.name);
@@ -709,7 +711,7 @@ export function ConversationView({
   // from then on, or after the last one when nothing has been said since.
   const restartIndex = conversation.freshFrom === undefined ? -1
     : (() => { const at = messages.findIndex(message => message.createdAt >= conversation.freshFrom!); return at < 0 ? messages.length : at; })();
-  const [draft, setDraft] = useState(() => {
+  const [draft, setDraftState] = useState(() => {
     try {
       return localStorage.getItem(draftKey) ?? "";
     } catch {
@@ -719,10 +721,28 @@ export function ConversationView({
   const [sending, setSending] = useState(false);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const attachmentDraftKey = `${draftKey}.attachments`;
-  const [attachments, setAttachments] = useState<ChatAttachment[]>(() => {
+  const [attachments, setAttachmentsState] = useState<ChatAttachment[]>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(attachmentDraftKey) ?? '[]');
       return Array.isArray(saved) ? saved.filter(item => item && typeof item.id === 'string' && typeof item.name === 'string' && ['text', 'image'].includes(item.kind)).slice(0, 8) : [];
+    } catch { return []; }
+  });
+  // Whether the composer changed since a send cleared it. Every way content
+  // moves — typing, a quote, @name, recall, an import — passes through these
+  // wrappers, so a refused send can tell an untouched composer (put the
+  // message straight back) from one holding newer work (stash it instead).
+  // State and DOM lag the event that changed them; this ref never does.
+  const composerDirty = useRef(false);
+  const setDraft: typeof setDraftState = value => { composerDirty.current = true; setDraftState(value); };
+  const setAttachments: typeof setAttachmentsState = value => { composerDirty.current = true; setAttachmentsState(value); };
+  // What a refused send was carrying. By the time main says no, the composer
+  // may already hold newer words, so the refused message is kept here whole —
+  // its text still paired with its attachments — never written over a draft.
+  const unsentKey = `${draftKey}.unsent`;
+  const [unsent, setUnsent] = useState<UnsentMessage[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(unsentKey) ?? '[]');
+      return Array.isArray(saved) ? saved.filter(item => item && typeof item.id === 'string' && typeof item.text === 'string' && Array.isArray(item.attachments)) : [];
     } catch { return []; }
   });
   // Kept after closing so the picture stays in the dialog while it fades out.
@@ -853,6 +873,12 @@ export function ConversationView({
     catch { /* Keep the live draft if local persistence is unavailable. */ }
   }, [attachmentDraftKey, attachments]);
   useEffect(() => {
+    try {
+      if (unsent.length) localStorage.setItem(unsentKey, JSON.stringify(unsent));
+      else localStorage.removeItem(unsentKey);
+    } catch { /* A reload loses it then; the in-memory copy still stands. */ }
+  }, [unsentKey, unsent]);
+  useEffect(() => {
     if (!quote) return;
     // A page read is quoted; a note written about a page is the person's own words.
     const body = quote.verbatim
@@ -904,6 +930,34 @@ export function ConversationView({
       node.style.height = `${Math.min(node.scrollHeight, 180)}px`;
     }
   }, [draft]);
+  // A refused message goes back into the composer only while the composer is
+  // still as the send left it. Once newer words or files are in it, the refused
+  // one is stashed whole instead: putting it back would write over them, and
+  // merging would pair its attachments with words they never belonged to.
+  const keepRefused = (text: string, sent: ChatAttachment[]) => {
+    if (!composerDirty.current) {
+      setDraft(text);
+      if (sent.length) setAttachments(current => [...sent, ...current.filter(item => !sent.some(kept => kept.id === item.id))]);
+      return;
+    }
+    setUnsent(current => [...current, { id: crypto.randomUUID(), text, attachments: sent }]);
+  };
+  const restoreUnsent = (item: UnsentMessage) => {
+    const text = draft.trim() ? `${item.text}\n\n${draft}` : item.text;
+    if (text.length > MESSAGE_LIMIT) {
+      setError(`Adding this would make the message longer than ${MESSAGE_LIMIT.toLocaleString("en-US")} characters. Send or shorten the draft, then restore it again.`);
+      return;
+    }
+    const fresh = item.attachments.filter(file => !attachments.some(kept => kept.id === file.id));
+    if (attachments.length + fresh.length > 8) {
+      setError("Attach up to 8 files per message. Remove an attachment, then restore this message again.");
+      return;
+    }
+    setUnsent(kept => kept.filter(value => value.id !== item.id));
+    setDraft(text);
+    if (fresh.length) setAttachments(kept => [...fresh, ...kept.filter(value => !fresh.some(file => file.id === value.id))]);
+    field.current?.focus();
+  };
   const send = async () => {
     const text = draft.trim();
     if (importLock.current) return;
@@ -913,14 +967,16 @@ export function ConversationView({
     if (busy) {
       if (!text) return;
       setDraft("");
+      composerDirty.current = false;
       try { setQueued(await api.chat.queue(conversation.id, text, 'steer')); }
-      catch (reason) { setError(errorText(reason)); setDraft(current => current || text); }
+      catch (reason) { setError(errorText(reason)); keepRefused(text, []); }
       return;
     }
     if (!text && !attachments.length) return;
     const sentAttachments = attachments;
     setDraft("");
     setAttachments([]);
+    composerDirty.current = false;
     setSending(true);
     setError(null);
     sticky.current = true;
@@ -928,8 +984,7 @@ export function ConversationView({
       await api.chat.send(conversation.id, text, sentAttachments.map(item => item.id));
     } catch (reason) {
       setError(errorText(reason));
-      setDraft((current) => current || text);
-      setAttachments(current => [...sentAttachments, ...current.filter(item => !sentAttachments.some(sent => sent.id === item.id))]);
+      keepRefused(text, sentAttachments);
     } finally {
       setSending(false);
     }
@@ -1217,6 +1272,23 @@ export function ConversationView({
           {(dropActive || importing) && <p className="composer-drop-hint" role="status">
             {importing ? 'Adding attachments…' : 'Drop files to attach · Drop a folder to work in it'}
           </p>}
+          {!!unsent.length && <ul className="pending-messages" aria-label="Messages that failed to send">
+            {unsent.map(item => <li key={item.id} className="pending-message" data-mode="later">
+              <button
+                type="button"
+                className="pending-text"
+                title="Put this message back in the composer"
+                aria-label={`Restore unsent message: ${item.text.trim() || item.attachments.map(file => file.name).join(', ')}`}
+                onClick={() => restoreUnsent(item)}
+              >
+                {item.text.trim() || item.attachments.map(file => file.name).join(', ')}
+                {!!item.attachments.length && !!item.text.trim() && ` — ${item.attachments.map(file => file.name).join(', ')}`}
+              </button>
+              <IconButton label="Discard this unsent message" onClick={() => setUnsent(current => current.filter(value => value.id !== item.id))}>
+                <X size={13} />
+              </IconButton>
+            </li>)}
+          </ul>}
           <PendingMessages items={queued} onChange={setQueued} onError={reason => setError(errorText(reason))} />
           {!!attachments.length && <div className="composer-attachments" aria-label="Message attachments">
             {attachments.map(item => <span className="composer-attachment" key={item.id} title={item.name}

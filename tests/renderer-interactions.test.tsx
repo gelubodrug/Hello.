@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   extensionsDiscover: vi.fn<HelloAPI['extensions']['discover']>(),
   extensionsImportDiscovered: vi.fn<HelloAPI['extensions']['importDiscovered']>(),
   send: vi.fn(),
+  queue: vi.fn(),
   attach: vi.fn(),
   attachClipboard: vi.fn(),
   chooseFiles: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock("../src/renderer/api", () => ({
       attach: mocks.attach,
       attachClipboard: mocks.attachClipboard,
       send: mocks.send,
+      queue: mocks.queue,
       stop: mocks.stop,
       retry: mocks.retry,
       approve: mocks.approve,
@@ -355,6 +357,65 @@ describe("real conversation controls", () => {
     await click(button("Send message"));
     expect(field.value).toBe("Keep my draft");
     expect(host.textContent).toContain("Model endpoint is offline");
+  });
+  it("keeps both the refused message and the newer draft, attachments still paired", async () => {
+    let refuse!: (reason: Error) => void;
+    mocks.send.mockImplementationOnce(() => new Promise((_, reject) => { refuse = reject; }));
+    await render(view());
+    const transfer = { types: ['Files'], files: [new File(['image fixture'], 'diagram.png')], getData: () => '' };
+    await act(async () => {
+      const event = new Event('drop', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      document.querySelector('.conversation-view')!.dispatchEvent(event);
+    });
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+    await fill(field, "Message A");
+    await click(button("Send message"));
+    expect(mocks.send).toHaveBeenCalledWith(conversation.id, "Message A", ["image-id"]);
+    // The composer stays usable during the send; newer words arrive before main refuses.
+    await fill(field, "Message B");
+    await act(async () => { refuse(new Error("Gateway timed out")); });
+    expect(field.value).toBe("Message B");
+    expect(host.textContent).toContain("Gateway timed out");
+    // The refused message is stashed whole: its words with its attachment,
+    // neither written into the newer draft nor dropped.
+    const row = button("Restore unsent message: Message A");
+    expect(row.textContent).toContain("diagram.png");
+    expect(document.querySelector('.composer-attachments')).toBeNull();
+    expect(localStorage.getItem("hello.draft.test-chat.unsent")).toContain("Message A");
+    // Restoring is the person's own act: both texts land, the attachment with them.
+    await click(row);
+    expect(field.value).toBe("Message A\n\nMessage B");
+    expect(document.querySelector('.composer-attachments')?.textContent).toContain('diagram.png');
+    expect(document.querySelector('[aria-label="Messages that failed to send"]')).toBeNull();
+    expect(localStorage.getItem("hello.draft.test-chat.unsent")).toBeNull();
+  });
+  it("keeps a refused steer past a newer draft and past a reload", async () => {
+    let refuse!: (reason: Error) => void;
+    mocks.queue.mockImplementationOnce(() => new Promise((_, reject) => { refuse = reject; }));
+    const streaming: Message[] = [{
+      id: "m1", conversationId: conversation.id, role: "assistant",
+      content: "Working", status: "streaming", createdAt: 1,
+    }];
+    await render(view(streaming));
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+    await fill(field, "Steer A");
+    await act(async () => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(mocks.queue).toHaveBeenCalledWith(conversation.id, "Steer A", "steer");
+    await fill(field, "Newer words");
+    await act(async () => { refuse(new Error("Steer refused")); });
+    expect(field.value).toBe("Newer words");
+    button("Restore unsent message: Steer A");
+    // A reload must not be the second loss: both the draft and the stash return.
+    await act(async () => { root.render(createElement("div")); });
+    await render(view(streaming));
+    const revived = document.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+    expect(revived.value).toBe("Newer words");
+    await click(button("Restore unsent message: Steer A"));
+    expect(revived.value).toBe("Steer A\n\nNewer words");
+    expect(document.querySelector('[aria-label="Messages that failed to send"]')).toBeNull();
   });
   it("stops an actual streaming message and does not expose another send", async () => {
     await render(
