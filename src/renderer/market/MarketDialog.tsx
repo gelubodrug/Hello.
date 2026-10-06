@@ -4,6 +4,7 @@ import type { MarketInstalledPlugin, MarketItem, MarketKind, MarketPage, MarketP
 import { api } from '../api';
 import { errorText } from '../ui/primitives';
 import { MARKETS, type MarketCopy } from './markets';
+import { formatNumber, t } from '../i18n';
 import './market.css';
 
 /**
@@ -107,10 +108,13 @@ function Facts({ preview, copy, extra }: { preview: MarketPreview; copy: MarketC
   );
 }
 
-/** Downloads a month the way pi.dev writes them: 1,740/mo, 1.2M/mo. */
+/** Downloads a month the way pi.dev writes them: 1,740/mo, 1.2M/mo — the
+ *  shape is pi.dev's, the digits and the words are the active locale's. */
 export function monthlyDownloads(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1).replace(/\.0$/, '')}M/mo`;
-  return `${Math.max(0, Math.round(count)).toLocaleString('en-US')}/mo`;
+  const shown = count >= 1_000_000
+    ? t('millions', { n: formatNumber(+(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1)) })
+    : formatNumber(Math.max(0, Math.round(count)));
+  return t('perMonth', { n: shown });
 }
 
 /** How long ago, the way pi.dev writes it: 44m ago, 19h ago, 3d ago. */

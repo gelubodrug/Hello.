@@ -6,6 +6,7 @@ import { ErrorNote, IconButton, MenuButton, MenuLayerAbove, errorText } from "..
 import { ExtensionsSection } from "./ExtensionsSection";
 import { AppAuditSection } from "./AppAuditSection";
 import { ENDPOINT_PRESETS, endpointIdentity, modelName, presetFor, suggestedName } from "./presets";
+import { compactNumber, t } from "../i18n";
 
 const reasoningOptions = [
   { value: "off", label: "Provider default" },
@@ -26,12 +27,11 @@ const compatibilityOptions = [
 const SAVED_KEY_MASK = "•".repeat(24);
 /** A server on this Mac rarely wants a key, so its key field waits to be asked for. */
 const isLocal = (value: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(value.trim());
-const compact = new Intl.NumberFormat("en", { notation: "compact" });
 /** What a connection serves, in a few words: its one model, or how many. */
 function served(models: ModelChoice[]): string {
-  if (models.length !== 1) return `${models.length} models`;
+  if (models.length !== 1) return t('models', models.length);
   const [only] = models;
-  return only.contextWindow ? `${modelName(only.id)} · ${compact.format(only.contextWindow)} tokens` : modelName(only.id);
+  return only.contextWindow ? `${modelName(only.id)} · ${t('tokens', { n: compactNumber(only.contextWindow) })}` : modelName(only.id);
 }
 
 type Section = 'connection' | 'advanced' | 'extensions' | 'app';

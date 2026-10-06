@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '../src/shared/types';
-import { ChatFind, findRanges, type FindJump } from '../src/renderer/chat/ChatFind';
+import { ChatFind, findRanges, foldForSearch, type FindJump } from '../src/renderer/chat/ChatFind';
 
 vi.mock('../src/renderer/api', () => ({ onNativeBrowserFocus: () => () => {} }));
 
@@ -50,6 +50,47 @@ describe('find in chat', () => {
     div.innerHTML = transcript;
     expect(findRanges(div, 'Invoice').map(range => range.toString())).toEqual(['invoice', 'invoice', 'INVOICE']);
     expect(findRanges(div, '   ')).toEqual([]);
+  });
+
+  // Unicode normalization (06.10): composed and decomposed spellings find each
+  // other, a letter whose folding changes length no longer loses its whole
+  // node, and every offset maps back to the original text.
+  const page = (...texts: string[]) => {
+    const div = document.createElement('div');
+    for (const text of texts) { const p = document.createElement('p'); p.textContent = text; div.append(p); }
+    return div;
+  };
+  it('matches Romanian diacritics across composed and decomposed spellings, offsets on the original', () => {
+    const div = page('Așteptăm știri', 'așteptăm știri');
+    // The decomposed query finds both spellings; each range reads the ORIGINAL bytes.
+    expect(findRanges(div, 'știri').map(range => range.toString())).toEqual(['știri', 'știri']);
+    expect(findRanges(div, 'știri').map(range => range.toString())).toEqual(['știri', 'știri']);
+  });
+  it('no longer skips a node holding Turkish İ, and folds dotted İ to i while dotless ı stays itself', () => {
+    const div = page('İstanbul has the invoice', 'kır');
+    // The old code skipped this entire node because lowering İ grows the string.
+    expect(findRanges(div, 'invoice')).toHaveLength(1);
+    expect(findRanges(div, 'istanbul').map(range => range.toString())).toEqual(['İstanbul']);
+    expect(findRanges(div, 'İSTANBUL').map(range => range.toString())).toEqual(['İstanbul']);
+    expect(findRanges(div, 'kir')).toEqual([]);
+    expect(findRanges(div, 'kır')).toHaveLength(1);
+  });
+  it('a match reaching into a grown letter covers the whole original letter', () => {
+    const div = page('İx');
+    expect(findRanges(div, 'i').map(range => range.toString())).toEqual(['İ']);
+  });
+  it('finds Arabic, Hebrew and paths in mixed bidirectional text, and CJK', () => {
+    const div = page('שלום — سجل في /src/חיפוש/log.ts مرحبا', '日本語のテスト');
+    expect(findRanges(div, 'مرحبا').map(range => range.toString())).toEqual(['مرحبا']);
+    expect(findRanges(div, 'שלום')).toHaveLength(1);
+    expect(findRanges(div, '/src/').map(range => range.toString())).toEqual(['/src/']);
+    expect(findRanges(div, 'log.ts')).toHaveLength(1);
+    expect(findRanges(div, '日本語').map(range => range.toString())).toEqual(['日本語']);
+  });
+  it('folds with an offset map pointing at original positions', () => {
+    expect(foldForSearch('İs')).toEqual({ folded: 'is', map: [0, 1] });
+    expect(foldForSearch('ș')).toEqual({ folded: 'ș', map: [0] });
+    expect(foldForSearch('')).toEqual({ folded: '', map: [] });
   });
 
   it('opens on Cmd+F or Ctrl+K, moves with Enter and Shift+Enter, and closes on Escape', async () => {

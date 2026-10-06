@@ -47,6 +47,8 @@ aplicația acum: `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PROVENANCE.md
 - Extensia OpenViking publicată nu se importă: nu are `pi` în package.json; merge doar împachetată.
 - Files › Contents caută literal: un text scris cu diacritice descompuse (NFD) nu se potrivește cu unul tastat
   compus (NFC), iar o linie a cărei literă mică își schimbă lungimea (de exemplu „İ”) e căutată doar așa cum e scrisă.
+  Căutarea în chat (⌘F) normalizează din 06.10 — NFC + case fold cu İ↔i și offseturi mapate înapoi pe textul
+  original, nodurile cu İ nu mai sunt sărite; Files › Contents rămâne literală.
 
 ## De verificat în aplicație (utilizatorul)
 

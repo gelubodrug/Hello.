@@ -6,13 +6,45 @@ import { IconButton } from '../ui/primitives';
 /** A search result elsewhere that this chat should open on: the message, and the words. */
 export interface FindJump { conversationId: string; messageId: string; query: string; nonce: number }
 
+const MARK = /\p{M}/u;
+/**
+ * The text as search compares it — NFC-composed, lower-cased, İ's dot folded
+ * away — with every folded unit remembering the original offset it came from,
+ * so a match in folded space maps back to a Range over the original text.
+ * Folding is done one base-with-marks unit at a time, because that is the span
+ * inside which NFC composes and lowercasing grows (İ → i + U+0307): a letter
+ * that changes length moves every offset after it, and the map is what keeps
+ * them honest where the old code skipped the whole node (06.10).
+ */
+export function foldForSearch(text: string): { folded: string; map: number[] } {
+  let folded = '';
+  const map: number[] = [];
+  for (let at = 0; at < text.length; ) {
+    let next = at + (text.codePointAt(at)! > 0xffff ? 2 : 1);
+    while (next < text.length) {
+      const following = String.fromCodePoint(text.codePointAt(next)!);
+      if (!MARK.test(following)) break;
+      next += following.length;
+    }
+    // İ lowers to i + combining dot; dropping that dot is what lets dotted İ
+    // and plain i find each other, while dotless ı stays its own letter.
+    const unit = text.slice(at, next).normalize('NFC').toLocaleLowerCase().replace(/i̇/g, 'i');
+    for (let i = 0; i < unit.length; i++) map.push(at);
+    folded += unit;
+    at = next;
+  }
+  return { folded, map };
+}
+
 /**
  * Every place the words occur in the visible text under root, as ranges in
- * page order, case folded. A match split across two elements is not found;
- * text that is hidden (a collapsed disclosure) is not searched.
+ * page order — case folded and Unicode-normalized, so composed and decomposed
+ * spellings (ș as one character or as s + comma) find each other, and offsets
+ * always point into the original text. A match split across two elements is
+ * not found; text that is hidden (a collapsed disclosure) is not searched.
  */
 export function findRanges(root: HTMLElement, query: string): Range[] {
-  const wanted = query.trim().toLocaleLowerCase();
+  const wanted = foldForSearch(query.trim()).folded;
   if (!wanted) return [];
   const ranges: Range[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -27,13 +59,14 @@ export function findRanges(root: HTMLElement, query: string): Range[] {
   });
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.nodeValue ?? '';
-    const folded = text.toLocaleLowerCase();
-    // A letter whose lower case is longer would move every offset after it.
-    if (folded.length !== text.length) continue;
+    const { folded, map } = foldForSearch(text);
     for (let at = folded.indexOf(wanted); at >= 0; at = folded.indexOf(wanted, at + wanted.length)) {
+      // Never end inside a folded unit: a match reaching into İ covers all of İ.
+      let tail = at + wanted.length;
+      while (tail < folded.length && map[tail] === map[tail - 1]) tail++;
       const range = document.createRange();
-      range.setStart(node, at);
-      range.setEnd(node, at + wanted.length);
+      range.setStart(node, map[at]);
+      range.setEnd(node, tail < folded.length ? map[tail] : text.length);
       ranges.push(range);
     }
   }

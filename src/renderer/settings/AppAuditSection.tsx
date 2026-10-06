@@ -5,6 +5,7 @@ import { IconButton, MenuButton } from '../ui/primitives';
 import { useEffect, useState } from 'react';
 import { dollars, tokens } from '../chat/ContextMeter';
 import { modelName } from './presets';
+import { t } from '../i18n';
 
 type Appearance = NonNullable<AppSettings['appearance']>;
 interface Props {
@@ -40,7 +41,7 @@ function UsageCard({ usage }: { usage: UsageSummary }) {
         <span>Usage</span>
       </div>
       <p className="audit-value">
-        {priced ? `${dollars(usage.cost)} · ` : ''}{tokens(usage.input)} in · {tokens(usage.output)} out · {usage.replies.toLocaleString()} {usage.replies === 1 ? 'reply' : 'replies'}
+        {priced ? `${dollars(usage.cost)} · ` : ''}{tokens(usage.input)} in · {tokens(usage.output)} out · {t('replies', usage.replies)}
       </p>
       <table className="audit-usage" aria-label="Usage by model">
         <thead><tr><th>Model</th><th>Replies</th><th>Tokens</th>{priced && <th>Cost</th>}</tr></thead>
