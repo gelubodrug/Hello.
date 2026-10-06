@@ -16,6 +16,21 @@ const modes: {value:AgentControl;label:string;detail:string}[] = [
   {value:'read',label:'Read only',detail:'Open and read pages; no clicking or typing'},
   {value:'full',label:'Full access',detail:'Open, read and interact with pages'},
 ];
+// One publisher for this app window, including its parked conversations. Each
+// visible pane owns only its registration; hiding it cannot clear another's.
+const visiblePanes = new Map<symbol, string>();
+let activePublicationPending = false;
+function publishVisibleBrowser(): void {
+  if (activePublicationPending) return;
+  activePublicationPending = true;
+  // React runs every old effect's cleanup before the new effects. Publish after
+  // both, so a tab switch sends its final selection without an intermediate null.
+  queueMicrotask(() => {
+    activePublicationPending = false;
+    const id = [...visiblePanes.values()].at(-1) ?? null;
+    void api.browser.setActive(id).catch(() => {});
+  });
+}
 function AIModeGlyph(): JSX.Element {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M13 4.7a7.5 7.5 0 1 0 4.3 8.8M15.5 15.5 21 21"/>
@@ -116,7 +131,16 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
     pageRef.current=!isStartPage&&!tab.error;
     place.current();
   },[visible,isStartPage,tab.error]);
-  useEffect(()=>{void api.browser.setActive(visible?tab.id:null).catch(()=>{});},[visible,tab.id]);
+  useEffect(() => {
+    const owner = Symbol(tab.id);
+    if (visible) visiblePanes.set(owner, tab.id);
+    publishVisibleBrowser();
+    return () => {
+      // On unmount, main's existing detach/close path clears the active page.
+      // A visibility change publishes after the replacement effects register.
+      visiblePanes.delete(owner);
+    };
+  }, [visible, tab.id]);
   const run=async(task:()=>Promise<unknown>)=>{setError('');try{await task();}catch(e){setError((e as Error).message);}};
   const navigate=()=>run(()=>api.browser.navigate(tab.id,address));
   const mode=modes.find(item=>item.value===tab.control)!;
