@@ -32,7 +32,7 @@
 - [x] T014 [!medium] [#high] Subagent context window: a different subagentModel inherits the chat model's learned contextScale and window — declare it with its own limits floor instead (pi-session.ts:135-141,180-194) (nativ#416) <https://github.com/Blaizzy/nativ/pull/416>
 - [x] T015 [!low] [#medium] Subagent model validation: a free-text subagentModel id is never checked against the probed list — show inline notice at save and fall back to chat model at launch (SettingsDialog.tsx:613-637, pi-session.ts:191) (nativ#416) <https://github.com/Blaizzy/nativ/pull/416>
 - [x] T016 [!minimal] [#low] Pi CLI connection guide: update the HELLO.md tool-availability sentence in notebook-context.ts — the gating change means CLI starts with only tools_find, not notebook/browser tools at startup
-- [x] T017 [!low] [#low] Background subagent fan-out: surface pi-subagents extensionUi statuses in the chat while a fan-out runs, or close as nothing-to-surface if none are emitted (service.ts:1765-1800) (nativ#416) <https://github.com/Blaizzy/nativ/pull/416>  <!-- the sibling app: run 01a11cf9-349a-7b10-bd0e-b02f298ee6c2 -->
+- [x] T017 [!low] [#low] Background subagent fan-out: surface pi-subagents extensionUi statuses in the chat while a fan-out runs, or close as nothing-to-surface if none are emitted (service.ts:1765-1800) (nativ#416) <https://github.com/Blaizzy/nativ/pull/416>  <!-- aplicația-soră: run 01a11cf9-349a-7b10-bd0e-b02f298ee6c2 -->
 
 ## Pass 2026-10-08-004 — Voice proposals from Analyst (PR #691)
 
@@ -69,3 +69,13 @@
 - [ ] T042 [!low] [#low] Limitare: Low/Medium/High ajung la MTPLX (și Kimi) doar ca „gândire pornită”; reasoning_effort nu e trimis
 - [ ] T043 [!low] [#low] Limitare: extensia OpenViking publicată nu se importă (nu are pi în package.json); merge doar împachetată
 - [ ] T044 [!medium] [#low] Limitare: Files › Contents caută literal — normalizează NFC + case fold cu İ↔i și offseturi mapate înapoi, ca ⌘F din chat
+
+## Din tasks/todo.md (09.10) — De decis (owner)
+
+- [ ] T045 [!low] [#critical] DECIZIE OWNER: cheia OpenRouter HELLO_QA_API_KEY e comisă în primele rânduri din .gitignore din 10.09 — de rotit la OpenRouter și mutat în .env ignorat; istoricul git o păstrează
+- [ ] T046 [!low] [#low] DECIZIE OWNER: publicarea pe npm a hello-dsh (tema Hello pentru DSH Desktop) și a șablonului de plugin — contul tău
+- [ ] T047 [!medium] [#high] DECIZIE OWNER: subagenții pi-subagents rulează cu uneltele Pi (bash, edit, write) fără aprobările Hello — îi restrânge Hello (subagents.agentOverrides cu tools)?
+- [ ] T048 [!low] [#low] DECIZIE OWNER: butonul primar e albastru în repaus — așa e în referința aprobată, revizia S202 l-a semnalat
+- [ ] T049 [!low] [#low] DECIZIE OWNER: checkpoint-urile aplicația-soră (the tooling’s checkpoint refs) păstrate sau șterse
+- [ ] T050 [!low] [#medium] DECIZIE OWNER: fluxurile aplicația-soră „hello feature hunt and implement” (a698845e) și cercetarea continuă (b90744fd) citesc docs/MINI-ROADMAP.md, docs/feature-research/, docs/research-flow/, mutate în docs/archive/ la 05.10 — briefurile trebuie schimbate în aplicația-soră
+- [ ] T051 [!medium] [#medium] DECIZIE OWNER: istoricul unui chat cu browsing pe calea Pi — opțiunile A–D din docs/archive/research-flow/PI-PATH-2026-09-28.md nedecise (e făcută doar scurtarea la seed)
