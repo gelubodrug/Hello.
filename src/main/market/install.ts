@@ -152,7 +152,7 @@ export function setProfileBundle(layout: DshLayout, name: string, present: boole
   const bundles = present ? (current.includes(name) ? current : [...current, name]) : current.filter(bundle => bundle !== name);
   const next = { ...manifest, dsh: { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } } };
   const file = join(layout.profile, 'package.json');
-  atomicWriteFileSync(file, `${JSON.stringify(next, null, 2)}\n`, { symlinks: 'refuse' });
+  atomicWriteFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
 }
 
 export interface InstalledPlugin {
