@@ -8,7 +8,7 @@ import { outOfSpace } from '../src/main/market/install';
 import type { MarketHttp } from '../src/main/market/net';
 import { galleryUrl, parseGallery } from '../src/main/market/pi-gallery';
 import { normalizePiObject, piTypes } from '../src/main/market/pi-catalog';
-import { PI_VERSION, piCompatibility, readPiForHello, verifyPiPackage } from '../src/main/market/pi-install';
+import { PI_PROVIDED, PI_VERSION, piCompatibility, readPiForHello, verifyPiPackage } from '../src/main/market/pi-install';
 import { PiMarketService } from '../src/main/market/pi-service';
 
 // Nothing reaches the network: pi.dev and npm are a map of URLs, and pnpm is
@@ -143,8 +143,19 @@ describe('what an install checks', () => {
     ]) await expect(verifyPiPackage(fakeHttp({ [latest]: bad }), 'pi-demo', 'latest', new AbortController().signal)).rejects.toThrow();
   });
 
+  // PI_VERSION is what every extension's peer range is judged against, so it
+  // has to be the Pi that is actually in node_modules, not a number left behind
+  // by an upgrade (it said 0.87.1 while Hello ran 1.0.x).
+  it('names the Pi Hello actually depends on', () => {
+    const ours = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
+    expect(PI_VERSION).toBe(ours.dependencies['@earendil-works/pi-coding-agent']);
+    for (const name of ['pi-coding-agent', 'pi-agent-core', 'pi-ai', 'pi-tui'])
+      for (const scope of ['@earendil-works', '@mariozechner'])
+        expect(PI_PROVIDED[`${scope}/${name}`]).toBe(PI_VERSION);
+  });
+
   it('refuses what Hello cannot run, and warns about what may not work', () => {
-    expect(piCompatibility(manifest('1.0.0', { peerDependencies: { '@earendil-works/pi-coding-agent': '>=0.90.0' } }))).toMatchObject({ ok: false, reason: expect.stringContaining(PI_VERSION) });
+    expect(piCompatibility(manifest('1.0.0', { peerDependencies: { '@earendil-works/pi-coding-agent': '>=2.0.0' } }))).toMatchObject({ ok: false, reason: expect.stringContaining(PI_VERSION) });
     expect(piCompatibility(manifest('1.0.0', { peerDependencies: { '@earendil-works/pi-coding-agent': '^0.84.0' } }))).toMatchObject({ ok: true, warnings: [expect.stringContaining('It may still work')] });
     expect(piCompatibility(manifest('1.0.0', { pi: { themes: ['./themes'] } }))).toMatchObject({ ok: false, reason: expect.stringContaining('themes') });
     expect(piCompatibility(manifest('1.0.0', { dist: { unpackedSize: 200 * 1024 * 1024 } }))).toMatchObject({ ok: false });
