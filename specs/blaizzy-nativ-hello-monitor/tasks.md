@@ -51,3 +51,21 @@
 - [x] T027 [!medium] [#medium] Voice P5 — Kokoro TTS reply playback: voice/speak.ts POST /v1/audio/speech two-shaped (mlx-audio vs Kokoro-FastAPI); IPC hello:voice.speak; auto-play on reply complete when Voice on; sentence-chunked playback; stop drains queue; Escape and conversation-switch stop; prose only; mic closed while speaking; unit tests (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
 - [x] T028 [!low] [#medium] Voice P6 — One voice switch: AppSettings.voice { enabled, sttEndpointUrl, sttModel, sourceLanguage, ttsEndpointUrl, ttsVoice }; sidebar AudioLines row rendered when disabled with title reason; SettingsDialog Voice section (P3 server, STT model, language, TTS voice, macOS mic status P1); Mic disabled but rendered when Voice off; persists on restart; clears on connection change (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
 - [ ] T029 [!high] [#high] Voice P7 — Hello manages Whisper model and server: downloads ggml-large-v3-turbo on consent (size shown), sha256-pinned, symlink-refused via the atomic-write helper; spawns whisper-server on loopback-minted port, supervised backoff+give-up, killed on before-quit; found server reused not touched; IPC hello:voice.prepare; Settings 3-state row; amends SECURITY.md and NSMicrophoneUsageDescription; unit tests for model-store and server supervisor (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
+
+## Din tasks/todo.md (09.10) — Tehnic
+
+- [ ] T030 [!medium] [#high] Împachetarea pnpm package:mac neverificată: extraResources dsh/, pnpm și esbuild despachetate din asar (ESBUILD_BINARY_PATH); electron-builder nu găsea @mariozechner/clipboard — probabil pnpm install curat după urcările Pi
+- [ ] T031 [!low] [#high] PI_VERSION din src/main/market/pi-install.ts e 0.87.1, deși Hello rulează Pi 1.0.x — aliniază-l
+- [ ] T032 [!high] [#medium] Hook-urile de sesiune dsh peste Pi: recall și captură dsh-memory-plugin în chaturile Hello, cu opțiunea per chat „nu captura acest chat”
+- [ ] T033 [!medium] [#low] Marketul DSH: căutare pe mai multe categorii deodată, reordonarea surselor, scanarea completă dshfind
+- [ ] T034 [!medium] [#low] Suprafața DSH ca tab în panoul de unelte, pe lângă vederea din sidebar
+- [ ] T035 [!medium] [#medium] dsh 0.2.x stabil: pini exacți, procedura de upgrade, pluginurile de top reverificate (tema Hello și shim-ul sunt pentru 0.1.7-rc.2)
+- [ ] T036 [!medium] [#low] Bugetul de memorie și CPU al gazdei DSH
+- [ ] T037 [!medium] [#medium] Extensii Pi: require() CommonJS al modulelor date de Pi într-un pachet împachetat; „Found on this Mac” poate lista o extensie pe care importul o refuză
+- [ ] T038 [!medium] [#low] WebGPU în tab-urile Hello (navigator.gpu): manualul de browser, embeddings locale
+- [ ] T039 [!low] [#medium] /review al unui șablon de prompt poate fi luat de meniul / când un skill conține cuvântul
+- [ ] T040 [!medium] [#low] Întrebările pi-subagents cu pas următor (Change model / thinking) se închid fără continuare: Pi nu trimite acel ecran prin RPC
+- [ ] T041 [!medium] [#low] Opțional: un layout Hello pentru clientul dsh și o descărcare mai mică (motorul office, 147 MB)
+- [ ] T042 [!low] [#low] Limitare: Low/Medium/High ajung la MTPLX (și Kimi) doar ca „gândire pornită”; reasoning_effort nu e trimis
+- [ ] T043 [!low] [#low] Limitare: extensia OpenViking publicată nu se importă (nu are pi în package.json); merge doar împachetată
+- [ ] T044 [!medium] [#low] Limitare: Files › Contents caută literal — normalizează NFC + case fold cu İ↔i și offseturi mapate înapoi, ca ⌘F din chat
