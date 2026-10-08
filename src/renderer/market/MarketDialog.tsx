@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowUpRight, ArrowUpCircle, Check, Database, Download, Globe, Plus, Puzzle, RefreshCw, Search, Settings2, Trash2, X } from 'lucide-react';
-import type { MarketInstalledPlugin, MarketItem, MarketKind, MarketPage, MarketPreview, MarketResult, MarketSource } from '../../shared/types';
+import { ArrowDown, ArrowUp, ArrowUpRight, ArrowUpCircle, Check, Database, Download, Globe, Library, Plus, Puzzle, RefreshCw, Search, Settings2, Trash2, X } from 'lucide-react';
+import type { MarketInstalledPlugin, MarketItem, MarketKind, MarketPage, MarketPreview, MarketResult, MarketScan, MarketSource } from '../../shared/types';
 import { api } from '../api';
 import { errorText } from '../ui/primitives';
 import { MARKETS, type MarketCopy } from './markets';
@@ -172,6 +172,11 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [category, setCategory] = useState<string | undefined>();
+  // The DSH market's pills pick several at once (an item in any of them); the
+  // Pi market's one <select> keeps using `category`.
+  const [picked, setPicked] = useState<string[]>([]);
+  const [scan, setScan] = useState<MarketScan | undefined>();
+  const [scanning, setScanning] = useState(false);
   const [sort, setSort] = useState<'downloads' | 'updated' | 'name'>('downloads');
   const [pages, setPages] = useState<Record<'discover' | 'installable', MarketPage | undefined>>({ discover: undefined, installable: undefined });
   const [loading, setLoading] = useState(false);
@@ -198,6 +203,7 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
       const page = await market.query({
         ...(submitted ? { q: submitted } : {}),
         ...(category ? { category } : {}),
+        ...(picked.length ? { categories: picked } : {}),
         ...(copy.filters && sort !== 'downloads' ? { sort } : {}),
         ...(which === 'installable' ? { installable: true } : { limit: 50 }),
         ...(options.more && current?.nextCursor ? { cursor: current.nextCursor } : {}),
@@ -212,7 +218,7 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
     } finally {
       if (id === request.current) setLoading(false);
     }
-  }, [market, submitted, category, sort, pages, copy.filters]);
+  }, [market, submitted, category, picked, sort, pages, copy.filters]);
 
   /** A change to the source list: the lists shown so far belonged to the old source. */
   const mutateSources = async (change: () => Promise<MarketSource[]> | undefined): Promise<boolean> => {
@@ -223,7 +229,14 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
       if (!next) return false;
       const before = sources.find(source => source.selected)?.id;
       setSources(next);
-      if (next.find(source => source.selected)?.id !== before) { setPages({ discover: undefined, installable: undefined }); setCategory(undefined); }
+      if (next.find(source => source.selected)?.id !== before) {
+        setPages({ discover: undefined, installable: undefined });
+        setCategory(undefined);
+        setPicked([]);
+        // A catalogue is read per source; the one held is not this one's.
+        setScan(undefined);
+        void market?.scanState?.().then(setScan).catch(() => {});
+      }
       return true;
     } catch (reason) {
       setSourceError(errorText(reason));
@@ -238,6 +251,7 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
   }, [market]);
 
   useEffect(() => { if (open) void market?.sources().then(setSources).catch(() => {}); }, [open, market]);
+  useEffect(() => { if (open) void market?.scanState?.().then(setScan).catch(() => {}); }, [open, market]);
   useEffect(() => {
     if (!open || !addByName || !market) return;
     let alive = true;
@@ -262,7 +276,7 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
     if (view === 'discover' || view === 'installable') void load(view);
     if (view === 'installed') refreshInstalled();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, view, submitted, category, sort]);
+  }, [open, view, submitted, category, picked, sort]);
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -328,7 +342,21 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
   if (!open || !market) return null;
 
   const filters = copy.filters;
-  const reset = () => { setQuery(''); setSubmitted(''); setCategory(undefined); setSort('downloads'); };
+  const reset = () => { setQuery(''); setSubmitted(''); setCategory(undefined); setPicked([]); setSort('downloads'); };
+  const readCatalogue = async () => {
+    if (!market?.scan) return;
+    setScanning(true);
+    setError(undefined);
+    try {
+      setScan(await market.scan());
+      setPages({ discover: undefined, installable: undefined });
+      await load(view === 'installable' ? 'installable' : 'discover');
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setScanning(false);
+    }
+  };
   // "1–50 / 305 (of 5548)", as the gallery counts.
   const counted = page ? `${page.items.length ? 1 : 0}–${page.items.length} / ${page.total.toLocaleString('en-US')}${page.unfiltered !== undefined && page.unfiltered !== page.total ? ` (of ${page.unfiltered.toLocaleString('en-US')})` : ''}` : '';
   const toolbar = (
@@ -354,10 +382,29 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
       {filters ? <span className="dshMarketCount" role="status">{counted}</span> : <Pill>{page?.items.length ?? 0}</Pill>}
     </form>
   );
-  const categoryPills = !filters && categories.length > 0 && (
+  const categoryPills = !filters && (categories.length > 0 || market.scan) && (
     <div className="dshMarketCategories" role="group" aria-label="Categories">
       <span>Categories</span>
-      {categories.map(name => <Pill key={name} pressed={category === name} onClick={() => setCategory(value => value === name ? undefined : name)}>{name}</Pill>)}
+      {categories.map(name => (
+        <Pill key={name} pressed={picked.includes(name)} onClick={() => setPicked(value => value.includes(name) ? value.filter(item => item !== name) : [...value, name])}>{name}</Pill>
+      ))}
+      {picked.length > 1 && <Pill onClick={() => setPicked([])}>Clear {picked.length}</Pill>}
+      {/* Several categories and an exact count need the whole catalogue: a
+          source's own search is one page and one category at a time. */}
+      {market.scan && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={scanning || loading}
+          icon={<Library size={14} />}
+          title={scan?.scanned
+            ? `${scan.items.toLocaleString('en-US')} entries read from ${scan.pages} page(s)${scan.complete ? '' : ', stopped before the end'}. Searches are answered from these.`
+            : 'Read every page of this source once, so searches are counted exactly and several categories can be picked at a time'}
+          onClick={() => void readCatalogue()}
+        >
+          {scanning ? 'Reading the catalogue…' : scan?.scanned ? `Catalogue: ${scan.items.toLocaleString('en-US')}` : 'Read the whole catalogue'}
+        </Button>
+      )}
     </div>
   );
   const grid = (items: MarketItem[], action?: string) => (
@@ -448,7 +495,7 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
                   <div className="dshMarketBanner dshMarketSourceGuide"><Globe size={14} /><span>{copy.sourcesGuide}</span></div>
                   {sourceError && !addOpen && <div className="dshMarketBanner" role="alert"><Dot state="error" />{sourceError}</div>}
                   <div className="dshMarketSources" role="radiogroup" aria-label="Choose plugin source">
-                    {sources.filter(source => source.added !== false).map(source => (
+                    {sources.filter(source => source.added !== false).map((source, at, added) => (
                       <div className="dshMarketSource" key={source.id}>
                         <div>
                           <h3>{source.name}{source.partner && <Pill>Partner provider</Pill>}</h3>
@@ -458,6 +505,14 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
                         </div>
                         <div className="dshMarketSourceActions">
                           <Button size="sm" role="radio" aria-checked={source.selected} disabled={sourcePending || !market.selectSource} icon={source.selected ? <Check size={14} /> : undefined} onClick={() => { if (!source.selected) void mutateSources(() => market.selectSource?.(source.id)); }}>{source.selected ? 'Current source' : 'Select this source'}</Button>
+                          {/* The person's own order for the list. Which source
+                              is used is still the selected one, not the first. */}
+                          {market.moveSource && added.length > 1 && (
+                            <>
+                              <Button variant="ghost" size="sm" iconOnly aria-label={`Move ${source.name} up`} title="Move up" disabled={sourcePending || at === 0} icon={<ArrowUp size={14} />} onClick={() => void mutateSources(() => market.moveSource?.(source.id, 'up'))} />
+                              <Button variant="ghost" size="sm" iconOnly aria-label={`Move ${source.name} down`} title="Move down" disabled={sourcePending || at === added.length - 1} icon={<ArrowDown size={14} />} onClick={() => void mutateSources(() => market.moveSource?.(source.id, 'down'))} />
+                            </>
+                          )}
                           <Button variant="ghost" size="sm" iconOnly aria-label="Remove source" title="Remove source" disabled={sourcePending || !market.removeSource} icon={<Trash2 size={14} />} onClick={() => void mutateSources(() => market.removeSource?.(source.id))} />
                         </div>
                       </div>

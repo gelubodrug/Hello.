@@ -863,8 +863,17 @@ Installed list updates and removes what it installed.
   package the person typed in Settings. Hello adds a compatibility gate: a package
   whose dsh peers exclude the pinned dsh is not installed. Sources: DSH 1024Store
   (the default), dshfind, and standard sources added by manifest URL; one is in
-  use at a time, kept in `<data>/dsh/market-sources.json`. A standard source's
+  use at a time, kept in `<data>/dsh/market-sources.json` in the order the person
+  puts it in (Move up/down; which source is used is still the selected one, not
+  the first). A standard source's
   paging cursor stays in main, behind a token bound to that source and search.
+  A source's own search is one page and one category at a time, so the person
+  can have Hello read a catalogue through once — the same pages and cursors,
+  bounded at 600 pages and 20,000 entries, a repeated cursor ending the walk
+  (`market/scan.ts`). Every search of that source is then answered from what
+  came back: exact counts, and any number of categories at once (an item in any
+  of them). Refresh drops it and reads the source again. Without a scan, one
+  category still goes to the source and several are narrowed page by page.
 - **Skills and tools in Hello chats.** The skills of installed dsh plugins appear
   in Extensions › Found on this Mac, to import like any skill. Their tools cross
   through the tool bridge (`dsh/tool-bridge.ts`), which the host entry starts next
