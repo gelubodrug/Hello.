@@ -93,6 +93,15 @@ export default function () { void Type; void getModel; void recall; }
     expect(existsSync(path.join(directory, 'data', 'library', 'plugins'))).toBe(false);
   });
 
+  // The published OpenViking extension imports a `shared/` folder its build
+  // generates and its published copy does not carry. "Install the plugin's
+  // dependencies" was a dead end there: npm install produces no such file.
+  it('names a file the folder does not have as a file, not as a package', async () => {
+    const root = extensionFolder('published-without-build', "import { store } from './shared/generated';\nimport { gone } from 'not-installed-anywhere';\nexport default () => [store, gone];\n", false);
+    await expect(library.importPath('plugin', root)).rejects.toThrow(/imports \.\/shared\/generated, which is not in that folder.*build the plugin in its own folder first/s);
+    expect(store.listResourceRows()).toEqual([]);
+  });
+
   it('notices when the approved bundle is edited afterwards', async () => {
     const imported = await library.importPath('plugin', extensionFolder('guarded', INDEX));
     const row = store.getResourceRow(imported.id);

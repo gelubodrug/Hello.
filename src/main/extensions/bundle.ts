@@ -127,12 +127,23 @@ export function packagesIn(metafile: Metafile, root: string): string[] {
   return [...names].sort();
 }
 
-/** The packages behind the specifiers esbuild could not resolve: `@scope/pkg/sub` is `@scope/pkg`. */
-function missingPackages(failure: BuildFailure): string[] {
-  return [...new Set(failure.errors
+/**
+ * What esbuild could not resolve, told apart: npm packages (`@scope/pkg/sub` is
+ * `@scope/pkg`) the person can install, and paths inside the plugin that are
+ * simply not there. The published OpenViking extension is the second kind — its
+ * `shared/` folder is generated at build time and never shipped — and telling
+ * someone to install the dependencies of a missing file of its own was a dead
+ * end.
+ */
+export function unresolved(failure: BuildFailure): { packages: string[]; files: string[] } {
+  const names = [...new Set(failure.errors
     .map(error => /^Could not resolve "([^"]+)"/.exec(error.text)?.[1])
-    .filter((name): name is string => Boolean(name))
-    .map(name => name.startsWith('.') || name.startsWith('/') ? name : name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/')))];
+    .filter((name): name is string => Boolean(name)))];
+  return {
+    packages: [...new Set(names.filter(name => !name.startsWith('.') && !name.startsWith('/'))
+      .map(name => name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/')))],
+    files: names.filter(name => name.startsWith('.') || name.startsWith('/')),
+  };
 }
 
 /**
@@ -158,9 +169,11 @@ export async function bundleExtension(root: string, entry: string): Promise<Exte
     });
   } catch (error) {
     const failure = error as BuildFailure;
-    const missing = Array.isArray(failure.errors) ? missingPackages(failure) : [];
-    if (missing.length)
-      throw new Error(`${entry} imports ${missing.join(', ')}, which ${missing.length === 1 ? 'is' : 'are'} not installed in that folder. Install the plugin’s dependencies there (for example with npm install), then import it again.`);
+    const missing = Array.isArray(failure.errors) ? unresolved(failure) : { packages: [], files: [] };
+    if (missing.files.length)
+      throw new Error(`${entry} imports ${missing.files.join(', ')}, which ${missing.files.length === 1 ? 'is' : 'are'} not in that folder. Some extensions generate those files when they are built, and a published copy does not carry them: build the plugin in its own folder first, then import it again.`);
+    if (missing.packages.length)
+      throw new Error(`${entry} imports ${missing.packages.join(', ')}, which ${missing.packages.length === 1 ? 'is' : 'are'} not installed in that folder. Install the plugin’s dependencies there (for example with npm install), then import it again.`);
     const first = Array.isArray(failure.errors) ? failure.errors[0] : undefined;
     throw new Error(`${entry} could not be prepared for Pi: ${first ? `${first.text}${first.location ? ` (${first.location.file}:${first.location.line})` : ''}` : (error instanceof Error ? error.message : String(error))}`);
   }
