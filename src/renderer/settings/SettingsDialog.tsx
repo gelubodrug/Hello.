@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Blocks, Check, ChevronDown, ChevronLeft, Plug, RefreshCw, SlidersHorizontal, Star, AppWindow } from "lucide-react";
-import type { AppSettings, LocalServer, ModelChoice, SettingsPatch } from "../../shared/types";
+import type { AppSettings, LocalServer, ModelChoice, SettingsPatch, VoiceServer } from "../../shared/types";
 import { api } from "../api";
 import { ErrorNote, IconButton, MenuButton, MenuLayerAbove, errorText } from "../ui/primitives";
 import { ExtensionsSection } from "./ExtensionsSection";
@@ -69,6 +69,7 @@ export function SettingsDialog({
   const [models, setModels] = useState<ModelChoice[]>([]);
   const [probe, setProbe] = useState<Probe>({ state: 'idle' });
   const [servers, setServers] = useState<LocalServer[] | null>(null);
+  const [voiceServers, setVoiceServers] = useState<VoiceServer[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -83,6 +84,9 @@ export function SettingsDialog({
     setScanning(true);
     try { setServers(await api.settings.localServers()); }
     catch { setServers([]); }
+    // The same look found the voice servers: Hello finds one, it never starts one.
+    try { setVoiceServers(await api.settings.voiceServers?.() ?? []); }
+    catch { setVoiceServers([]); }
     finally { setScanning(false); }
   };
   useEffect(() => {
@@ -98,6 +102,7 @@ export function SettingsDialog({
       setSaved(false);
       setModels([]);
       setServers(null);
+      setVoiceServers(null);
       void scan();
     }
   }, [open]);
@@ -444,6 +449,13 @@ export function SettingsDialog({
                 </button>
               ))}
             </div>
+          )}
+          {voiceServers !== null && (
+            <p className="muted" title={voiceServers.map(server => server.baseUrl).join("\n") || undefined}>
+              {voiceServers.length
+                ? `Voice: ${voiceServers.map(server => server.name).join(", ")}`
+                : "No voice server is running on this Mac."}
+            </p>
           )}
         </section>
         <div className="settings-model-row">

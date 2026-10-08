@@ -71,6 +71,8 @@ export interface ModelChoice { id: string; contextWindow?: number; maxOutputToke
 export interface ConnectionModels { name: string; endpointUrl: string; active: boolean; models: ModelChoice[]; error?: string; }
 /** A model server found running on this Mac, named after what it is and the port it took. */
 export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[]; }
+/** A voice server running on this Mac, found and never started by Hello: OpenAI-shaped speech (Kokoro, mlx-audio), or whisper.cpp's whisper-server. */
+export interface VoiceServer { name: string; baseUrl: string; kind: 'speech' | 'whisper.cpp'; }
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
 export interface ResourceChange { conversationId?: string }
 /** The switches of a chat's notebook sections (user, 29.09). `planning` is
@@ -315,6 +317,8 @@ export interface HelloAPI {
     usage?(): Promise<UsageSummary>;
     /** Model servers running on this Mac, looked for afresh. */
     localServers(): Promise<LocalServer[]>;
+    /** Voice servers running on this Mac, from the same look. Optional for an older preload. */
+    voiceServers?(): Promise<VoiceServer[]>;
     /** Keeps the endpoint and model as currently saved under a name. */
     rememberConnection(name: string): Promise<AppSettings>;
     /** Makes a remembered connection the active endpoint and model. */

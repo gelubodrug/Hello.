@@ -145,6 +145,8 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.catalog',()=>chat.catalog());
   handle('settings.usage',()=>store.usageSummary());
   handle('settings.localServers',()=>chat.localServers(true));
+  // The same look Settings just asked for: a voice server is found, never started.
+  handle('settings.voiceServers',()=>chat.voiceServers());
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
   // What every chat waits for the person to answer (audit A1): read-only.
   handle('chat.pendingInput',()=>chat.pendingInput());

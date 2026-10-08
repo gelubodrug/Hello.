@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ConnectionModels,
   LocalServer,
+  VoiceServer,
   ChatDropResult,
   ChatEvent,
   ChatQueueEvent,
@@ -21,7 +22,8 @@ import type {
   PendingRequest,
 } from '../../shared/types';
 import { limitsKey, normalizeEndpoint, type DataStore } from '../data/store';
-import { detectLocalServers, listeningPorts } from './local-servers';
+import { detectServers, listeningPorts, type FoundServers } from './local-servers';
+import { isSpeechServer, isVoiceModelId, isWhisperServer } from '../voice/servers';
 import { ownServer } from './qwen-thinking';
 import { PiRpcProcess, type PiExtensionLoadError } from './pi-rpc';
 import { PiEventMapper } from './pi-events';
@@ -199,6 +201,8 @@ export interface ChatServiceOptions {
   };
   /** Model servers on this Mac. Defaults to asking every port lsof reports. */
   localServers?: () => Promise<LocalServer[]>;
+  /** Voice servers on this Mac, when localServers is given; the default look finds both. */
+  voiceServers?: () => Promise<VoiceServer[]>;
   /** The rpc-entry chats start Pi from: an update the person installed, or the bundled Pi. */
   piEntry?: () => string;
 }
@@ -499,10 +503,10 @@ export class ChatService {
    * turn costs no round trip when the list was just read. Failures are not
    * cached: a server that was starting up must be asked again. */
   private readonly listings = new Map<string, { at: number; listed: ModelChoice[] }>();
-  private readonly detect: () => Promise<LocalServer[]>;
+  private readonly detect: () => Promise<FoundServers>;
   /** The last look for local servers, reused for a few seconds: the chat's
    *  picker asks on every open. */
-  private found?: { at: number; servers: Promise<LocalServer[]> };
+  private found?: { at: number; servers: Promise<FoundServers> };
   private settling?: Promise<void>;
   private readonly approvals = new WatchedMap<string, PendingApproval>(() => this.pendingChanged());
   /** Each chat's plugin commands, as its Pi last said (pluginCommands). */
@@ -548,10 +552,15 @@ export class ChatService {
     this.piEntry = options.piEntry;
     // A local server answers its model list in milliseconds; a second is
     // ample, and every candidate port is asked at the same time.
-    this.detect = options.localServers ?? (() => detectLocalServers({
-      ports: () => listeningPorts(),
-      list: endpointUrl => this.listed(endpointUrl, true, 1_000),
-    }));
+    const { localServers, voiceServers } = options;
+    this.detect = localServers
+      ? async () => ({ chat: await localServers(), voice: await (voiceServers?.() ?? []) })
+      : () => detectServers({
+        ports: () => listeningPorts(),
+        list: endpointUrl => this.listed(endpointUrl, true, 1_000),
+        speech: baseUrl => isSpeechServer(baseUrl, this.fetcher),
+        whisper: (baseUrl, command) => isWhisperServer(baseUrl, command, this.fetcher),
+      });
   }
   isRunning(conversationId: string): boolean {
     return this.runs.has(conversationId);
@@ -611,7 +620,14 @@ export class ChatService {
    * afresh; everyone else takes the last look at once, so nothing waits on
    * ports that do not answer.
    */
-  localServers(fresh = false): Promise<LocalServer[]> {
+  async localServers(fresh = false): Promise<LocalServer[]> {
+    return (await this.lookOrLast(fresh)).chat;
+  }
+  /** Voice servers running on this Mac, from the same look: found, never started. */
+  async voiceServers(fresh = false): Promise<VoiceServer[]> {
+    return (await this.lookOrLast(fresh)).voice;
+  }
+  private lookOrLast(fresh: boolean): Promise<FoundServers> {
     const last = this.found;
     return fresh || !last ? this.look() : last.servers;
   }
@@ -625,8 +641,8 @@ export class ChatService {
   private lookAgainIfStale(): void {
     if (this.found && Date.now() - this.found.at >= 10_000) void this.look();
   }
-  private look(): Promise<LocalServer[]> {
-    const servers = this.detect().catch(() => []);
+  private look(): Promise<FoundServers> {
+    const servers = this.detect().catch((): FoundServers => ({ chat: [], voice: [] }));
     this.found = { at: Date.now(), servers };
     return servers;
   }
@@ -761,7 +777,8 @@ export class ChatService {
       for (const row of rows.slice(0, 10_000)) {
         const model = record(row);
         const id = string(model?.id) || string(model?.name);
-        if (!id || listed.has(id)) continue;
+        // A speech server's list (Kokoro, its voices, whisper) is nothing to chat with.
+        if (!id || listed.has(id) || isVoiceModelId(id)) continue;
         const provider = record(model?.top_provider);
         const context = positive(record(model?.meta)?.n_ctx)
           ?? positive(model?.context_length)

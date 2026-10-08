@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import type { LocalServer, ModelChoice } from '../../shared/types';
+import type { LocalServer, ModelChoice, VoiceServer } from '../../shared/types';
+import { voiceServerName } from '../voice/servers';
 
 /**
  * Model servers running on this Mac, found rather than typed. A llama-server
@@ -65,6 +66,8 @@ const NAMES: ReadonlyArray<[RegExp, string]> = [
   [/llama-server|llama\.cpp|llamafile/i, 'llama.cpp'],
   [/ollama/i, 'Ollama'],
   [/lm ?studio|^lms$/i, 'LM Studio'],
+  [/whisper/i, 'whisper.cpp'],
+  [/kokoro/i, 'Kokoro'],
   [/mlx/i, 'MLX'],
   [/vllm/i, 'vLLM'],
   [/kobold/i, 'KoboldCpp'],
@@ -99,25 +102,51 @@ export function candidates(ports: ListeningPort[]): ListeningPort[] {
     .slice(0, PORT_LIMIT);
 }
 
+export interface FoundServers { chat: LocalServer[]; voice: VoiceServer[] }
+
+/**
+ * One look at every candidate port. A port that lists voices is a voice server
+ * and stays out of the chat's list even when it also publishes /v1/models (its
+ * Kokoro ids are not chat models); one with a chat model list is a chat server;
+ * only a port that is neither is asked whether it is whisper.cpp.
+ */
+export async function detectServers(options: {
+  ports: () => Promise<ListeningPort[]>;
+  /** The model list at an endpoint; throws when it has none. */
+  list: (endpointUrl: string) => Promise<ModelChoice[]>;
+  /** Whether the server at this base URL lists voices (GET /v1/audio/voices). */
+  speech?: (baseUrl: string) => Promise<boolean>;
+  /** Whether the server at this base URL is whisper.cpp's. */
+  whisper?: (baseUrl: string, command: string) => Promise<boolean>;
+}): Promise<FoundServers> {
+  const ports = candidates(await options.ports());
+  const answered = await Promise.all(ports.map(async ({ command, port }) => {
+    const baseUrl = `http://localhost:${port}`;
+    const endpointUrl = `${baseUrl}/v1`;
+    const [speaks, models] = await Promise.all([
+      options.speech?.(baseUrl).catch(() => false) ?? false,
+      options.list(endpointUrl).catch(() => [] as ModelChoice[]),
+    ]);
+    const { label, known } = serverLabel(command);
+    if (speaks) return { voice: { name: voiceServerName('speech', command, port), baseUrl, kind: 'speech' as const }, known, port };
+    if (models.length) return { server: { name: `${label} · ${port}`, endpointUrl, models }, known, port };
+    if (await options.whisper?.(baseUrl, command).catch(() => false))
+      return { voice: { name: voiceServerName('whisper.cpp', command, port), baseUrl, kind: 'whisper.cpp' as const }, known, port };
+    return null;
+  }));
+  const found = answered
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => Number(right.known) - Number(left.known) || left.port - right.port);
+  return {
+    chat: found.flatMap(entry => 'server' in entry && entry.server ? [entry.server] : []),
+    voice: found.flatMap(entry => 'voice' in entry && entry.voice ? [entry.voice] : []),
+  };
+}
+
 export async function detectLocalServers(options: {
   ports: () => Promise<ListeningPort[]>;
   /** The model list at an endpoint; throws when it has none. */
   list: (endpointUrl: string) => Promise<ModelChoice[]>;
 }): Promise<LocalServer[]> {
-  const ports = candidates(await options.ports());
-  const answered = await Promise.all(ports.map(async ({ command, port }) => {
-    const endpointUrl = `http://localhost:${port}/v1`;
-    try {
-      const models = await options.list(endpointUrl);
-      if (!models.length) return null;
-      const { label, known } = serverLabel(command);
-      return { server: { name: `${label} · ${port}`, endpointUrl, models }, known, port };
-    } catch {
-      return null;
-    }
-  }));
-  return answered
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-    .sort((left, right) => Number(right.known) - Number(left.known) || left.port - right.port)
-    .map(entry => entry.server);
+  return (await detectServers(options)).chat;
 }
