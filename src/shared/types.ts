@@ -334,6 +334,11 @@ export interface HelloAPI {
     /** Drops a remembered connection and the key stored for its endpoint. */
     forgetConnection(endpointUrl: string): Promise<AppSettings>;
   };
+  /** Persistent work-pane tab order. Optional for an older preload. */
+  workspace?: {
+    toolOrder(conversationId: string): Promise<string[]>;
+    saveToolOrder(conversationId: string, order: string[]): Promise<string[]>;
+  };
   /** Voice. Optional for an older preload. */
   voice?: {
     /** One microphone WAV, translated locally into an English turn. */

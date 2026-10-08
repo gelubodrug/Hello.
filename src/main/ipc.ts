@@ -158,6 +158,8 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.localServers',()=>chat.localServers(true));
   // The same look Settings just asked for: a voice server is found, never started.
   handle('settings.voiceServers',()=>chat.voiceServers());
+  handle('workspace.toolOrder',id=>store.toolOrder(str(id)));
+  handle('workspace.saveToolOrder',(id,order)=>store.saveToolOrder(str(id),order));
   // A chunk of a reply, read aloud by the speech server the person runs here:
   // the one Settings names, else the first one found. Never one off this Mac.
   const speaker=new VoiceSpeaker();

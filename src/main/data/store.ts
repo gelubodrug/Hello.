@@ -688,6 +688,7 @@ export class DataStore {
   deleteConversation(id: string): void {
     const row = this.getConversation(id);
     this.db.transaction(() => {
+      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`tool-order:${id}`);
       this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?)')
         .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
@@ -812,6 +813,20 @@ export class DataStore {
       ...(row.startedBy ? { startedBy: row.startedBy } : {}),
       ...(row.workedMs ? { workedMs: row.workedMs } : {}),
     }));
+  }
+  toolOrder(conversationId: string): string[] {
+    this.getConversation(conversationId);
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(`tool-order:${conversationId}`) as { value: string } | undefined;
+    const saved: unknown = parse(row?.value, []);
+    return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
+  }
+  saveToolOrder(conversationId: string, order: unknown): string[] {
+    this.getConversation(conversationId);
+    if (!Array.isArray(order) || order.length > 500 || order.some(id => typeof id !== 'string' || !id || id.length > 200) || new Set(order).size !== order.length)
+      throw new Error('Invalid tool tab order.');
+    this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run(`tool-order:${conversationId}`, JSON.stringify(order));
+    return order;
   }
   saveMessage(message: Message): Message {
     this.getConversation(message.conversationId);
