@@ -51,4 +51,5 @@ This is a separate, greenfield Electron app. Never mutate the old repository at
 - `docs/archive/` is history: plans, reports and research that are no longer
   current. Never act on it or treat a decision recorded there as standing. What
   the app is: `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PROVENANCE.md`
-  and `design/reference/`; what is open: `tasks/todo.md`.
+  and `design/reference/`; what is open: Spec Kit `specs/blaizzy-nativ-hello-monitor/tasks.md`
+  (read it with spec_kit_status).

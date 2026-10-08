@@ -29,6 +29,6 @@ and never reach the window.
   reused or adapted, and from where.
 - `design/reference/` — the approved visual contract (`design/LOOK.md` in it)
   and a runnable specimen; `design/CHAT-ACTIVITY-RULES.md` — the chat timeline.
-- `tasks/todo.md` — what is still open.
+- `specs/blaizzy-nativ-hello-monitor/tasks.md` — what is still open (Spec Kit).
 - `AGENTS.md` — the rules for agents working in this repository.
 - `docs/archive/` — history: plans, reports and research that are no longer current.
