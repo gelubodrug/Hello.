@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Blocks, Check, ChevronDown, ChevronLeft, Plug, RefreshCw, SlidersHorizontal, Star, AppWindow } from "lucide-react";
+import { AudioLines, Blocks, Check, ChevronDown, ChevronLeft, Plug, RefreshCw, SlidersHorizontal, Star, AppWindow } from "lucide-react";
 import type { AppSettings, LocalServer, ModelChoice, SettingsPatch, VoiceServer } from "../../shared/types";
 import { api } from "../api";
 import { ErrorNote, IconButton, MenuButton, MenuLayerAbove, errorText } from "../ui/primitives";
 import { ExtensionsSection } from "./ExtensionsSection";
 import { AppAuditSection } from "./AppAuditSection";
+import { VoiceSection } from "./VoiceSection";
 import { ENDPOINT_PRESETS, endpointIdentity, modelName, presetFor, suggestedName } from "./presets";
 import { compactNumber, t } from "../i18n";
 
@@ -34,7 +35,7 @@ function served(models: ModelChoice[]): string {
   return only.contextWindow ? `${modelName(only.id)} · ${t('tokens', { n: compactNumber(only.contextWindow) })}` : modelName(only.id);
 }
 
-type Section = 'connection' | 'advanced' | 'extensions' | 'app';
+type Section = 'connection' | 'advanced' | 'voice' | 'extensions' | 'app';
 type Probe =
   | { state: 'idle' }
   | { state: 'checking' }
@@ -266,6 +267,7 @@ export function SettingsDialog({
           {([
             { id: 'connection', label: 'Connection', Icon: Plug },
             { id: 'advanced', label: 'Advanced', Icon: SlidersHorizontal },
+            { id: 'voice', label: 'Voice', Icon: AudioLines },
             { id: 'extensions', label: 'Extensions', Icon: Blocks },
             { id: 'app', label: 'App', Icon: AppWindow },
           ] as const).map(tab => (
@@ -285,6 +287,8 @@ export function SettingsDialog({
       <div className="settings-content">
       {section === 'extensions' ? (
         <ExtensionsSection />
+      ) : section === 'voice' ? (
+        <VoiceSection settings={settings} servers={voiceServers} onSaved={onSaved} />
       ) : section === 'app' ? (
         <AppAuditSection dataPath={dataPath} version={version} endpointUrl={settings.endpointUrl} extensionsLoaded={extensionsCount}
           appearance={settings.appearance ?? 'system'}

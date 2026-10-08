@@ -52,10 +52,32 @@ const CONNECTION_LIMIT = 12;
 
 /** Voice as stored: a speech server is on this Mac or nowhere, and a voice id is a short name. */
 function voiceSettings(value: Partial<VoiceSettings>): VoiceSettings {
-  const ttsEndpointUrl = typeof value.ttsEndpointUrl === 'string' ? value.ttsEndpointUrl.trim().slice(0, 500) : '';
-  const ttsVoice = typeof value.ttsVoice === 'string' ? value.ttsVoice.trim().slice(0, 100) : '';
+  const text = (field: unknown, limit: number) => typeof field === 'string' ? field.trim().slice(0, limit) : '';
+  const sttEndpointUrl = text(value.sttEndpointUrl, 500);
+  const sttModel = text(value.sttModel, 500);
+  const sourceLanguage = text(value.sourceLanguage, 10).toLowerCase();
+  const ttsEndpointUrl = text(value.ttsEndpointUrl, 500);
+  const ttsVoice = text(value.ttsVoice, 100);
+  for (const url of [sttEndpointUrl, ttsEndpointUrl])
+    if (url && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url)) throw new Error('A voice server runs on this Mac: http://localhost:<port>.');
+  if (sourceLanguage && !/^[a-z]{2,3}$/.test(sourceLanguage)) throw new Error('A language is a short code, like ro or en.');
   if (ttsVoice && !/^[\w.+-]+$/.test(ttsVoice)) throw new Error('A voice is a name like af_heart.');
-  return { enabled: value.enabled === true, ...(ttsEndpointUrl ? { ttsEndpointUrl } : {}), ...(ttsVoice ? { ttsVoice } : {}) };
+  return {
+    enabled: value.enabled === true,
+    ...(sttEndpointUrl ? { sttEndpointUrl } : {}),
+    ...(sttModel ? { sttModel } : {}),
+    ...(sourceLanguage ? { sourceLanguage } : {}),
+    ...(ttsEndpointUrl ? { ttsEndpointUrl } : {}),
+    ...(ttsVoice ? { ttsVoice } : {}),
+  };
+}
+
+/** A model and a voice belong to the server that offered them: pointing at another drops them, unless given anew. */
+function nextVoice(current: VoiceSettings | undefined, patch: Partial<VoiceSettings>): VoiceSettings {
+  const next: Partial<VoiceSettings> = { ...current, ...patch };
+  if (patch.sttEndpointUrl !== undefined && patch.sttModel === undefined && (patch.sttEndpointUrl.trim() || undefined) !== current?.sttEndpointUrl) delete next.sttModel;
+  if (patch.ttsEndpointUrl !== undefined && patch.ttsVoice === undefined && (patch.ttsEndpointUrl.trim() || undefined) !== current?.ttsEndpointUrl) delete next.ttsVoice;
+  return voiceSettings(next);
 }
 
 const DEFAULT_SETTINGS: StoredSettings = {
@@ -880,7 +902,7 @@ export class DataStore {
       subagentModel: patch.subagentModel !== undefined ? (patch.subagentModel.trim().slice(0, 500) || undefined) : current.subagentModel,
       // What was learned about one model does not carry to the next.
       contextScale: patch.contextScale ?? current.contextScale,
-      voice: patch.voice !== undefined ? voiceSettings({ ...current.voice, ...patch.voice }) : current.voice,
+      voice: patch.voice !== undefined ? nextVoice(current.voice, patch.voice) : current.voice,
     };
     // A model id is its provider's: another connection starts from the chat's own model again.
     if (patch.subagentModel === undefined && next.endpointUrl !== current.endpointUrl) delete next.subagentModel;

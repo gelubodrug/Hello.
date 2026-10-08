@@ -247,6 +247,8 @@ svg {
   border: 0; border-radius: var(--r-8); background: transparent; color: var(--ink-secondary); text-align: left;
 }
 .sidebar-settings:hover { background: var(--surface-hover); color: var(--ink-primary); }
+/* Voice may be unavailable — still rendered, its reason in the tooltip. */
+.sidebar-settings:disabled:hover { background: transparent; color: var(--ink-secondary); }
 /* An engine in the footer — DSH, Pi: the version running at the row's end and,
    only when npm has a newer one, "update" beside it. */
 .sidebar-engine { display: flex; align-items: center; gap: var(--sp-4); }
@@ -422,7 +424,8 @@ svg {
   background: var(--surface-active);
 }
 .icon-button[aria-expanded="true"],
-.sidebar-pin-toggle[aria-pressed="true"] {
+.sidebar-pin-toggle[aria-pressed="true"],
+.sidebar-settings[aria-pressed="true"] {
   background: var(--surface-hover);
   color: var(--ink-primary);
 }

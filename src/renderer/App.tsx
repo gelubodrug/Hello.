@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AudioLines,
   Blocks,
   Cpu,
   Package,
@@ -35,7 +36,7 @@ import type {
   TerminalSession,
   WorkerId,
 } from "../shared/types";
-import type { MarketKind, MenuAction, MessageMatch, PendingInput, PendingRequest, QueuedMessage } from "../shared/types";
+import type { MarketKind, MenuAction, MessageMatch, PendingInput, PendingRequest, QueuedMessage, VoiceServer } from "../shared/types";
 import type { FindJump } from "./chat/ChatFind";
 import { api } from './api';
 import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, requestKind, requestNotice, strongest, type AttentionKind, type Seen } from "./attention";
@@ -171,6 +172,13 @@ function Application() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [visited, setVisited] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Voice servers found on this Mac, asked again whenever Settings closes.
+  const [voiceFound, setVoiceFound] = useState<VoiceServer[] | null>(null);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  useEffect(() => {
+    if (settingsOpen) return;
+    void api.settings.voiceServers?.().then(setVoiceFound, () => setVoiceFound([]));
+  }, [settingsOpen]);
   // The DSH surface: opened from the sidebar, then kept mounted so its page
   // is never reloaded by closing and reopening the view.
   const [dshOpen, setDshOpen] = useState(false);
@@ -1198,6 +1206,26 @@ function Application() {
                 onUpdate={() => void api.piEngine?.update().catch(reportError)}
                 onBack={() => void api.piEngine?.useBundled().catch(reportError)} />
             )}
+            {(() => {
+              // The one Voice switch. Rendered even when it cannot turn on, saying why.
+              const voice = boot?.settings.voice;
+              const on = voice?.enabled === true;
+              const reason = !api.voice ? "Voice needs the updated Hello. preload. Reopen Hello. when ready."
+                : !on && voiceFound !== null && !voice?.ttsEndpointUrl && !voiceFound.some(server => server.kind === "speech")
+                  ? "No voice server is running on this Mac. Start Kokoro, then turn Voice on." : null;
+              return (
+                <button type="button" className="sidebar-settings" aria-pressed={on} disabled={voiceBusy || reason !== null}
+                  title={reason ?? (on ? "Voice is on: finished replies are read aloud. Click to turn it off." : "Read finished replies aloud")}
+                  onClick={() => {
+                    setVoiceBusy(true);
+                    void api.settings.save({ voice: { enabled: !on } })
+                      .then(settings => setBoot(current => (current ? { ...current, settings } : current)))
+                      .catch(reportError).finally(() => setVoiceBusy(false));
+                  }}>
+                  <AudioLines size={16} aria-hidden /> Voice
+                </button>
+              );
+            })()}
             <button type="button" className="sidebar-settings" onClick={() => setSettingsOpen(true)}>
               <Settings size={16} /> Settings
             </button>

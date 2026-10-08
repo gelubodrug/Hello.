@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, Notification, type BrowserWindow } from 'electron';
+import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, Notification, systemPreferences, type BrowserWindow } from 'electron';
 import { applyAppearance } from './appearance';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
@@ -134,8 +134,11 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.voice!==undefined){
       const voice=record(patch.voice);
       if(voice.enabled!==undefined&&typeof voice.enabled!=='boolean')throw new Error('Invalid voice setting.');
-      for(const key of ['ttsEndpointUrl','ttsVoice'] as const)if(voice[key]!==undefined&&(typeof voice[key]!=='string'||(voice[key] as string).length>500))throw new Error('Invalid voice setting.');
-      clean.voice={enabled:voice.enabled===true,...(voice.ttsEndpointUrl!==undefined?{ttsEndpointUrl:voice.ttsEndpointUrl as string}:{}),...(voice.ttsVoice!==undefined?{ttsVoice:voice.ttsVoice as string}:{})};
+      const fields=['sttEndpointUrl','sttModel','sourceLanguage','ttsEndpointUrl','ttsVoice'] as const;
+      for(const key of fields)if(voice[key]!==undefined&&(typeof voice[key]!=='string'||(voice[key] as string).length>500))throw new Error('Invalid voice setting.');
+      const current=store.getSettings().voice;
+      clean.voice={enabled:voice.enabled===undefined?current?.enabled===true:voice.enabled===true};
+      for(const key of fields)if(voice[key]!==undefined)clean.voice[key]=voice[key] as string;
     }
     const saved=store.saveSettings(clean);
     // The app's look follows at once: native menus, and what pages read as prefers-color-scheme.
@@ -164,6 +167,9 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(!server)throw new Error('No voice server is running on this Mac.');
     return speaker.speak(server,words,voice?.ttsVoice??DEFAULT_TTS_VOICE);
   });
+  // What macOS says about the microphone, read without asking: the ask is the
+  // first voice turn's, through the window's media grant.
+  handle('voice.microphone',()=>process.platform==='darwin'?systemPreferences.getMediaAccessStatus('microphone'):'granted');
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
   // What every chat waits for the person to answer (audit A1): read-only.
   handle('chat.pendingInput',()=>chat.pendingInput());

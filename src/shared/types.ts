@@ -129,7 +129,9 @@ export type ApprovalMode = 'ask' | 'writes' | 'all';
 /** A provider the user asked this app to keep, so switching is a click and not a retyped URL. Its key lives under its endpoint, never in this record. */
 export interface SavedConnection { name: string; endpointUrl: string; model: string; apiKeySet: boolean; }
 /** Voice: replies read aloud by a Kokoro server the person runs on this Mac. Found, never started by Hello. */
-export interface VoiceSettings { enabled: boolean; /** The speech server; unset, the first one found on this Mac. */ ttsEndpointUrl?: string; /** A Kokoro voice id; unset, af_heart. */ ttsVoice?: string; }
+export interface VoiceSettings { /** The one Voice switch. */ enabled: boolean; /** The speech-to-text server (whisper.cpp); unset, the first one found on this Mac. */ sttEndpointUrl?: string; /** The model that server is asked for; it belongs to that server and clears when it changes. */ sttModel?: string; /** The language the person speaks, as a short code (ro); unset, the server detects it. */ sourceLanguage?: string; /** The speech server; unset, the first one found on this Mac. */ ttsEndpointUrl?: string; /** A Kokoro voice id; unset, af_heart. It belongs to its server and clears when it changes. */ ttsVoice?: string; }
+/** Whether macOS lets Hello use the microphone. */
+export type MicrophoneAccess = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
 /** One spoken chunk, as the voice server made it. */
 export interface VoiceSpeech { audio: Uint8Array; mime: string; }
 export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; /** Light, dark, or as macOS is (audit B2); unset is System. */ appearance?: 'system' | 'light' | 'dark'; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; /** Voice, off unless the person turns it on. */ voice?: VoiceSettings; connections: SavedConnection[]; }
@@ -334,6 +336,8 @@ export interface HelloAPI {
   voice?: {
     /** One chunk of prose as audio, from the voice server on this Mac. */
     speak(text: string): Promise<VoiceSpeech>;
+    /** What macOS says about the microphone, without asking. */
+    microphone?(): Promise<MicrophoneAccess>;
   };
   chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>;
     /** The picture on the clipboard, read by main and kept like a dropped image. Optional for an older preload. */

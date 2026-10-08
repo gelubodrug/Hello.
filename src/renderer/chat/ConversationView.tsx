@@ -16,6 +16,7 @@ import {
   CodeXml,
   Loader2,
   MessageCircle,
+  Mic,
   Paperclip,
   X,
 } from "lucide-react";
@@ -1438,6 +1439,13 @@ export function ConversationView({
                 {modelLoading ? <Loader2 size={13} className="browser-spinner"/> : <ChevronDown size={13} />}
               </MenuButton>
             </div>
+            {/* Voice input: rendered, disabled with an honest reason until voice turns land. */}
+            <IconButton
+              label={settings.voice?.enabled ? "Voice input — speaking to Hello. is not ready yet" : "Voice input — turn Voice on in the sidebar"}
+              disabled
+            >
+              <Mic size={18} />
+            </IconButton>
             {busy ? (
               <IconButton
                 className="send-button"
