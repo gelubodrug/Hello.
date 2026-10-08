@@ -1505,6 +1505,22 @@ export class ChatService {
     return { ...launch, ...adoptedLimits(published, launch) };
   }
 
+  /**
+   * The subagent model's own entry in its connection's listing (nativ#416):
+   * the limits it is declared on. Undefined when there is no second model, or
+   * the listing cannot be read; null when the listing answered without it.
+   */
+  private async subagentListing(launch: AppSettings): Promise<ModelChoice | null | undefined> {
+    const id = launch.subagentModel?.trim();
+    if (!id || id === launch.model) return undefined;
+    try {
+      const listed = this.listings.get(normalizeEndpoint(launch.endpointUrl))?.listed ?? await this.listed(launch.endpointUrl);
+      return listed.find(model => model.id === id) ?? null;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async sessionFor(run: SessionRequest, launchSettings: AppSettings): Promise<PiSession> {
     // Take the settled limits before the fingerprint, so a corrected context
     // window legitimately restarts the child rather than reusing one launched
@@ -1512,6 +1528,8 @@ export class ChatService {
     // edit made while this turn was starting is not this turn's contract.
     if (this.settling) await this.settling;
     const settings = await this.launchLimits(launchSettings);
+    const subagent = await this.subagentListing(settings);
+    const subagentLimits = subagent ? { contextWindow: subagent.contextWindow, maxOutputTokens: subagent.maxOutputTokens } : undefined;
     run.controller.signal.throwIfAborted();
     const conversation = this.store.getConversation(run.conversationId);
     const resources = await this.resourcesFor(run.conversationId, run.controller.signal);
@@ -1522,7 +1540,7 @@ export class ChatService {
     // temperature and reasoningEffort stay: the launch config carries both.
     const { appearance: _a, approvals: _p, connections: _c, apiKeySet: _k, limitsFor: _l, ...launched } = settings;
     const fingerprint = createHash('sha256').update(JSON.stringify({
-      settings: launched, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
+      settings: launched, subagentLimits, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
       // The instructions name the notebook sections that are on: a switched
       // section starts the next turn in a session whose instructions say so.
       sections: { plan: conversation.planning === true, runbook: conversation.runbook === true, tasks: conversation.tasks === true },
@@ -1596,7 +1614,7 @@ export class ChatService {
         chatMode: conversation.chatMode ?? 'chat', history: wireHistory(history),
         bridgeEnv: bridge.env, requestTimeoutMs: this.requestTimeoutMs,
         skillPaths: resources.skillPaths, extensionPaths: resources.extensionPaths, promptPaths: resources.promptPaths,
-        folder: conversation.folder,
+        folder: conversation.folder, subagentLimits,
         ...(this.piEntry ? { piEntry: this.piEntry() } : {}),
       });
       run.controller.signal.throwIfAborted();

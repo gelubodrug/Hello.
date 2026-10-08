@@ -115,6 +115,8 @@ export interface PiLaunchConfiguration {
   promptPaths?: string[];
   /** The Pi to start: an update installed from the sidebar. Absent, the bundled one. */
   piEntry?: string;
+  /** What the provider publishes for settings.subagentModel, when it is listed. */
+  subagentLimits?: { contextWindow?: number; maxOutputTokens?: number };
 }
 
 /** Isolated resources and credentials; no global Pi config or project discovery. */
@@ -178,8 +180,8 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   // This custom endpoint descriptor must preserve submitted image blocks.
   // The selected endpoint/model still decides whether vision is supported;
   // declaring text-only here would silently discard user attachments in Pi.
-  const describe = (id: string) => ({ id, name: id, input: ['text', 'image'],
-    reasoning: effort !== 'off' || qwenFor(id) || deepseek, contextWindow, maxTokens, compat: compatFor(id),
+  const describe = (id: string, limits = { contextWindow, maxTokens }) => ({ id, name: id, input: ['text', 'image'],
+    reasoning: effort !== 'off' || qwenFor(id) || deepseek, ...limits, compat: compatFor(id),
     // Keep the configured temperature except families that reject it.
     ...(/^(?:o[134](?:-|$)|gpt-5)/i.test(id) ? {} : {
       samplingParams: { temperature: settings.temperature },
@@ -189,9 +191,19 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   // connection: a second model of the same provider, which pi-subagents takes
   // as its default. Its children read this folder too.
   const subagentModel = settings.subagentModel?.trim() && settings.subagentModel.trim() !== settings.model ? settings.subagentModel.trim() : undefined;
+  // A second model is declared on its own numbers, never the chat's: the scale
+  // main learned is the chat model's, and a subagent declared at the chat's
+  // 512k window on a 32k model dies at the provider instead of compacting
+  // (nativ#416). Unpublished, the stored window, unscaled. Its children read
+  // this folder's compaction reserve too, so the window never sits below what
+  // that reserve needs to leave room, or every turn of theirs would compact.
+  const subagentWindow = Math.max(20480, reserveTokens + 4096, Math.floor(Math.min(
+    options.subagentLimits?.contextWindow ?? published, 2_000_000)));
+  const subagentLimits = { contextWindow: subagentWindow, maxTokens: Math.max(512, Math.min(
+    options.subagentLimits?.maxOutputTokens ?? settings.maxOutputTokens ?? 4096, subagentWindow - 8192)) };
   const models = { providers: { hello: {
     baseUrl, api: 'openai-completions', apiKey: '$HELLO_PI_API_KEY',
-    models: [describe(settings.model), ...(subagentModel ? [describe(subagentModel)] : [])],
+    models: [describe(settings.model), ...(subagentModel ? [describe(subagentModel, subagentLimits)] : [])],
   } } };
   const piSettings = {
     defaultProvider: 'hello', defaultModel: settings.model, defaultThinkingLevel: effort,
