@@ -843,6 +843,14 @@ Installed list updates and removes what it installed.
   dark, as Hello's window is; dsh's Settings › Appearance changes it in the
   profile's own layer. Hello's overlay never sets it: dsh refuses a Settings change
   that an overlay would override.
+- **Budget.** The host is a second harness inside a chat app, so it runs with a
+  V8 heap ceiling given to the process at start (`--max-old-space-size`, 1 GB:
+  `dsh/budget.ts`), and Hello samples what it really uses from Electron's own
+  process metrics every ten seconds. Past 1 GB resident or 150% of a core for
+  thirty seconds — long enough that a boot or an install is not it — the DSH log
+  says so, once, and again when it comes back under. Nothing is killed: a
+  surface the person is working in is not closed behind their back, and the log
+  is where the host's account of itself already is.
 - **Surface.** One guest, positioned like a browser tab's page over the DSH view,
   parked while the view is closed, never reparented or reloaded for chrome. It stays
   on the host's origin; web links open in a browser tab of the chat on screen.
@@ -909,6 +917,9 @@ Installed list updates and removes what it installed.
      include the running version (`market/install.ts`, `market.test.ts`). A
      plugin pinned to the old line is refused on the new one, which is the point.
   6. The patch layer (`hello.patch.yml`) and the profile template name.
+  7. The host's budget (`dsh/budget.ts`): what a profile loads at boot is dsh's
+     business, so the numbers Hello is willing to spend on it are re-measured
+     with the surface open and idle.
 
   Checked against **dsh 0.2.0-rc.2**, installed through the sidebar: steps 1 and
   2 pass unchanged — the five install-script packages in its tree are exactly the

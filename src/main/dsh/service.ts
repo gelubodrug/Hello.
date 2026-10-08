@@ -29,6 +29,12 @@ export interface DshServiceOptions {
   now?: () => number;
   /** Hello's active model connection, read fresh on each start and each proxied request. */
   model?: () => ModelConnection | undefined;
+  /**
+   * Electron's process metrics, for the host's memory and CPU budget
+   * (dsh/budget.ts). Written as an inline import so this file's import block
+   * stays as it is. Without it the host still runs under its heap ceiling.
+   */
+  metrics?: () => readonly import('./budget').ProcessMetric[];
   /** For tests: replaces the runtime install. */
   install?: (layout: DshLayout, pnpm: PnpmInvocation, options: Parameters<typeof installRuntime>[2]) => Promise<void>;
   /** For tests: what npm offers as the newest dsh. */
@@ -137,6 +143,7 @@ export class DshService {
       patchFile: join(layout.root, 'hello.patch.yml'),
       pnpmScript: this.options.pnpm.args[0],
       log: line => this.log(line),
+      ...(this.options.metrics ? { metrics: this.options.metrics } : {}),
     });
     host.onExit(exit => {
       this.bridgeAddress = undefined;
