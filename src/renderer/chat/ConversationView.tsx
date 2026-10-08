@@ -993,7 +993,7 @@ export function ConversationView({
   const send = async (voiceText?: string) => {
     const fromVoice = voiceText !== undefined;
     const text = (voiceText ?? draft).trim();
-    if (importLock.current) return;
+    if (importLock.current && !fromVoice) return;
     // Typing while the model works is a correction, not a second question: it
     // goes to the turn already running. Nothing is lost if it arrives late —
     // the pill above the composer shows it, and its landing can still change.
