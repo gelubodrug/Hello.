@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { openReportChannel, type WorkerReport } from './report-channel';
 import type { DataStore } from '../data/store';
 import { createPiToolBridge } from '../chat/pi-tool-bridge';
+import { helloToolGroups } from '../chat/tool-groups';
 import type { ToolOutput } from '../chat/tool-output';
 import { executeTool, executeToolOutput, toolDefinitions, type BrowserHooks } from '../chat/tools';
 
@@ -237,6 +238,18 @@ export async function createWorkerNotebookContext(input: {
       const pages = pagesOf(chat);
       return toolDefinitions(false, Boolean(browser), undefined, pages.plan, false, pages)
         .filter(tool => allowed(tool.function.name));
+    },
+    // The same groups a chat gets: a Pi CLI loads browser or notebook with
+    // tools_find instead of carrying every tool from the start (nativ #490).
+    getCatalog(tools) {
+      const chat = store.getConversation(conversationId);
+      const pages = pagesOf(chat);
+      return {
+        groups: helloToolGroups(tools, {
+          chatMode: 'chat', notebooks: { runbook: pages.runbook, tasks: pages.tasks }, planning: pages.plan, mcp: [],
+        }),
+        plugins: [],
+      };
     },
     getContext() {
       const chat = store.getConversation(conversationId);
