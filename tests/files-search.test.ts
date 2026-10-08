@@ -35,6 +35,21 @@ describe('searching the contents of a chat folder', () => {
     expect((await files().searchContents('chat', 'r', 'hello')).matches.map(match => match.line)).toEqual([1, 2]);
     expect((await files().searchContents('chat', 'r', 'hello', true)).matches.map(match => match.line)).toEqual([2]);
   });
+  it('normalizes Romanian, dotted İ and Hangul and maps matches back to the original spelling', async () => {
+    writeFileSync(join(root, 'unicode.txt'), '😀 s\u0326tiri\nİstanbul invoice\ni\u0307STANBUL\n가');
+    const service = files();
+    const first = (await service.searchContents('chat', 'r', 'ȘTIRI')).matches[0];
+    expect(first).toMatchObject({ line: 1, start: 3, end: 9 });
+    expect(first.snippet.slice(first.start, first.end)).toBe('s\u0326tiri');
+    const cities = (await service.searchContents('chat', 'r', 'istanbul')).matches;
+    expect(cities.map(hit => hit.snippet.slice(hit.start, hit.end))).toEqual(['İstanbul', 'i\u0307STANBUL']);
+    expect((await service.searchContents('chat', 'r', 'invoice')).matches[0]).toMatchObject({ line: 2, start: 9, end: 16 });
+    const hangul = (await service.searchContents('chat', 'r', '가')).matches[0];
+    expect(hangul.snippet.slice(hangul.start, hangul.end)).toBe('가');
+    expect((await service.searchContents('chat', 'r', 'știri', true)).matches).toHaveLength(1);
+    expect((await service.searchContents('chat', 'r', 'ȘTIRI', true)).matches).toHaveLength(0);
+    expect((await service.searchContents('chat', 'r', 'istanbul', true)).matches).toHaveLength(0);
+  });
 
   it('keeps lines and the marked place right across CRLF, diacritics, emoji, line ends and long lines', async () => {
     const long = `${'x'.repeat(300)}😀needle${'y'.repeat(300)}`;
