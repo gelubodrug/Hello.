@@ -19,6 +19,34 @@ pnpm dev
 user-data directory (SQLite); API keys are encrypted with the system keychain
 and never reach the window.
 
+## Packaging
+
+Package from a tree that matches the lockfile. electron-builder walks
+`node_modules`, not `pnpm-lock.yaml`, so a tree left behind by an earlier
+dependency set makes it hunt packages the current Pi no longer names (it looked
+for `@mariozechner/clipboard` once, after the Pi upgrade). Before a package:
+
+```sh
+rm -rf node_modules && pnpm install --frozen-lockfile && pnpm rebuild:native
+pnpm test tests/packaging.test.ts   # the parts of the contract a file can answer
+pnpm package:mac
+```
+
+`tests/packaging.test.ts` holds that contract: every dependency pinned to an
+exact version, the lockfile agreeing with `package.json` name for name, every
+`extraResources` folder present, and every path the app resolves as a real file
+named by an `asarUnpack` pattern. A read through `app.asar` reaches an unpacked
+file transparently, so only what is spawned or `dlopen`ed needs the real path:
+node-pty's `spawn-helper` (`terminal/native.ts`) and esbuild's binary
+(`extensions/bundle.ts`, through `ESBUILD_BINARY_PATH`) rewrite `app.asar` to
+`app.asar.unpacked` themselves. Everything else — Pi's `rpc-entry.js` and
+`cli.js`, Hello's `pi-extension.js`, the bundled pnpm — is launched by Electron
+as Node, which reads the archive, and is unpacked so its own files are on disk.
+
+What only a real package can answer, and is still unverified: whether the
+unpacked Pi, pnpm and esbuild behave inside `Hello.app`, whether the DSH
+`extraResources` copy boots, and the size of the result.
+
 ## Where things are
 
 - `src/main/` — the main process: the chat service and Pi, the browser manager,

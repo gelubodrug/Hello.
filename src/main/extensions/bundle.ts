@@ -157,7 +157,11 @@ function loadEsbuild(): Promise<typeof import('esbuild')> {
         const require = createRequire(import.meta.url);
         const binary = require.resolve(`@esbuild/${process.platform}-${process.arch}/${process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'}`);
         const packed = `${sep}app.asar${sep}`;
-        if (binary.includes(packed)) process.env.ESBUILD_BINARY_PATH = binary.replace(packed, `${sep}app.asar.unpacked${sep}`);
+        const unpacked = binary.replace(packed, `${sep}app.asar.unpacked${sep}`);
+        // Only when electron-builder really unpacked it (packaging.test.ts keeps
+        // the pattern): a path that is not there would replace esbuild's own
+        // "binary not found" with a spawn failure nobody can read.
+        if (binary.includes(packed) && existsSync(unpacked)) process.env.ESBUILD_BINARY_PATH = unpacked;
       } catch {
         // No platform package to point at: esbuild reports that itself.
       }
