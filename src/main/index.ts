@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, clipboard, dialog, safeStorage, protocol, net, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, clipboard, dialog, safeStorage, protocol, net, nativeImage, systemPreferences } from 'electron';
 import { dirname, join, resolve, sep, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -14,6 +14,7 @@ import { createWorkerNotebookContext } from './terminal/notebook-context';
 import { BrowserManager } from './browser/manager';
 import { pageMenu } from './browser/context-menu';
 import { appearanceGround } from './appearance';
+import { allowsAppMicrophone } from './media-permission';
 import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
 import { PageModeController } from './browser/page-mode';
@@ -159,7 +160,20 @@ else {
     window.webContents.on('will-attach-webview',(event,preferences,params)=>{
       if(!approveGuest?.(preferences,params))event.preventDefault();
     });
-    window.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
+    // The microphone, for voice turns, is the window's one grant: audio only, its
+    // main frame, its own page. macOS asks the person once; a refusal there is final.
+    const appUrls=['hello://app/',...(process.env.ELECTRON_RENDERER_URL?[process.env.ELECTRON_RENDERER_URL]:[])];
+    const fromAppWindow=(contents:Electron.WebContents|null)=>!!contents&&!window.isDestroyed()&&contents===window.webContents;
+    window.webContents.session.setPermissionRequestHandler((contents,permission,callback,details)=>{
+      const mediaTypes=permission==='media'?(details as Electron.MediaAccessPermissionRequest).mediaTypes??[]:[];
+      if(!allowsAppMicrophone({permission,fromAppWindow:fromAppWindow(contents),isMainFrame:details.isMainFrame,mediaTypes,requestingUrl:details.requestingUrl},appUrls)){callback(false);return;}
+      if(process.platform!=='darwin'||systemPreferences.getMediaAccessStatus('microphone')==='granted'){callback(true);return;}
+      void systemPreferences.askForMediaAccess('microphone').then(callback,()=>callback(false));
+    });
+    // Checks other than media keep Electron's answer (the window copies with the
+    // clipboard API); a media check passes only where a request would.
+    window.webContents.session.setPermissionCheckHandler((contents,permission,requestingOrigin,details)=>
+      permission!=='media'||allowsAppMicrophone({permission,fromAppWindow:fromAppWindow(contents),isMainFrame:details.isMainFrame,mediaTypes:details.mediaType?[details.mediaType]:[],requestingUrl:details.requestingUrl??requestingOrigin},appUrls));
     const emit=(channel:string,event:unknown)=>{if(!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(channel,event);};
     // Whether the person is in the app at all, for the chats waiting on them: a focused
     // page inside the window is still the window, and only the OS says otherwise.

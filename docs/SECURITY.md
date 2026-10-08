@@ -43,6 +43,16 @@ while a tab out of sight never takes over the window. The page then covers the
 window until it leaves full screen; camera, microphone, notifications, location,
 clipboard reads and the rest stay refused.
 
+The app window itself holds one grant a page never gets: the microphone, for a
+voice turn. Main allows `media` only when the request names audio and nothing
+else, comes from the window's own main frame, and is on the app's page
+(`hello://app`, or the dev server's origin in development); camera, screen
+capture, a guest or a frame inside the window is refused, as is every other
+permission. On macOS the system asks the person once
+(`NSMicrophoneUsageDescription`); a refusal there is final. The window's CSP
+admits `media-src blob:` so a recorded or synthesized clip can play, and the
+audio goes only to the voice server the person runs on loopback.
+
 A page that opens a window gets a tab beside the one it came from, in the same
 partition and with the opener's Agent control, never a window outside the app:
 the human could not find a native popup and the agent could not see it at all.
