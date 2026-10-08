@@ -79,3 +79,16 @@
 - [ ] T049 [!low] [#low] DECIZIE OWNER: checkpoint-urile aplicația-soră (the tooling’s checkpoint refs) păstrate sau șterse
 - [ ] T050 [!low] [#medium] DECIZIE OWNER: fluxurile aplicația-soră „hello feature hunt and implement” (a698845e) și cercetarea continuă (b90744fd) citesc docs/MINI-ROADMAP.md, docs/feature-research/, docs/research-flow/, mutate în docs/archive/ la 05.10 — briefurile trebuie schimbate în aplicația-soră
 - [ ] T051 [!medium] [#medium] DECIZIE OWNER: istoricul unui chat cu browsing pe calea Pi — opțiunile A–D din docs/archive/research-flow/PI-PATH-2026-09-28.md nedecise (e făcută doar scurtarea la seed)
+
+## Din tasks/todo.md (09.10) — De verificat în aplicație (owner)
+
+- [ ] T052 [!low] [#medium] DECIZIE OWNER — verificare în aplicație: auditul UI din 05.10 — Needs your attention (două aprobări în chaturi diferite + întrebare de plugin cât Notebook/DSH acoperă chatul, Open request); diff la aprobare file_edit; Settings › App › Appearance; ⌘⇧P Go to…; @nume în composer; Files › Contents (Match case, click pe rezultat); Add selection to chat din bara Files și click dreapta, și cu Chat minimizat
+- [ ] T053 [!low] [#medium] DECIZIE OWNER — verificare în aplicație: modelul per chat — două chaturi pe modele diferite, unul pornit în timp ce celălalt răspunde
+- [ ] T054 [!low] [#medium] DECIZIE OWNER — verificare în aplicație (05.10): meniurile, rezumarea, overlay-ul ⌘/, focusul după Edit, dialogurile, Open tools, secțiunile Notebook oprite într-un chat nou, tabul Chat, click dreapta în browser
+- [ ] T055 [!low] [#low] DECIZIE OWNER — verificare în aplicație (04.10): timpul de lucru, Summarise now, tastele, Save to Runbook, Usage în Settings › App
+- [ ] T056 [!low] [#low] DECIZIE OWNER — verificare în aplicație: DSH update la 0.2.0-rc.2 și înapoi, Settings › Appearance în DSH, chatul extins și înapoi
+- [ ] T057 [!low] [#low] DECIZIE OWNER — verificare în aplicație: Pi update și înapoi, tabul Pi (tema aplicația-soră), un plugin care pune o întrebare, o instalare reală din Pi market
+- [ ] T058 [!low] [#medium] DECIZIE OWNER — verificare în aplicație: Claude Code și Codex văd uneltele hello; Qwen Code, OpenCode și Pi CLI pe modelul local; un CLI care citește și apasă într-un tab; repornirea cu un CLI ca tab de chat
+- [ ] T059 [!low] [#low] DECIZIE OWNER — verificare în aplicație: browser marks după repornire; smarbill.ro în bara de adrese, apoi Back
+- [ ] T060 [!low] [#low] DECIZIE OWNER — verificare în aplicație: meniul / și o descărcare reală de pe skills.sh
+- [ ] T061 [!low] [#medium] DECIZIE OWNER — verificare în aplicație (S209): ↑/↓ în composer; ⌘1–9, ⌘⇧] / ⌘⇧[ și ⌘J (și cu terminal sau pagină în focus); căutarea din Notebook; ⌘V cu captură și fișier din Finder, Attach files…; ⌘F în terminal, cu output care curge și în vim/less
