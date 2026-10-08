@@ -310,6 +310,20 @@ person answers questions there. Settings' model for subagents is written into
 the chat's private Pi folder as a second model of the same provider and as
 pi-subagents' `subagents.defaultModel`.
 
+What that UI cannot carry is Pi's own, not Hello's: Pi's RPC extension-UI
+context (`createExtensionUIContext` in `pi-coding-agent`'s bundle) emits an
+`extension_ui_request` for `select`, `confirm`, `input`, `editor`, `notify`,
+`setStatus`, `setWidget`, `setTitle` and `set_editor_text`, and discards
+everything that would draw a component: `custom()` is `async custom(){}` — it
+resolves `undefined` without sending anything — and so are `setFooter`,
+`setHeader`, `setEditorComponent`, `onTerminalInput`, `setWorkingMessage` and
+`setHiddenThinkingLabel`. This is why a pi-subagents question whose answer leads
+to another screen (Change model, thinking) closes and goes no further: the
+plugin's next call is `ui.custom()`, Pi sends nothing over RPC, the plugin's
+await resolves with nothing and it drops the flow. Hello never receives a
+request it could answer or report, so there is nothing here to repair; it needs
+Pi to send those screens (or the plugin to fall back to `select`).
+
 Stopping a chat's Pi aborts the reply in progress, ends its input and waits up
 to 1.5 s: that is Pi's own shutdown, which runs extensions' `session_shutdown`
 handlers (a memory plugin's final commit) before it exits. SIGTERM, then SIGKILL, follow only for a Pi that
