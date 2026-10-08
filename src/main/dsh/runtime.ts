@@ -5,6 +5,27 @@ import { DSH_ALLOWED_BUILDS, DSH_VERSION, runtimeReady, selectedVersion, type Ds
 import { parseProgress, pnpmFailure, runPnpm, type InstallProgress, type PnpmInvocation } from './pnpm';
 
 /**
+ * Optional packages the install leaves out, by exact name.
+ *
+ * `@deepseek-ai/libreoffice-kit` ships a prebuilt LibreOffice per platform as
+ * optional dependencies, and the macOS one is 148 MB of a 492 MB install —
+ * 30% of everything the person waits for, for one thing: converting and
+ * previewing Office documents inside the DSH surface
+ * (`dsh-office-to-pdf`, `dsh-skill-office`), which Hello does not use and does
+ * not route anything to. The entry package stays, so nothing fails to import:
+ * it resolves its engine lazily, inside the conversion, which then fails with
+ * dsh's own "Required LibreOfficeKit native package is missing" rather than
+ * stopping the host's boot. Put a name back here to get the feature back.
+ */
+export const DSH_SKIPPED_OPTIONAL: readonly string[] = [
+  '@deepseek-ai/libreoffice-kit-darwin-arm64',
+  '@deepseek-ai/libreoffice-kit-darwin-x64',
+  '@deepseek-ai/libreoffice-kit-wasm',
+  '@deepseek-ai/libreoffice-kit-win32-arm64',
+  '@deepseek-ai/libreoffice-kit-win32-x64',
+];
+
+/**
  * The dsh installation, as pnpm is asked to build it.
  *
  * One exact dependency: `@deepseek-ai/dsh` carries dsh-base, dsh-web-app and
@@ -13,6 +34,7 @@ import { parseProgress, pnpmFailure, runPnpm, type InstallProgress, type PnpmInv
  * internal module loader through a native addon that recognises only exact
  * Electron builds (44.0.0, not this app's 44.x), so Hello's shim answers the
  * same calls through `--expose-internals`, which the host is started with.
+ * One family is left out entirely: the office engine (above).
  */
 export function runtimeManifest(version = DSH_VERSION): Record<string, unknown> {
   return {
@@ -31,6 +53,7 @@ export function runtimeWorkspace(layout: DshLayout): string {
     overrides: {
       'node-addon-require-builtin': `file:${join(layout.resources, 'shims', 'node-addon-require-builtin')}`,
     },
+    ignoredOptionalDependencies: [...DSH_SKIPPED_OPTIONAL],
     allowBuilds: { ...DSH_ALLOWED_BUILDS },
   });
 }

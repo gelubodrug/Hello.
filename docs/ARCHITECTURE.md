@@ -837,7 +837,13 @@ Installed list updates and removes what it installed.
   module loader through a native addon that recognises only exact Electron
   builds, is replaced by Hello's shim (`assets/dsh/shims/`), which answers the same
   calls through `--expose-internals` (the spike that found it is archived:
-  [`DSH-SPIKE-2026-09-28.md`](archive/DSH-SPIKE-2026-09-28.md)).
+  [`DSH-SPIKE-2026-09-28.md`](archive/DSH-SPIKE-2026-09-28.md)). One family is
+  left out (`ignoredOptionalDependencies`, `dsh/runtime.ts`): the prebuilt
+  LibreOffice that `@deepseek-ai/libreoffice-kit` ships per platform, 148 MB of
+  a 492 MB install for converting and previewing Office documents inside the
+  DSH surface, which Hello routes nothing to. The entry package stays, so the
+  plugins that import it still load and only a conversion fails, with dsh's own
+  message; a name removed from that list brings the engine back.
   The install panel is live: counters against pnpm's `Packages: +N`, elapsed time,
   pnpm's latest line in plain words (a retry, a slow download, a build) and, past
   twenty seconds of silence, how long it has been quiet. Every pnpm run is taken
