@@ -358,7 +358,7 @@ export async function createWorkerNotebookContext(input: {
       'You are an interactive CLI opened by the human inside Hello. Wait for the human’s request; this connection does not assign or start work.',
       `Your launch working folder is ${JSON.stringify(cwd)}. Work in that folder unless the human explicitly directs otherwise.`,
       'The chat’s folder may later change. Your process keeps its original folder. The info/list responses include both folders; if they differ, explain that a new CLI can be opened in the selected folder.',
-      'If your own tools already include notebook_list, notebook_task_status or browser_tabs, browser_read and the rest — a Pi opened from Hello has them, and Claude Code, Codex, Kimi, Qwen Code or OpenCode as the tools of the hello MCP server (mcp__hello__browser_read and the like) — call those: they are this same connection. The shell commands below are for a CLI without them.',
+      'Claude Code, Codex, Kimi, Qwen Code or OpenCode have this connection as the tools of the hello MCP server (mcp__hello__browser_read, mcp__hello__notebook_list and the like). A Pi opened from Hello starts with only tools_find of it: call tools_find to load the browser or notebook group, then use the tools it brings. Either way they are this same connection: call those. The shell commands below are for a CLI without them.',
       '',
       ...notebookLines,
       ...browserLines,
