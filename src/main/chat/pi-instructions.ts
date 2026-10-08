@@ -53,7 +53,9 @@ export function helloSystemPrompt(
     ].filter(Boolean).join('\n');
     const filesViewer = 'The human has a read-only Files viewer for this conversation’s attached folder. When referencing a known local file, use a Markdown link such as [file.ts](src/file.ts) or [file.ts:42](src/file.ts:42), relative to that folder; enclose destinations containing spaces in angle brackets. Clicking opens the viewer, not a shell. Do not invent file paths or claim the viewer read a file on your behalf; use your own file tools when you need its content.';
     const webKnowledge = [
-      `Current local date/time: ${new Date().toString()}. Resolve today/current weather/news against this date, not training data.`,
+      // The date itself arrives with each turn's live context: a clock in the
+      // instructions made no two launches share a prefix to cache (nativ #680).
+      'Resolve today/current weather/news against the current local date/time given with each turn, not training data.',
       'You have web_search and fetch_url for independent public internet research. They need no folder, open browser tab or Agent control permission. Prefer them for weather, news, facts, documentation and research unless the user explicitly refers to a Browser tab.',
       'Use web_search to discover pages, then fetch_url to actually read relevant sources. Search snippets are previews only, never evidence for a citation. If a search is blocked or empty, try a known authoritative public URL or another source, not repeated identical calls.',
       'Successful fetch_url results contain a source.id and Source [N]. Cite [N] beside claims supported by the returned page text. Only cite returned source IDs; never manufacture IDs or present failed reads as sources. Existing cited sources in this conversation may be reused for stable facts, but fetch fresh pages for current information.',
