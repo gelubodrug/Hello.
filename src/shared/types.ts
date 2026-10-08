@@ -334,6 +334,8 @@ export interface HelloAPI {
   };
   /** Voice. Optional for an older preload. */
   voice?: {
+    /** One microphone WAV, translated locally into an English turn. */
+    translate?(audio: Uint8Array): Promise<string>;
     /** One chunk of prose as audio, from the voice server on this Mac. */
     speak(text: string): Promise<VoiceSpeech>;
     /** What macOS says about the microphone, without asking. */

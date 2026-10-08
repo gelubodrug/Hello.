@@ -11,6 +11,7 @@ import type { BrowserManager } from './browser/manager';
 import type { PageModeController } from './browser/page-mode';
 import { WorkspaceFiles } from './files/service';
 import { DEFAULT_TTS_VOICE, SPEECH_TEXT_LIMIT, VoiceSpeaker } from './voice/speak';
+import { translateVoice, voiceAudio } from './voice/translate';
 import { resolveDropPaths } from './files/drop-paths';
 import { discoverMcpServers, discoverPiExtensions, discoverSkills, withoutSecrets } from './extensions/discovery';
 import { dshSkillRoots } from './dsh/skills';
@@ -160,6 +161,19 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   // A chunk of a reply, read aloud by the speech server the person runs here:
   // the one Settings names, else the first one found. Never one off this Mac.
   const speaker=new VoiceSpeaker();
+  let translating=false;
+  handle('voice.translate',async(audio)=>{
+    const bytes=voiceAudio(audio);
+    const voice=store.getSettings().voice;
+    if(!voice?.enabled)throw new Error('Turn Voice on before speaking.');
+    if(translating)throw new Error('A voice turn is already being translated.');
+    translating=true;
+    try{
+      const server=voice.sttEndpointUrl||(await chat.voiceServers()).find(found=>found.kind==='whisper.cpp')?.baseUrl;
+      if(!server)throw new Error('No speech-to-text server is running on this Mac.');
+      return await translateVoice(server,bytes,{model:voice.sttModel,language:voice.sourceLanguage});
+    }finally{translating=false;}
+  });
   handle('voice.speak',async(text)=>{
     const words=str(text,'text',SPEECH_TEXT_LIMIT);
     const voice=store.getSettings().voice;

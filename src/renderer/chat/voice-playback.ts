@@ -17,6 +17,14 @@ export interface SpeechOutput {
 }
 
 export class SpeechPlayer {
+  private static microphones = new Set<symbol>();
+  private static playing = new Set<SpeechPlayer>();
+  static listen(): () => void {
+    const lease = Symbol();
+    SpeechPlayer.microphones.add(lease);
+    for (const player of SpeechPlayer.playing) player.stop();
+    return () => { SpeechPlayer.microphones.delete(lease); };
+  }
   private generation = 0;
   private current?: () => void;
   private listeners = new Set<(speaking: boolean) => void>();
@@ -34,6 +42,7 @@ export class SpeechPlayer {
   /** Reads a reply's prose aloud, replacing whatever was being said. */
   async say(markdown: string): Promise<void> {
     this.stop();
+    if (SpeechPlayer.microphones.size) return;
     const chunks = speechChunks(spokenProse(markdown));
     if (!chunks.length) return;
     const turn = ++this.generation;
@@ -68,6 +77,7 @@ export class SpeechPlayer {
   }
 
   private set(speaking: boolean): void {
+    if (speaking) SpeechPlayer.playing.add(this); else SpeechPlayer.playing.delete(this);
     if (this.active === speaking) return;
     this.active = speaking;
     for (const listener of this.listeners) listener(speaking);
