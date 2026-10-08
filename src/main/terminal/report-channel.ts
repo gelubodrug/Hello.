@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, watch, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, watch, writeFileSync } from 'node:fs';
+import { atomicWriteFileSync } from '../atomic-write';
 import { join } from 'node:path';
 
 /**
@@ -203,9 +204,7 @@ export function openReportChannel(directory: string): ReportChannel {
       // Written aside and moved into place: the worker polling for it must
       // never read half an answer.
       const file = join(answers, `${askId}.answer`);
-      const temporary = join(answers, `.${askId}`);
-      writeFileSync(temporary, `${text}\n`, { mode: 0o600 });
-      renameSync(temporary, file);
+      atomicWriteFileSync(file, `${text}\n`);
     },
     close() {
       closed = true;

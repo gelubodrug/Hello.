@@ -5,12 +5,11 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmdirSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { atomicWriteFileSync } from '../atomic-write';
 import { fetchedSources, sourcesForMessage, withSourceLinks } from '../../shared/web';
 import type {
   AppSettings,
@@ -1140,17 +1139,7 @@ export class DataStore {
         .join('\n');
       if (existsSync(files[kind]) && readFileSync(files[kind], 'utf8') === text)
         continue;
-      const temporary = path.join(directory, `.${kind}-${randomUUID()}.tmp`);
-      try {
-        writeFileSync(temporary, text, {
-          encoding: 'utf8',
-          mode: 0o600,
-          flag: 'wx',
-        });
-        renameSync(temporary, files[kind]);
-      } finally {
-        if (existsSync(temporary)) unlinkSync(temporary);
-      }
+      atomicWriteFileSync(files[kind], text);
     }
     return files;
   }

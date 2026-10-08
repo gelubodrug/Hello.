@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { atomicWriteFileSync } from '../atomic-write';
 import { join } from 'node:path';
 import type { DshLayout } from '../dsh/layout';
 import type { PnpmInvocation } from '../dsh/pnpm';
@@ -146,9 +147,7 @@ export class MarketService {
 
   private save(state: SourceState): void {
     mkdirSync(this.options.layout.root, { recursive: true, mode: 0o700 });
-    const temporary = `${this.stateFile}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify({ sources: state.sources.map(source => (source.manifest ? { ...source, manifest: toManifestJson(source.manifest) } : source)), ...(state.selected ? { selected: state.selected } : {}) }, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, this.stateFile);
+    atomicWriteFileSync(this.stateFile, `${JSON.stringify({ sources: state.sources.map(source => (source.manifest ? { ...source, manifest: toManifestJson(source.manifest) } : source)), ...(state.selected ? { selected: state.selected } : {}) }, null, 2)}\n`, { mode: 0o600 });
     this.cursors.clear();
   }
 

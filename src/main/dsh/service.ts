@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { atomicWriteFileSync } from '../atomic-write';
 import { join } from 'node:path';
 import type { DshStatus } from '../../shared/types';
 import { listCheckpoints, restoreCheckpoint, saveCheckpoint } from './checkpoints';
@@ -170,7 +171,7 @@ export class DshService {
   /** Takes effect on the next start: the patch layer is written then. */
   setUseHelloModel(value: boolean): DshStatus {
     mkdirSync(this.options.layout.root, { recursive: true, mode: 0o700 });
-    writeFileSync(join(this.options.layout.root, 'hello.json'), `${JSON.stringify({ useHelloModel: value }, null, 2)}\n`);
+    atomicWriteFileSync(join(this.options.layout.root, 'hello.json'), `${JSON.stringify({ useHelloModel: value }, null, 2)}\n`);
     return this.set({});
   }
 
@@ -303,7 +304,7 @@ export class DshService {
       mkdirSync(layout.home, { recursive: true, mode: 0o700 });
       const connection = this.useHelloModel() ? this.options.model?.() : undefined;
       const proxy = connection?.endpointUrl && connection.model ? await this.proxy.start() : undefined;
-      writeFileSync(join(layout.root, 'hello.patch.yml'), helloPatch(proxy && connection ? { proxy, connection } : undefined));
+      atomicWriteFileSync(join(layout.root, 'hello.patch.yml'), helloPatch(proxy && connection ? { proxy, connection } : undefined));
       this.set({ state: 'starting', message: undefined });
       try {
         const profile = ensureHelloProfile(layout);

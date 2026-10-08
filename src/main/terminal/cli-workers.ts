@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { atomicWriteFileSync } from '../atomic-write';
 import { delimiter, join } from "node:path";
 import type { NotebookPaths, WorkerId, WorkerInfo } from "../../shared/types";
 import { augmentedPath } from "./env";
@@ -248,7 +249,7 @@ export function prepareCliWorkerLaunch(input: {
           const file = join(base.env.QWEN_HOME, "settings.json");
           const settings = JSON.parse(readFileSync(file, "utf8")) as { mcpServers?: Record<string, unknown> };
           settings.mcpServers = { ...settings.mcpServers, hello: helloServer(context.mcp) };
-          writeFileSync(file, JSON.stringify(settings, null, 2), { mode: 0o600 });
+          atomicWriteFileSync(file, JSON.stringify(settings, null, 2), { mode: 0o600 });
         }
         break;
       }
@@ -337,7 +338,7 @@ export function prepareCliWorkerLaunch(input: {
     base.configurationDirectory = directory;
     try {
       if (name)
-        writeFileSync(join(directory, name), JSON.stringify(value, null, 2), {
+        atomicWriteFileSync(join(directory, name), JSON.stringify(value, null, 2), {
           mode: 0o600,
         });
     } catch (error) {
@@ -430,8 +431,8 @@ export function prepareCliWorkerLaunch(input: {
         // Hello's Pi theme, current in this Pi's own folder (user, 01.10): a theme
         // is found in themes/, and only settings' `theme` makes it the one used.
         mkdirSync(join(directory, "themes"), { recursive: true, mode: 0o700 });
-        writeFileSync(join(directory, "themes", `${PI_THEME_NAME}.json`), JSON.stringify(PI_THEME, null, 2), { mode: 0o600 });
-        writeFileSync(join(directory, "settings.json"), JSON.stringify({ theme: PI_THEME_NAME }, null, 2), { mode: 0o600 });
+        atomicWriteFileSync(join(directory, "themes", `${PI_THEME_NAME}.json`), JSON.stringify(PI_THEME, null, 2), { mode: 0o600 });
+        atomicWriteFileSync(join(directory, "settings.json"), JSON.stringify({ theme: PI_THEME_NAME }, null, 2), { mode: 0o600 });
         base.args = ["--model", `${provider}/${model}`, ...(qwenThinking ? ["--thinking", effort] : [])];
         Object.assign(base.env, {
           PI_CODING_AGENT_DIR: directory,
