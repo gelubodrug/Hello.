@@ -862,6 +862,38 @@ Installed list updates and removes what it installed.
   spawning a server. It is off in every chat until turned on there, starts a
   stopped surface when a chat needs it, never installs one, and lists again after
   a host restart.
+- **Upgrading dsh.** `DSH_VERSION` (`dsh/layout.ts`) is the version this build
+  comes with; the person can run a newer one from the sidebar, kept in
+  `<data>/dsh/version.json`, and `selectedVersion()` — never `DSH_VERSION` — is
+  what the running app judges by. Moving the pin means re-checking, in this
+  order, everything that was measured against the old line:
+  1. `DSH_ALLOWED_BUILDS` (`dsh/layout.ts`): pnpm 11 refuses an install whose
+     dependencies ask for install scripts it was not told about, so the list has
+     to name every one in the new tree. Read it off an installed runtime — every
+     `preinstall`/`install`/`postinstall` in `<data>/dsh/runtime/node_modules` —
+     not off a changelog.
+  2. The `node-addon-require-builtin` shim (`assets/dsh/shims/`): its version
+     must still satisfy the range the new dsh asks for, and its API must still
+     answer what `@deepseek-ai/cordis-plugin-loader` calls.
+  3. `DSH_PRODUCT_TOOLS` (`dsh/tool-bridge.ts`): which tools the new dsh
+     registers in the global view. This one is a runtime measurement — start the
+     surface on a profile with no plugins and list `GET /tools`.
+  4. `assets/dsh/hello-dsh/official-tokens.json` and the Hello theme:
+     `scripts/dsh-theme.mjs --check` fails when the new dsh has a `--dsw-*`
+     token with no Hello value.
+  5. The market's compatibility gate: a plugin is accepted when its
+     `@deepseek-ai/dsh*` peer ranges and its declared `dsh.compatibility.dsh`
+     include the running version (`market/install.ts`, `market.test.ts`). A
+     plugin pinned to the old line is refused on the new one, which is the point.
+  6. The patch layer (`hello.patch.yml`) and the profile template name.
+
+  Checked against **dsh 0.2.0-rc.2**, installed through the sidebar: steps 1 and
+  2 pass unchanged — the five install-script packages in its tree are exactly the
+  five `DSH_ALLOWED_BUILDS` names (`node-pty`,
+  `@deepseek-ai/dsh-subprocess-local`, `koffi`, `protobufjs`, `@google/genai`),
+  and it still asks for `node-addon-require-builtin@^0.1.6`, which the shim's
+  `0.1.6-hello.0` satisfies. Steps 3–6 are unverified here: 3 needs the surface
+  running, and the pin itself waits on a stable 0.2.x being published.
 
 ## Validation boundary
 

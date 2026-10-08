@@ -128,6 +128,23 @@ describe('install preview', () => {
     expect(compatibility({ dsh: { compatibility: { dsh: '>=0.1.0-rc.5' } } })).toEqual({ ok: true });
   });
 
+  // The judgement is against the dsh that is running, not the one this build
+  // came with: the person can update the runtime from the sidebar, and every
+  // caller passes selectedVersion(). A plugin written for both lines must pass
+  // on both; one pinned to the old line must not pass on the new one.
+  it('judges a package against the dsh that is running, on either line', () => {
+    const bothLines = { peerDependencies: { '@deepseek-ai/dsh-tools': '^0.1.7-rc.2 || >=0.2.0-rc.1 <0.3.0-0' } };
+    expect(compatibility(bothLines, '0.1.7-rc.2')).toEqual({ ok: true });
+    expect(compatibility(bothLines, '0.2.0-rc.2')).toEqual({ ok: true });
+    expect(compatibility(bothLines, '0.3.0')).toMatchObject({ ok: false });
+    const oldLineOnly = { peerDependencies: { '@deepseek-ai/dsh-tools': '^0.1.7' } };
+    expect(compatibility(oldLineOnly, '0.1.7-rc.2')).toEqual({ ok: true });
+    expect(compatibility(oldLineOnly, '0.2.0-rc.2')).toMatchObject({ ok: false, reason: expect.stringContaining('0.2.0-rc.2') });
+    // A release candidate of the running line counts: includePrerelease.
+    expect(compatibility({ dsh: { compatibility: { dsh: '>=0.2.0' } } }, '0.2.0-rc.2')).toMatchObject({ ok: false });
+    expect(compatibility({ dsh: { compatibility: { dsh: '>=0.2.0-rc.1' } } }, '0.2.0-rc.2')).toEqual({ ok: true });
+  });
+
   it('says what a package brings, from its manifest', () => {
     expect(readForHello({ dsh: { client: { platform: 'web' } } }).ui).toBe(true);
     expect(readForHello({ peerDependencies: { '@deepseek-ai/dsh-skill-filesystem': '*' } }).skills).toBe(true);
