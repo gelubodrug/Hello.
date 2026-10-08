@@ -1527,8 +1527,13 @@ export class ChatService {
     // on the wrong number. Only those two figures are re-read: an unrelated
     // edit made while this turn was starting is not this turn's contract.
     if (this.settling) await this.settling;
-    const settings = await this.launchLimits(launchSettings);
-    const subagent = await this.subagentListing(settings);
+    const limited = await this.launchLimits(launchSettings);
+    const subagent = await this.subagentListing(limited);
+    // A typed id the connection does not list would fail every subagent the
+    // plugin starts: they run on the chat's model instead (nativ#416). An
+    // unreadable listing proves nothing, so the setting stands.
+    const { subagentModel: _unlisted, ...unlisted } = limited;
+    const settings = subagent === null ? unlisted : limited;
     const subagentLimits = subagent ? { contextWindow: subagent.contextWindow, maxOutputTokens: subagent.maxOutputTokens } : undefined;
     run.controller.signal.throwIfAborted();
     const conversation = this.store.getConversation(run.conversationId);

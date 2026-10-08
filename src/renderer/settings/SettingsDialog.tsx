@@ -617,7 +617,14 @@ export function SettingsDialog({
               placeholder="Same as the chat"
               onChange={(event) => setDraft((value) => ({ ...value, subagentModel: event.target.value }))}
             />
-            <span className="muted">For plugins that start subagents, such as pi-subagents. Empty: they use the chat’s model.</span>
+            {probe.state === 'ok' && models.length > 0 && draft.subagentModel?.trim() &&
+              !models.some(model => model.id === draft.subagentModel?.trim()) ? (
+              <span className="settings-status" data-state="error" role="status">
+                This address does not list that model. Subagents will use the chat’s model until it does.
+              </span>
+            ) : (
+              <span className="muted">For plugins that start subagents, such as pi-subagents. Empty: they use the chat’s model.</span>
+            )}
           </label>
           <MenuButton
             label="Available models for subagents"
