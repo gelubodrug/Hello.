@@ -1516,8 +1516,13 @@ export class ChatService {
     const conversation = this.store.getConversation(run.conversationId);
     const resources = await this.resourcesFor(run.conversationId, run.controller.signal);
     run.controller.signal.throwIfAborted();
+    // Whatever the launch reads restarts the child; what it never reads does not
+    // (nativ #680: a prefix that moves for nothing is a cache thrown away).
+    // Omitted rather than picked, so a setting added later restarts by default.
+    // temperature and reasoningEffort stay: the launch config carries both.
+    const { appearance: _a, approvals: _p, connections: _c, apiKeySet: _k, limitsFor: _l, ...launched } = settings;
     const fingerprint = createHash('sha256').update(JSON.stringify({
-      settings, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
+      settings: launched, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
       // The instructions name the notebook sections that are on: a switched
       // section starts the next turn in a session whose instructions say so.
       sections: { plan: conversation.planning === true, runbook: conversation.runbook === true, tasks: conversation.tasks === true },
