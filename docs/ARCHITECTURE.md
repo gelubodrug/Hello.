@@ -441,6 +441,20 @@ data URLs at the tool boundary for compatibility; native navigation still reject
 `data:` and `file:`. Tool results report `contentVerified: false`: a loaded tab
 is not evidence of a correct visualization.
 
+Both preview servers answer on `127.0.0.1`, which Chromium treats as a secure
+origin, so a page in a Hello tab has what a secure context gets — `navigator.gpu`
+among it. A generated document can therefore compute in the tab: local
+embeddings, a similarity search over text the person gave the model, work that
+would otherwise need a server. Hello pins a guest's preferences
+(`browser/manager.ts`) and none of them turns the GPU off; `navigator.gpu` is
+still absent on a Mac whose Chromium has no adapter, so the browser manual
+(`chat/pi-instructions.ts`) tells the model to feature-detect it and keep a CPU
+path. Neither server sends `Cross-Origin-Opener-Policy` or
+`Cross-Origin-Embedder-Policy`, so a preview is not cross-origin isolated and
+`SharedArrayBuffer` is unavailable: a wasm runtime in a tab runs
+single-threaded. `require-corp` would buy those threads by breaking every
+cross-origin subresource a page legitimately loads, which is the worse trade.
+
 ## The two design audits (04.10)
 
 What the audits asked for and the code lacked, done in Hello's own terms:

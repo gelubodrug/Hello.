@@ -60,6 +60,21 @@ describe('conversation-scoped local HTML previews', () => {
     expect(await head.text()).toBe('');
   });
 
+  // A page in a tab computes with WebGPU (navigator.gpu, pi-instructions.ts's
+  // browser manual), which Chromium gives a secure origin: 127.0.0.1 is one,
+  // a file:// URL would not be. What it does not give is cross-origin
+  // isolation, so SharedArrayBuffer stays unavailable and a wasm runtime has to
+  // run single-threaded — require-corp here would instead break every
+  // cross-origin subresource a page legitimately loads.
+  it('serves a preview as a secure context that is not cross-origin isolated', async () => {
+    const url = await preview.open('chat-gpu', folder, 'index.html');
+    expect(new URL(url).hostname).toBe('127.0.0.1');
+    expect(new URL(url).protocol).toBe('http:');
+    const page = await get(url);
+    expect(page.headers.get('cross-origin-opener-policy')).toBeNull();
+    expect(page.headers.get('cross-origin-embedder-policy')).toBeNull();
+  });
+
   it('accepts absolute and encoded local file paths and shares one lazy listener', async () => {
     const html = join(folder, 'a page.html');
     await writeFile(html, '<p>Encoded path</p>');
