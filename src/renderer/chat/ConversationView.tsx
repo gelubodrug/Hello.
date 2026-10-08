@@ -357,6 +357,18 @@ export function MessageContent({ message, sources }: { message: Message; sources
   // Keep explicit thinking disclosure choices even when the first arriving tool
   // folds preceding reasoning/commentary into the activity group.
   const [thinkingExpanded, setThinkingExpanded] = useState<Record<number, boolean>>({});
+  if (message.compactions?.length) {
+    const parts = message.parts?.length ? message.parts : message.content ? [{ type: 'text' as const, text: message.content }] : [];
+    let from = 0;
+    return <>{message.compactions.map((marker, index) => {
+      const end = Math.max(from, Math.min(parts.length, marker.partIndex || (message.parts?.length ? 0 : parts.length)));
+      const slice = parts.slice(from, end); from = end;
+      return <Fragment key={index}>
+        {!!slice.length && <MessageContent message={{ ...message, content: '', parts: slice, compactions: undefined, status: 'complete' }} sources={sources} />}
+        <CompactionLine marker={marker} />
+      </Fragment>;
+    })}{from < parts.length && <MessageContent message={{ ...message, content: '', parts: parts.slice(from), compactions: undefined }} sources={sources} />}</>;
+  }
   if (!message.parts?.length) return <Markdown text={message.content} sources={sources} />;
   const parts = message.parts;
   const layout = activityLayout(parts, message.status === 'streaming');
@@ -405,6 +417,11 @@ export function MessageContent({ message, sources }: { message: Message; sources
 /** The line a restart draws through the transcript: the model reads nothing above it. */
 function RestartLine(): JSX.Element {
   return <div className="thread-restart" role="separator" aria-label="Chat restarted">Restarted — the model starts fresh from here</div>;
+}
+function CompactionLine({ marker }: { marker: NonNullable<Message['compactions']>[number] }): JSX.Element {
+  return <div className="thread-restart" role="separator" aria-label="Conversation compacted">
+    Context summarised · {marker.tokensBefore.toLocaleString()} → {marker.tokensAfter === undefined ? 'unknown' : `≈${marker.tokensAfter.toLocaleString()}`} tokens
+  </div>;
 }
 function MessageRow({
   message,
@@ -647,6 +664,7 @@ function MessageRow({
           )}
         </div>
       )}
+      {message.role === 'user' && message.compactions?.map((marker, index) => <CompactionLine key={index} marker={marker} />)}
       <ErrorNote error={copyError} />
       <ContextMenu position={context?.position ?? null} ariaLabel="Chat text actions"
         items={context ? [

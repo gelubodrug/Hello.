@@ -96,6 +96,8 @@ export type MessagePart =
   | { type: 'thinking'; text: string; durationMs?: number }
   | { type: 'tool'; id: string; name: string; input: string; output?: string; status: 'running' | 'complete' | 'error' | 'approval'; approvalId?: string; durationMs?: number };
 export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; parts?: MessagePart[]; status: 'complete' | 'streaming' | 'error'; createdAt: number; error?: string | null; usage?: MessageUsage; runtimePhase?: 'starting' | 'working' | 'compacting' | 'retrying';
+  /** Display-only history; never injected into the model prompt. */
+  compactions?: Array<{ partIndex: number; tokensBefore: number; tokensAfter?: number }>;
   /** The model that wrote this reply, as it was selected when the reply began. */
   model?: string;
   /** Pi began this reply on its own, woken by a plugin (subagents finishing, say): what woke it, in a line. */

@@ -245,7 +245,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 15)
+    if (version > 16)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -447,6 +447,12 @@ export class DataStore {
           this.db.prepare(`INSERT INTO settings (key, value) SELECT 'chat-${page}:' || id, 'on' FROM conversations
             WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'chat-${page}:' || conversations.id)`).run();
         this.db.exec('PRAGMA user_version = 15');
+      })();
+    if (version < 16)
+      this.db.transaction(() => {
+        const columns = (this.db.pragma('table_info(messages)') as Array<{ name: string }>).map(column => column.name);
+        if (!columns.includes('compactions')) this.db.exec('ALTER TABLE messages ADD COLUMN compactions TEXT');
+        this.db.exec('PRAGMA user_version = 16');
       })();
   }
 
@@ -789,7 +795,7 @@ export class DataStore {
     const rows = this.db
       .prepare('SELECT * FROM messages WHERE conversationId = ? ORDER BY seq')
       .all(conversationId) as Array<
-      Message & { parts: string; usage: string | null; model: string | null; startedBy: string | null; workedMs: number | null }
+      Omit<Message, 'compactions'> & { compactions: string | null; parts: string; usage: string | null; model: string | null; startedBy: string | null; workedMs: number | null }
     >;
     return rows.map((row) => ({
       id: row.id,
@@ -801,6 +807,7 @@ export class DataStore {
       createdAt: row.createdAt,
       error: row.error,
       usage: parse(row.usage, undefined),
+      compactions: parse(row.compactions, undefined),
       ...(row.model ? { model: row.model } : {}),
       ...(row.startedBy ? { startedBy: row.startedBy } : {}),
       ...(row.workedMs ? { workedMs: row.workedMs } : {}),
@@ -816,11 +823,11 @@ export class DataStore {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model,startedBy,workedMs)
-        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model,@startedBy,@workedMs)
+          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model,startedBy,workedMs,compactions)
+        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model,@startedBy,@workedMs,@compactions)
         ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts,
           status=excluded.status, error=excluded.error, usage=excluded.usage, model=COALESCE(excluded.model, messages.model),
-          startedBy=COALESCE(excluded.startedBy, messages.startedBy), workedMs=COALESCE(excluded.workedMs, messages.workedMs)`,
+          startedBy=COALESCE(excluded.startedBy, messages.startedBy), workedMs=COALESCE(excluded.workedMs, messages.workedMs), compactions=excluded.compactions`,
         )
         .run({
           ...message,
@@ -830,6 +837,7 @@ export class DataStore {
           model: message.model ?? null,
           startedBy: message.startedBy ?? null,
           workedMs: message.workedMs ?? null,
+          compactions: message.compactions ? JSON.stringify(message.compactions) : null,
         });
       this.db
         .prepare('UPDATE conversations SET updatedAt = ? WHERE id = ?')
