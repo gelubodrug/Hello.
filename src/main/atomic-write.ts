@@ -1,6 +1,7 @@
 import { closeSync, fsyncSync, lstatSync, openSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, parse, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { open, unlink, rename, type FileHandle } from 'node:fs/promises';
 
 /** Resolve even dangling final links; never replace the link itself. */
 export function atomicWriteTarget(file: string, symlinks: 'resolve' | 'refuse' = 'resolve', depth = 0): string {
@@ -40,5 +41,22 @@ export function atomicWriteFileSync(file: string, data: string | Uint8Array, opt
   } finally {
     if (fd !== undefined) closeSync(fd);
     try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  }
+}
+
+/** Streaming variant: large model downloads never collect in main's memory. */
+export async function atomicWriteFile(file: string, write: (handle: FileHandle) => Promise<void>, options: { mode?: number; symlinks?: 'resolve' | 'refuse' } = {}): Promise<void> {
+  const target = atomicWriteTarget(file, options.symlinks);
+  const temporary = join(dirname(target), `.${basename(target)}-${randomUUID()}.tmp`);
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(temporary, 'wx', options.mode ?? 0o600);
+    await write(handle);
+    await handle.sync(); await handle.close(); handle = undefined;
+    if (atomicWriteTarget(file, options.symlinks) !== target) throw new Error('Write path changed while saving.');
+    await rename(temporary, target);
+  } finally {
+    await handle?.close();
+    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
   }
 }

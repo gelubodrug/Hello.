@@ -51,13 +51,38 @@ capture, a guest or a frame inside the window is refused, as is every other
 permission. On macOS the system asks the person once
 (`NSMicrophoneUsageDescription`); a refusal there is final. The window's CSP
 admits `media-src blob:` so a recorded or synthesized clip can play, and the
-audio goes only to the voice server the person runs on loopback.
+audio goes only to a voice server on loopback, either the person's existing
+server or Hello's managed Whisper child.
 When Voice is on, a finished reply of the chat on screen is read aloud: its
 prose only (no code, tables or addresses), in sentence chunks, posted by main
-to `/v1/audio/speech` of a speech server on `localhost`/`127.0.0.1`/`::1` —
-an address off this Mac is refused. Hello finds that server; it never starts
-one. Escape, switching chats or turning Voice off stops the playback and drops
-what was queued.
+to `/v1/audio/speech` of a speech server on `localhost`/`127.0.0.1`/`::1`, or
+synthesized with Hello's managed Kokoro native child. An address off this Mac
+is refused. Escape, switching chats or turning Voice off stops playback,
+cancels synthesis and drops queued chunks. Temporary managed WAV clips live
+under the app's own data directory and are removed after the request.
+
+Settings › Voice › Install Voice is the download consent boundary. Its three
+visible stages show the engines, models, maximum download size and publisher
+links. Main streams fixed HTTPS artifacts from the publisher hosts in
+`voice/manifest.ts`; exact byte lengths and SHA-256 digests must match before
+an atomic rename. Cache paths refuse symlinks at every existing component.
+Archive extraction rejects traversal, links and special files, installs into
+a private staging directory, and records hashes for rechecking extracted files.
+Cancelled/failed partial downloads are removed; completed verified components
+are reused. Startup and status reads never download. First use after restart
+may restore verified local files; repair downloads need another button click.
+
+Only trusted main-window IPC can request preparation, cancellation or speech.
+Managed installation supports Apple Silicon and Intel macOS 14+ without a shell,
+package manager or global changes. Whisper binds a main-minted loopback port;
+readiness is polled and crashes receive bounded backoff before a visible error.
+Only children Hello spawned are supervised and killed on shutdown. Discovered
+servers are reused, never loaded with another model or killed. Child processes
+receive a minimal environment and their output is discarded, not logged.
+Managed Kokoro uses a native CPU executable with an explicit text argument
+after `--`, bounded chunks and a private output path; it starts no public server.
+The downloads are hash-pinned third-party artifacts, not a claim that Hello has
+signed or notarized those executables. No Gatekeeper/quarantine setting is changed.
 
 A page that opens a window gets a tab beside the one it came from, in the same
 partition and with the opener's Agent control, never a window outside the app:

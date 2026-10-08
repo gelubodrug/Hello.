@@ -10,6 +10,7 @@ import { speechChunks, spokenProse } from '../../shared/speech-text';
  */
 
 export interface SpeechOutput {
+  cancel?(): void;
   /** One chunk of prose as audio. */
   speak(text: string): Promise<VoiceSpeech>;
   /** Plays one clip; resolves when it ends. The returned stop ends it early. */
@@ -70,6 +71,7 @@ export class SpeechPlayer {
   /** Silence now: the clip playing ends, and nothing queued is played. */
   stop(): void {
     this.generation++;
+    this.output.cancel?.();
     const stop = this.current;
     this.current = undefined;
     stop?.();

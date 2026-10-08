@@ -15,7 +15,7 @@ export function useSpokenReplies(options: { enabled: boolean; activeId: string |
   onError.current = options.onError;
   const voice = api.voice;
   const player = useMemo(() => voice
-    ? new SpeechPlayer({ speak: text => voice.speak(text), play: playClip }, error => onError.current(error))
+    ? new SpeechPlayer({ speak: text => voice.speak(text), play: playClip, cancel: () => { void voice.stopSpeech?.().catch(() => {}); } }, error => onError.current(error))
     : null, [voice]);
   const live = useRef({ enabled, activeId });
   live.current = { enabled, activeId };

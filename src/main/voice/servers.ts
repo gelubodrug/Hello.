@@ -2,7 +2,8 @@ import type { VoiceServer } from '../../shared/types';
 
 /**
  * Voice servers running on this Mac, found the way model servers are: Hello
- * asks the ports someone is listening on, and never starts a server itself.
+ * asks the ports someone is listening on. Discovery itself starts nothing;
+ * the separate managed installer starts only Hello's own downloaded engine.
  * Two shapes answer. An OpenAI-shaped speech server (Kokoro-FastAPI, mlx-audio)
  * lists its voices at GET /v1/audio/voices; whisper.cpp's whisper-server takes
  * audio at POST /inference and says so on its own page. A speech server often

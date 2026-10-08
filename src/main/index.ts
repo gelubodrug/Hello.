@@ -19,6 +19,7 @@ import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
 import { PageModeController } from './browser/page-mode';
 import { registerIPC } from './ipc';
+import { ManagedVoice } from './voice/managed';
 import { disposeInOrder } from './lifecycle';
 import { DshService } from './dsh/service';
 import { DshSurface } from './dsh/surface';
@@ -99,6 +100,7 @@ let terminalService:MainTerminalService|null=null;
 // A worker reports to the chat that opened it, and the chat is built after the
 // terminals it reports through — so the link is read when a report arrives.
 let chatService:ChatService|null=null;
+let voiceService:ManagedVoice|null=null;
 let quitConfirmed=false;
 let closing=false;
 
@@ -273,11 +275,13 @@ else {
     // profile stored before this app knew how to ask still launches on the
     // model's real context window rather than the shipped default.
     void chat.settleModelLimits();
+    const voice=new ManagedVoice({root:join(dataDir,'voice'),settings:()=>store.getSettings().voice,discover:()=>chat.voiceServers(),changed:status=>emit('hello:voice-status',status)});
+    voiceService=voice;
     const unregister=registerIPC(window,store,chat,terminal,browser,id=>previews.closeConversation(id),async id=>{
       artifactPreviews.closeConversation(id);
       await artifacts.removeConversation(id);
       await pageModes.removeConversation(id).catch(()=>{});
-    },()=>emit('hello:extensions-changed',{}),pageModes);
+    },()=>emit('hello:extensions-changed',{}),pageModes,voice);
     const unregisterPiEngine=registerPiEngineIPC(window,piEngine);
     // Newer Pi and dsh releases, asked of npm a moment after start and every few hours.
     const lookForUpdates=()=>{void piEngine.checkLatest().catch(()=>{});void dsh.checkLatest().catch(()=>{});};
@@ -307,6 +311,7 @@ else {
       cleanup=null;
       const failures=await disposeInOrder([
         {name:'IPC',dispose:unregister},
+        {name:'Voice',dispose:()=>{voice.dispose();voiceService=null;}},
         {name:'DSH IPC',dispose:unregisterDsh},
         {name:'Pi engine IPC',dispose:()=>{clearTimeout(firstUpdateLook);clearInterval(updateLooks);unregisterPiEngine();}},
         {name:'market IPC',dispose:unregisterMarket},
@@ -348,5 +353,5 @@ else {
     app.exit(1);
   });
   app.on('window-all-closed',()=>app.quit());
-  app.on('before-quit',()=>{if(!mainWindow){terminalService?.dispose();void cleanup?.();}});
+  app.on('before-quit',()=>{if(!mainWindow){voiceService?.dispose();terminalService?.dispose();void cleanup?.();}});
 }

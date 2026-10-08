@@ -71,7 +71,7 @@ export interface ModelChoice { id: string; contextWindow?: number; maxOutputToke
 export interface ConnectionModels { name: string; endpointUrl: string; active: boolean; models: ModelChoice[]; error?: string; }
 /** A model server found running on this Mac, named after what it is and the port it took. */
 export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[]; }
-/** A voice server running on this Mac, found and never started by Hello: OpenAI-shaped speech (Kokoro, mlx-audio), or whisper.cpp's whisper-server. */
+/** A discovered voice server on this Mac: OpenAI-shaped speech or whisper.cpp. Discovery never takes ownership of the process. */
 export interface VoiceServer { name: string; baseUrl: string; kind: 'speech' | 'whisper.cpp'; }
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
 export interface ResourceChange { conversationId?: string }
@@ -130,7 +130,7 @@ export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 export type ApprovalMode = 'ask' | 'writes' | 'all';
 /** A provider the user asked this app to keep, so switching is a click and not a retyped URL. Its key lives under its endpoint, never in this record. */
 export interface SavedConnection { name: string; endpointUrl: string; model: string; apiKeySet: boolean; }
-/** Voice: replies read aloud by a Kokoro server the person runs on this Mac. Found, never started by Hello. */
+/** Voice uses existing local servers or engines installed with consent in Settings. */
 export interface VoiceSettings { /** The one Voice switch. */ enabled: boolean; /** The speech-to-text server (whisper.cpp); unset, the first one found on this Mac. */ sttEndpointUrl?: string; /** The model that server is asked for; it belongs to that server and clears when it changes. */ sttModel?: string; /** The language the person speaks, as a short code (ro); unset, the server detects it. */ sourceLanguage?: string; /** The speech server; unset, the first one found on this Mac. */ ttsEndpointUrl?: string; /** A Kokoro voice id; unset, af_heart. It belongs to its server and clears when it changes. */ ttsVoice?: string; }
 /** Whether macOS lets Hello use the microphone. */
 export type MicrophoneAccess = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
@@ -341,6 +341,11 @@ export interface HelloAPI {
   };
   /** Voice. Optional for an older preload. */
   voice?: {
+    status?(): Promise<import('./voice-setup').VoiceSetupStatus | undefined>;
+    prepare?(consent: boolean): Promise<{ status: import('./voice-setup').VoiceSetupStatus; settings: AppSettings }>;
+    cancel?(): Promise<void>;
+    stopSpeech?(): Promise<void>;
+    onStatus?(listener: (status: import('./voice-setup').VoiceSetupStatus) => void): () => void;
     /** One microphone WAV, translated locally into an English turn. */
     translate?(audio: Uint8Array): Promise<string>;
     /** One chunk of prose as audio, from the voice server on this Mac. */
