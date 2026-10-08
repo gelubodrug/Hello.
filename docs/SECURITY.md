@@ -52,6 +52,12 @@ permission. On macOS the system asks the person once
 (`NSMicrophoneUsageDescription`); a refusal there is final. The window's CSP
 admits `media-src blob:` so a recorded or synthesized clip can play, and the
 audio goes only to the voice server the person runs on loopback.
+When Voice is on, a finished reply of the chat on screen is read aloud: its
+prose only (no code, tables or addresses), in sentence chunks, posted by main
+to `/v1/audio/speech` of a speech server on `localhost`/`127.0.0.1`/`::1` —
+an address off this Mac is refused. Hello finds that server; it never starts
+one. Escape, switching chats or turning Voice off stops the playback and drops
+what was queued.
 
 A page that opens a window gets a tab beside the one it came from, in the same
 partition and with the opener's Agent control, never a window outside the app:

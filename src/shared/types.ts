@@ -128,7 +128,11 @@ export interface NotebookChange { conversationId: string; kind: NotebookKind; }
 export type ApprovalMode = 'ask' | 'writes' | 'all';
 /** A provider the user asked this app to keep, so switching is a click and not a retyped URL. Its key lives under its endpoint, never in this record. */
 export interface SavedConnection { name: string; endpointUrl: string; model: string; apiKeySet: boolean; }
-export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; /** Light, dark, or as macOS is (audit B2); unset is System. */ appearance?: 'system' | 'light' | 'dark'; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; connections: SavedConnection[]; }
+/** Voice: replies read aloud by a Kokoro server the person runs on this Mac. Found, never started by Hello. */
+export interface VoiceSettings { enabled: boolean; /** The speech server; unset, the first one found on this Mac. */ ttsEndpointUrl?: string; /** A Kokoro voice id; unset, af_heart. */ ttsVoice?: string; }
+/** One spoken chunk, as the voice server made it. */
+export interface VoiceSpeech { audio: Uint8Array; mime: string; }
+export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; /** Light, dark, or as macOS is (audit B2); unset is System. */ appearance?: 'system' | 'light' | 'dark'; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; /** Voice, off unless the person turns it on. */ voice?: VoiceSettings; connections: SavedConnection[]; }
 export type SettingsPatch = Partial<Omit<AppSettings, 'apiKeySet' | 'connections'>> & { apiKey?: string };
 /** Where a message the person wrote during a run is meant to land. */
 export type QueuedMode = 'steer' | 'next' | 'later';
@@ -325,6 +329,11 @@ export interface HelloAPI {
     useConnection(endpointUrl: string): Promise<AppSettings>;
     /** Drops a remembered connection and the key stored for its endpoint. */
     forgetConnection(endpointUrl: string): Promise<AppSettings>;
+  };
+  /** Voice. Optional for an older preload. */
+  voice?: {
+    /** One chunk of prose as audio, from the voice server on this Mac. */
+    speak(text: string): Promise<VoiceSpeech>;
   };
   chat: { attach(conversationId: string, paths: string[]): Promise<ChatDropResult>;
     /** The picture on the clipboard, read by main and kept like a dropped image. Optional for an older preload. */

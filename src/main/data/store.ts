@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fetchedSources, sourcesForMessage, withSourceLinks } from '../../shared/web';
 import type {
   AppSettings,
+  VoiceSettings,
   UsageSummary,
   SavedConnection,
   LibraryResource,
@@ -48,6 +49,14 @@ export type NotebookInput = Pick<
 type StoredConnection = Omit<SavedConnection, 'apiKeySet'>;
 type StoredSettings = Omit<AppSettings, 'apiKeySet' | 'connections'> & { connections: StoredConnection[] };
 const CONNECTION_LIMIT = 12;
+
+/** Voice as stored: a speech server is on this Mac or nowhere, and a voice id is a short name. */
+function voiceSettings(value: Partial<VoiceSettings>): VoiceSettings {
+  const ttsEndpointUrl = typeof value.ttsEndpointUrl === 'string' ? value.ttsEndpointUrl.trim().slice(0, 500) : '';
+  const ttsVoice = typeof value.ttsVoice === 'string' ? value.ttsVoice.trim().slice(0, 100) : '';
+  if (ttsVoice && !/^[\w.+-]+$/.test(ttsVoice)) throw new Error('A voice is a name like af_heart.');
+  return { enabled: value.enabled === true, ...(ttsEndpointUrl ? { ttsEndpointUrl } : {}), ...(ttsVoice ? { ttsVoice } : {}) };
+}
 
 const DEFAULT_SETTINGS: StoredSettings = {
   endpointUrl: 'http://127.0.0.1:1234/v1',
@@ -871,6 +880,7 @@ export class DataStore {
       subagentModel: patch.subagentModel !== undefined ? (patch.subagentModel.trim().slice(0, 500) || undefined) : current.subagentModel,
       // What was learned about one model does not carry to the next.
       contextScale: patch.contextScale ?? current.contextScale,
+      voice: patch.voice !== undefined ? voiceSettings({ ...current.voice, ...patch.voice }) : current.voice,
     };
     // A model id is its provider's: another connection starts from the chat's own model again.
     if (patch.subagentModel === undefined && next.endpointUrl !== current.endpointUrl) delete next.subagentModel;

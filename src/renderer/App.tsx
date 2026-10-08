@@ -61,6 +61,7 @@ import { animateSurface } from "./ui/surface-motion";
 import { SidebarChrome } from './ui/SidebarChrome';
 import { EngineRow, usePiEngine } from './EngineRow';
 import { SettingsDialog } from "./settings/SettingsDialog";
+import { useSpokenReplies } from "./chat/useSpokenReplies";
 import { DshView, useDshStatus } from "./dsh/DshView";
 import { MarketDialog } from "./market/MarketDialog";
 import {
@@ -277,6 +278,8 @@ function Application() {
     (conversation) => conversation.id === shell.activeId,
   );
   const ui = shell.workspaces[shell.activeId ?? ""] ?? defaultWorkspacePrefs();
+  // Replies of the chat on screen, read aloud while Voice is on.
+  useSpokenReplies({ enabled: boot?.settings.voice?.enabled === true, activeId: shell.activeId, onError: reportError });
   const sidebarVisible = navigationShown(shell.sidebar, ui, width, dshOpen);
   // Hidden navigation keeps only a narrow pointer edge and the native lights.
   const compact = width - (sidebarVisible ? 272 : 4) - 2 < 728;

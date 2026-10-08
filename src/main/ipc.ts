@@ -10,6 +10,7 @@ import type { MainTerminalService } from './terminal/service';
 import type { BrowserManager } from './browser/manager';
 import type { PageModeController } from './browser/page-mode';
 import { WorkspaceFiles } from './files/service';
+import { DEFAULT_TTS_VOICE, SPEECH_TEXT_LIMIT, VoiceSpeaker } from './voice/speak';
 import { resolveDropPaths } from './files/drop-paths';
 import { discoverMcpServers, discoverPiExtensions, discoverSkills, withoutSecrets } from './extensions/discovery';
 import { dshSkillRoots } from './dsh/skills';
@@ -130,6 +131,12 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.approvals!==undefined)clean.approvals=patch.approvals as SettingsPatch['approvals'];
     if(patch.appearance!==undefined){if(!['system','light','dark'].includes(patch.appearance as string))throw new Error('Appearance is System, Light or Dark.');clean.appearance=patch.appearance as SettingsPatch['appearance'];}
     if(patch.subagentModel!==undefined){if(typeof patch.subagentModel!=='string'||patch.subagentModel.length>500)throw new Error('Invalid subagent model.');clean.subagentModel=patch.subagentModel;}
+    if(patch.voice!==undefined){
+      const voice=record(patch.voice);
+      if(voice.enabled!==undefined&&typeof voice.enabled!=='boolean')throw new Error('Invalid voice setting.');
+      for(const key of ['ttsEndpointUrl','ttsVoice'] as const)if(voice[key]!==undefined&&(typeof voice[key]!=='string'||(voice[key] as string).length>500))throw new Error('Invalid voice setting.');
+      clean.voice={enabled:voice.enabled===true,...(voice.ttsEndpointUrl!==undefined?{ttsEndpointUrl:voice.ttsEndpointUrl as string}:{}),...(voice.ttsVoice!==undefined?{ttsVoice:voice.ttsVoice as string}:{})};
+    }
     const saved=store.saveSettings(clean);
     // The app's look follows at once: native menus, and what pages read as prefers-color-scheme.
     if(clean.appearance!==undefined)applyAppearance(window,saved.appearance);
@@ -147,6 +154,16 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.localServers',()=>chat.localServers(true));
   // The same look Settings just asked for: a voice server is found, never started.
   handle('settings.voiceServers',()=>chat.voiceServers());
+  // A chunk of a reply, read aloud by the speech server the person runs here:
+  // the one Settings names, else the first one found. Never one off this Mac.
+  const speaker=new VoiceSpeaker();
+  handle('voice.speak',async(text)=>{
+    const words=str(text,'text',SPEECH_TEXT_LIMIT);
+    const voice=store.getSettings().voice;
+    const server=voice?.ttsEndpointUrl||(await chat.voiceServers()).find(found=>found.kind==='speech')?.baseUrl;
+    if(!server)throw new Error('No voice server is running on this Mac.');
+    return speaker.speak(server,words,voice?.ttsVoice??DEFAULT_TTS_VOICE);
+  });
   handle('chat.attach',(id,paths)=>chat.attach(str(id),paths));
   // What every chat waits for the person to answer (audit A1): read-only.
   handle('chat.pendingInput',()=>chat.pendingInput());
