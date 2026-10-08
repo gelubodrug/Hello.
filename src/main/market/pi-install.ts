@@ -16,7 +16,7 @@ import { join, sep } from 'node:path';
 import { gt, minVersion, satisfies, valid, validRange } from 'semver';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { MarketHttp } from './net';
-import { MarketInstallError, NPM_REGISTRY_ORIGIN, safePackageName, stableExactVersion, type HelloReading } from './install';
+import { MarketInstallError, NPM_REGISTRY_ORIGIN, outOfSpace, safePackageName, stableExactVersion, type HelloReading } from './install';
 import { pnpmFailure, runPnpm, type PnpmInvocation } from '../dsh/pnpm';
 import { INSTALLED_LIMITS } from '../extensions/library';
 
@@ -176,6 +176,8 @@ export async function stagePiPackage(options: {
     });
     if (run.code !== 0) {
       const output = pnpmFailure(run.output);
+      const full = outOfSpace(run.output, options.stagingDir, output);
+      if (full) throw full;
       if (/NO_MATURE_MATCHING_VERSION/.test(run.output))
         throw new MarketInstallError('install-failed', `A dependency of ${name} was published less than a day ago; pnpm waits a day before installing new releases. Try again tomorrow.`, output);
       throw new MarketInstallError('install-failed', `pnpm could not install ${name}.`, output);
@@ -196,6 +198,6 @@ export async function stagePiPackage(options: {
     return { project, dispose };
   } catch (error) {
     await dispose();
-    throw error;
+    throw outOfSpace(error, options.stagingDir) ?? error;
   }
 }

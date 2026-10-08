@@ -525,6 +525,13 @@ export function SettingsDialog({
               : probe.state === 'ok'
                 ? `Connected · ${served(probe.models)}`
                 : probe.message}
+            {/* A failed read is often the network, not the server: ask the
+                same address again without it having to be retyped (nativ#690). */}
+            {probe.state === 'error' ? (
+              <button type="button" className="text-button" disabled={busy} onClick={() => setAskAgain(value => value + 1)}>
+                Try again
+              </button>
+            ) : null}
             {probe.state === 'error' && elsewhere ? (
               <button type="button" className="text-button" disabled={busy} onClick={() => use(elsewhere)}>
                 Use {elsewhere.name}
@@ -594,7 +601,7 @@ export function SettingsDialog({
                     // Only the choice. Main reads this model's published limits.
                     action: () => setDraft(value => ({ ...value, model: model.id })),
                   }))
-                : [{ id: "empty", label: probe.state === 'checking' ? "Checking the server…" : "No models from this address", disabled: true }]
+                : [{ id: "empty", label: probe.state === 'checking' ? "Checking the server…" : probe.state === 'error' ? "Could not read this address" : "No models from this address", disabled: true }]
             }
           >
             <ChevronDown size={14} />

@@ -25,8 +25,8 @@ async function launch(contextWindow: number, maxOutputTokens: number, contextSca
   const settingsFile = JSON.parse(await readFile(join(dir, 'settings.json'), 'utf8')) as
     { compaction: { reserveTokens: number; keepRecentTokens: number } };
   const models = JSON.parse(await readFile(join(dir, 'models.json'), 'utf8')) as
-    { providers: { hello: { models: Array<{ contextWindow: number }> } } };
-  return { ...settingsFile, told: models.providers.hello.models[0].contextWindow };
+    { providers: { hello: { models: Array<{ contextWindow: number; maxTokens: number }> } } };
+  return { ...settingsFile, told: models.providers.hello.models[0].contextWindow, maxTokens: models.providers.hello.models[0].maxTokens, settings };
 }
 
 describe('how much room Pi is told to keep', () => {
@@ -56,6 +56,22 @@ describe('how much room Pi is told to keep', () => {
     // A server loaded with 32k has no estimator headroom to give away.
     const small = await launch(32_768, 4_096);
     expect(small.compaction.reserveTokens).toBe(16_384);
+  });
+
+  it('answers shorter rather than refusing to start once a learned scale shrinks the window', async () => {
+    // Saved as 32,768 / 16,384 — a pair Settings accepts — then one overflow
+    // teaches a scale of 0.7: 22,937 tokens left no room for that output and
+    // every message in the chat failed to start (nativ#684).
+    const shrunk = await launch(32_768, 16_384, 0.7);
+    expect(shrunk.told).toBe(22_937);
+    expect(shrunk.maxTokens).toBe(14_745);
+    expect(shrunk.maxTokens + 4096).toBeLessThanOrEqual(shrunk.compaction.reserveTokens);
+    expect(shrunk.told - shrunk.compaction.reserveTokens).toBeGreaterThanOrEqual(4096);
+    expect(shrunk.compaction.keepRecentTokens).toBeGreaterThanOrEqual(1);
+    // Only this launch is shortened: the person's setting stays as saved.
+    expect(shrunk.settings.maxOutputTokens).toBe(16_384);
+    // A pair that still fits keeps its output budget whole.
+    expect((await launch(512_000, 32_768, 0.7)).maxTokens).toBe(32_768);
   });
 });
 

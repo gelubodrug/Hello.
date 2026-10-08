@@ -27,10 +27,18 @@ const INTENT_TTL_MS = 5 * 60_000;
 const PRODUCT_PACKAGES = new Set<string>([...PROFILE_BUNDLES, HELLO_BUNDLE, 'dsh-plugin-desktop', 'dsh-community-market']);
 
 export class MarketInstallError extends Error {
-  constructor(readonly code: 'verification-failed' | 'incompatible' | 'conflict' | 'expired' | 'busy' | 'install-failed', message: string, readonly output?: string) {
+  constructor(readonly code: 'verification-failed' | 'incompatible' | 'conflict' | 'expired' | 'busy' | 'install-failed' | 'out-of-space', message: string, readonly output?: string) {
     super(message);
     this.name = 'MarketInstallError';
   }
+}
+
+/** A full disk, said as such (nativ#689) — from pnpm's output or an fs error. */
+const OUT_OF_SPACE = /\bENOSPC\b|no space left on device/i;
+export function outOfSpace(failure: string | unknown, folder: string, output?: string): MarketInstallError | undefined {
+  const full = typeof failure === 'string' ? OUT_OF_SPACE.test(failure)
+    : Boolean(failure && typeof failure === 'object' && (failure as { code?: unknown }).code === 'ENOSPC');
+  return full ? new MarketInstallError('out-of-space', `The disk is full: the download needs more room in ${folder}. Free some space and try again.`, output) : undefined;
 }
 
 export function safePackageName(value: unknown): value is string {
@@ -311,6 +319,8 @@ export class MarketInstaller {
       this.options.log(`Market: pnpm ${args.join(' ')}`);
       const run = await runPnpm(pnpm, args, { cwd: layout.profile, onLine: line => this.options.log(`pnpm: ${line}`) });
       if (run.code !== 0) {
+        const full = outOfSpace(run.output, layout.profile, pnpmFailure(run.output));
+        if (full) throw full;
         if (/NO_MATURE_MATCHING_VERSION/.test(run.output))
           throw new MarketInstallError('install-failed', `A dependency of ${preview.packageName} was published less than a day ago; pnpm waits a day before installing new releases. Try again tomorrow.`, pnpmFailure(run.output));
         throw new MarketInstallError('install-failed', `pnpm could not ${preview.action} ${preview.packageName}.`, pnpmFailure(run.output));

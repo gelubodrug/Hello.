@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createDataStore, type DataStore } from '../src/main/data/store';
 import { ResourceLibrary, resourceDirectory, type PluginConfig } from '../src/main/extensions/library';
+import { outOfSpace } from '../src/main/market/install';
 import type { MarketHttp } from '../src/main/market/net';
 import { galleryUrl, parseGallery } from '../src/main/market/pi-gallery';
 import { normalizePiObject, piTypes } from '../src/main/market/pi-catalog';
@@ -227,6 +228,21 @@ describe('installing, updating and removing, in Hello’s library', () => {
     const { market, preview } = await install(http, { FAKE_PI_EXIT: '1', FAKE_PI_OUTPUT: 'ERR_PNPM_NO_MATURE_MATCHING_VERSION left-pad' });
     await expect(market.confirm(preview.token)).rejects.toThrow(/less than a day ago/);
     expect(store.listResourceRows()).toEqual([]);
+  });
+
+  it('says the disk is full when pnpm ran out of space, and leaves nothing behind', async () => {
+    const http = fakeHttp({ [latest]: manifest('1.0.0') });
+    const { market, preview } = await install(http, { FAKE_PI_EXIT: '1', FAKE_PI_OUTPUT: 'ENOSPC: no space left on device, write' });
+    await expect(market.confirm(preview.token)).rejects.toMatchObject({ code: 'out-of-space', message: expect.stringMatching(/disk is full/) });
+    expect(store.listResourceRows()).toEqual([]);
+    expect(readdirSync(path.join(directory, 'data', 'pi-staging'))).toEqual([]);
+  });
+
+  it('names a full disk from an fs error too, and leaves other failures as they were', () => {
+    const error = Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+    expect(outOfSpace(error, '/staging')).toMatchObject({ code: 'out-of-space', message: expect.stringContaining('/staging') });
+    expect(outOfSpace(Object.assign(new Error('EACCES'), { code: 'EACCES' }), '/staging')).toBeUndefined();
+    expect(outOfSpace('ERR_PNPM_NO_MATURE_MATCHING_VERSION', '/staging')).toBeUndefined();
   });
 
   it('updates from Settings through the library, and refuses a name another plugin holds', async () => {

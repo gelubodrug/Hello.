@@ -133,7 +133,12 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   // rather than arguing with it. Never below the profile's own minimum.
   const published = settings.contextWindow ?? 32768;
   const contextWindow = Math.max(20480, Math.floor(published * (settings.contextScale ?? 1)));
-  const maxTokens = settings.maxOutputTokens ?? 4096;
+  // The output budget is what the person saved, unless the window main hands
+  // the runtime is now too small for it: a learned scale shrinks the window
+  // behind their back, and a chat that answers shorter beats one that refuses
+  // to start (nativ#684). The setting itself is never rewritten. 8,192 = Pi's
+  // 4,096 provider-side margin plus the 4,096 the profile needs to work in.
+  const maxTokens = Math.min(settings.maxOutputTokens ?? 4096, contextWindow - 8192);
   // Pi also keeps a 4,096-token provider-side safety margin. Preserve its
   // native 16k reserve, increasing it for larger configured output budgets.
   //
