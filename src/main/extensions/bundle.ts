@@ -28,8 +28,39 @@ const EXTERNAL = [
 export const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 export const BUNDLE_SUFFIX = '.hello-bundle.mjs';
 
-// CommonJS packages inside an ES module still call require() for built-ins.
-const BANNER = "import { createRequire as __helloCreateRequire } from 'node:module';\nconst require = __helloCreateRequire(import.meta.url);";
+/**
+ * CommonJS packages inside an ES module still call require() — for built-ins,
+ * and for the modules Pi provides.
+ *
+ * Pi aliases those specifiers for its loader, so an `import` of them resolves
+ * wherever the extension sits. A `require()` of one does not: createRequire
+ * looks for a node_modules beside the bundle, and the approved copy in Hello's
+ * library has none — in a packaged app there is no node_modules on that path at
+ * all. So the prologue imports exactly the Pi modules this bundle reached, as
+ * ESM, and hands them to require() by name; everything else still goes to
+ * Node's own require, with its resolve/cache kept.
+ */
+export function bundlePrologue(piProvided: readonly string[] = []): string {
+  const lines = ["import { createRequire as __helloCreateRequire } from 'node:module';"];
+  const names = piProvided.map((specifier, index) => [specifier, `__helloPi${index}`] as const);
+  for (const [specifier, binding] of names) lines.push(`import * as ${binding} from '${specifier}';`);
+  lines.push('const __helloNodeRequire = __helloCreateRequire(import.meta.url);');
+  if (!names.length) return `${lines.join('\n')}\nconst require = __helloNodeRequire;`;
+  lines.push(`const __helloPiProvided = new Map([${names.map(([specifier, binding]) => `['${specifier}', ${binding}]`).join(', ')}]);`);
+  // Object.assign keeps require.resolve and require.cache on the function.
+  lines.push('const require = Object.assign((__helloId) => __helloPiProvided.get(__helloId) ?? __helloNodeRequire(__helloId), __helloNodeRequire);');
+  return lines.join('\n');
+}
+
+/** The Pi-provided modules a built bundle still imports, in the order esbuild recorded them. */
+export function piProvidedIn(metafile: Metafile): string[] {
+  const provided = new Set(PI_PROVIDED_MODULES);
+  const found = new Set<string>();
+  for (const output of Object.values(metafile.outputs))
+    for (const imported of output.imports ?? [])
+      if (imported.external && provided.has(imported.path)) found.add(imported.path);
+  return [...found];
+}
 
 export interface ExtensionBundle {
   /** The extension entry, relative to the plugin folder. */
@@ -124,7 +155,6 @@ export async function bundleExtension(root: string, entry: string): Promise<Exte
       external: EXTERNAL,
       metafile: true,
       logLevel: 'silent',
-      banner: { js: BANNER },
     });
   } catch (error) {
     const failure = error as BuildFailure;
@@ -136,7 +166,9 @@ export async function bundleExtension(root: string, entry: string): Promise<Exte
   }
   const packages = packagesIn(result.metafile, root);
   if (!packages.length) return null;
-  const code = result.outputFiles[0]?.text ?? '';
+  // The prologue is written here, not as esbuild's banner, because it depends
+  // on which Pi modules the finished bundle still imports.
+  const code = `${bundlePrologue(piProvidedIn(result.metafile))}\n${result.outputFiles[0]?.text ?? ''}`;
   if (Buffer.byteLength(code) > MAX_BUNDLE_BYTES)
     throw new Error(`${entry} with its npm packages (${packages.join(', ')}) is larger than the 2 MB a Hello extension may be.`);
   return { entry, file: bundleName(entry), packages, code };

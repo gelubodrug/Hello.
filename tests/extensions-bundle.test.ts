@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createDataStore, type DataStore } from '../src/main/data/store';
 import { ResourceLibrary, readPlugin, resourceDirectory, type PluginConfig } from '../src/main/extensions/library';
-import { bundleName, packagesIn } from '../src/main/extensions/bundle';
+import { bundleName, bundlePrologue, packagesIn, piProvidedIn } from '../src/main/extensions/bundle';
 import { discoverPiExtensions } from '../src/main/extensions/discovery';
 
 // A Pi extension published the way OpenViking publishes its own: a folder
@@ -177,5 +177,70 @@ describe('Pi extensions installed for Pi itself', () => {
     // PI_CODING_AGENT_DIR moves Pi's folder.
     expect(await discoverPiExtensions(path.join(directory, 'nobody'))).toEqual([]);
     expect((await discoverPiExtensions(path.join(directory, 'nobody'), path.join(home, '.pi', 'agent'))).length).toBe(4);
+  });
+
+  // Pi's rule is wider than Hello's import, so a found row has to say when the
+  // import would refuse it instead of failing on the Add button.
+  it('say why Hello would refuse one, instead of offering it', async () => {
+    const home = path.join(directory, 'refused');
+    const root = path.join(home, '.pi', 'agent', 'extensions');
+    // A "pi" section naming a file that is not there: Pi lists it, the import refuses it.
+    write(path.join(root, 'phantom', 'package.json'), JSON.stringify({ name: 'phantom', pi: { extensions: ['./src/main.ts'] } }));
+    write(path.join(root, 'plain', 'package.json'), JSON.stringify({ name: 'plain' }));
+    write(path.join(root, 'plain', 'index.ts'), 'export default () => {};\n');
+    // A symlink Hello copies nothing through.
+    write(path.join(root, 'linked', 'package.json'), JSON.stringify({ name: 'linked' }));
+    write(path.join(root, 'linked', 'index.ts'), 'export default () => {};\n');
+    symlinkSync(path.join(root, 'plain', 'index.ts'), path.join(root, 'linked', 'elsewhere.ts'));
+    const found = await discoverPiExtensions(home);
+    const by = (name: string) => found.find(item => item.name === name);
+    expect(by('phantom')?.unsupported).toMatch(/matches no supported files/);
+    expect(by('linked')?.unsupported).toMatch(/symbolic link/);
+    expect(by('plain')?.unsupported).toBeUndefined();
+    expect('unsupported' in (by('plain') ?? {})).toBe(false);
+  });
+});
+
+describe('what Pi hands an extension, reached by require()', () => {
+  // Pi aliases those specifiers for its loader, so an import of one resolves.
+  // createRequire does not: it looks for a node_modules beside the bundle, and
+  // the approved copy has none — in a packaged app, nothing on that path does.
+  it('imports exactly the Pi modules the bundle reached, and hands them to require()', () => {
+    const prologue = bundlePrologue(['typebox', '@earendil-works/pi-ai']);
+    expect(prologue).toContain("import * as __helloPi0 from 'typebox';");
+    expect(prologue).toContain("import * as __helloPi1 from '@earendil-works/pi-ai';");
+    expect(prologue).toContain("new Map([['typebox', __helloPi0], ['@earendil-works/pi-ai', __helloPi1]])");
+    // require.resolve and require.cache stay on it.
+    expect(prologue).toContain('Object.assign(');
+    // Nothing reached: Node's own require, with no import of its own.
+    expect(bundlePrologue()).toBe("import { createRequire as __helloCreateRequire } from 'node:module';\nconst __helloNodeRequire = __helloCreateRequire(import.meta.url);\nconst require = __helloNodeRequire;");
+    expect(bundlePrologue()).not.toContain('__helloPi0');
+  });
+
+  it('reads them off a built bundle, external ones only', () => {
+    expect(piProvidedIn({
+      inputs: {},
+      outputs: { 'out.mjs': {
+        imports: [
+          { path: 'typebox', kind: 'import-statement', external: true },
+          { path: '@earendil-works/pi-coding-agent', kind: 'require-call', external: true },
+          { path: 'fake-memory-client', kind: 'import-statement', external: true },
+          { path: '@earendil-works/pi-ai', kind: 'import-statement' },
+        ],
+        exports: [], entryPoint: 'index.ts', inputs: {}, bytes: 0,
+      } },
+    })).toEqual(['typebox', '@earendil-works/pi-coding-agent']);
+  });
+
+  it('puts the prologue on a real bundle that requires a Pi module', async () => {
+    const root = extensionFolder('cjs-requires-pi', `import { recall } from 'fake-memory-client';
+export default function () { void recall; }
+`);
+    write(path.join(root, 'node_modules', 'fake-memory-client', 'index.cjs'),
+      "const { Type } = require('typebox');\nexports.recall = () => Type;\n");
+    const imported = await library.importPath('plugin', root);
+    const bundle = readFileSync(path.join(resourceDirectory(path.join(directory, 'data'), store.getResourceRow(imported.id)), 'index.hello-bundle.mjs'), 'utf8');
+    expect(bundle).toContain("import * as __helloPi0 from 'typebox';");
+    expect(bundle).toContain("__helloPiProvided.get(__helloId)");
   });
 });

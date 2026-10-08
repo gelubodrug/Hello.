@@ -44,7 +44,11 @@ export interface DiscoveredMcpServer {
 /** A skill folder another agent tool already has on this Mac. */
 export interface DiscoveredSkill { id: string; name: string; description: string; source: string; path: string; }
 /** A Pi extension installed for Pi itself (~/.pi/agent/extensions). */
-export interface DiscoveredPlugin { id: string; name: string; description: string; source: string; path: string; }
+export interface DiscoveredPlugin {
+  id: string; name: string; description: string; source: string; path: string;
+  /** Why Hello cannot import this one, when Pi's own folder holds something the import refuses. */
+  unsupported?: string;
+}
 /** One skill in the catalog skills_find and the composer's / menu search: Hello's library, another agent's on this Mac, or skills.sh's. */
 export interface CatalogSkill {
   /** `library:<resource id>`, `local:<folder>` or `skills.sh:<owner>/<repo>/<skill>`. */

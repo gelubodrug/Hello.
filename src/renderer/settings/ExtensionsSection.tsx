@@ -341,7 +341,8 @@ export function ExtensionsSection() {
                 : group.kind === 'plugin'
                 ? (found.plugins ?? []).map(plugin => ({
                     key: plugin.id, name: plugin.name, source: plugin.source,
-                    detail: plugin.description || plugin.path, blocked: undefined as string | undefined,
+                    detail: plugin.description || plugin.path,
+                    blocked: plugin.unsupported as string | undefined,
                   }))
                 : found.mcp.map(server => ({
                     key: server.id, name: server.name, source: server.source,
