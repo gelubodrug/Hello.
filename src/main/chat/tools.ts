@@ -31,6 +31,7 @@ import type { ElementTarget, WaitCondition } from '../browser/agent-target';
 import { toolOutputText, type ToolImage, type ToolOutput } from './tool-output';
 import { commandTimeout, runApprovedCommand } from './command-run';
 import { readFileRange } from './file-read';
+import type { ModelFileChange } from '../../shared/files';
 import { CONTENT_SEARCH_LIMITS, WorkspaceFiles } from '../files/service';
 
 export interface BrowserHooks {
@@ -852,6 +853,7 @@ async function keepPrevious(dataDir: string, conversationId: string, shown: stri
   return kept;
 }
 export interface ToolContext {
+  fileChanged?(event: ModelFileChange): void;
   /** Main-only credentials to remove from command results and optional logs. */
   redactValues?: string[];
   store: DataStore;
@@ -876,6 +878,16 @@ export interface ToolContext {
    * read simply carries the note again.
    */
   notedDomains?: Set<string>;
+}
+
+/** UI notification failure cannot turn a completed write into a failed mutation. */
+async function fileChanged(context: ToolContext, folder: string, target: string, source: ModelFileChange['source']): Promise<void> {
+  if (!context.fileChanged) return;
+  try {
+    const root = await realpath(folder);
+    if (contained(root, target)) context.fileChanged({ conversationId: context.conversationId, folder,
+      path: path.relative(root, target).split(path.sep).join('/'), source });
+  } catch { /* The write succeeded; no document data is carried in this event. */ }
 }
 
 /**
@@ -1227,6 +1239,7 @@ export async function executeToolOutput(
           throw new Error(`${requested} changed while this edit waited. Read it again and redo the edit.`);
         const kept = await keepPrevious(store.dataDir, conversationId, requested, original);
         await writeText(target, updated);
+        await fileChanged(context, current.folder!, target, 'file_edit');
         return `Replaced ${everywhere && occurrences > 1 ? `${occurrences} occurrences` : 'the text'} in ${requested} (${original.length.toLocaleString()} → ${updated.length.toLocaleString()} characters). The previous version is kept at ${kept}.`;
       }
       case 'file_write': {
@@ -1254,6 +1267,7 @@ export async function executeToolOutput(
         const previous = await readExisting(target);
         const kept = previous !== undefined && previous !== contents ? await keepPrevious(store.dataDir, conversationId, requested, previous) : undefined;
         await writeText(target, contents);
+        await fileChanged(context, current.folder!, target, 'file_write');
         return `Wrote ${Buffer.byteLength(contents)} bytes to ${requested}.${kept ? ` The previous version is kept at ${kept}.` : ''}`;
       }
       case 'worker_start': {

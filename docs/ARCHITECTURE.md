@@ -123,6 +123,12 @@ adds the automatic tools' secret-path exclusions and follows the turn's Stop
 signal without cancelling a human search. It needs an attached folder, not an
 approval or a browser grant.
 
+Successful `file_edit`/`file_write` calls emit a main-owned `files-changed` event
+(chat, folder and canonical relative path only). Files rereads only the matching
+open document, coalesces bursts, and retains its tree selection, mode, scroll and
+text-selection positions. Late reads cannot replace a newly selected document.
+There is no filesystem watcher, and reads/rendering emit no change event.
+
 ## Durable data
 
 [`DataStore`](../src/main/data/store.ts) owns a versioned SQLite database with WAL,

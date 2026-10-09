@@ -10,6 +10,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { ContentResults, contentNotice } from './ContentResults';
 import { QUOTE_LIMIT, fileSelection, hasSelectionIn, selectionQuote, type FileSelection } from './selection';
 import { setInternalFileDrop } from '../drop';
+import { captureFileView, restoreFileView, type FileViewState } from './view-state';
 import './files.css';
 
 type TreeEntry = FileEntry & { children?: TreeEntry[] };
@@ -69,6 +70,7 @@ export function FilesPane({ conversation, visible, request, onChooseFolder, onQu
   const [listNotice, setListNotice] = useState('');
   const [document, setDocument] = useState<FileDocument | null>(null);
   const documentRef = useRef(document); documentRef.current = document;
+  const preservedView = useRef<{ file: FileDocument; state: FileViewState } | null>(null);
   const [location, setLocation] = useState<FileLink | null>(null);
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
   const [reading, setReading] = useState(false);
@@ -181,6 +183,27 @@ export function FilesPane({ conversation, visible, request, onChooseFolder, onQu
     finally { if (mounted.current && sequence === readSequence.current) setReading(false); }
   }, [conversation.id, loadDirectory]);
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let current = true;
+    const unsubscribe = api.files.onChange?.(event => {
+      if (event.conversationId !== conversation.id || event.folder !== conversation.folder ||
+          !['file_edit', 'file_write'].includes(event.source) || event.path !== documentRef.current?.path) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const before = documentRef.current;
+        if (!before || before.path !== event.path) return;
+        const sequence = ++readSequence.current;
+        void api.files.read(conversation.id, before.path).then(file => {
+          if (!current || !mounted.current || sequence !== readSequence.current || documentRef.current?.path !== before.path) return;
+          // Capture at completion, including any scroll/selection made while reading.
+          if (viewport.current) preservedView.current = { file, state: captureFileView(viewport.current) };
+          setDocument(file);
+        }).catch(reason => { if (current && mounted.current && sequence === readSequence.current) setError(errorText(reason)); });
+      }, 75);
+    });
+    return () => { current = false; clearTimeout(timer); unsubscribe?.(); };
+  }, [conversation.id, conversation.folder]);
+  useEffect(() => {
     if (!request || requestHandled.current === request.nonce || !conversation.folder) return;
     requestHandled.current = request.nonce;
     setQuery('');
@@ -208,6 +231,19 @@ export function FilesPane({ conversation, visible, request, onChooseFolder, onQu
   useEffect(() => {
     if (!document || !viewport.current) return;
     const area = viewport.current;
+    const preserved = preservedView.current;
+    if (preserved?.file === document) {
+      const restore = () => restoreFileView(area, preserved.state);
+      restore();
+      // Shiki can replace plain text later. Reapply the same view until the
+      // person interacts; these DOM changes never trigger another file read.
+      const observer = new MutationObserver(restore);
+      observer.observe(area, { childList: true, subtree: true });
+      const release = () => { observer.disconnect(); preservedView.current = null; };
+      const actions = ['pointerdown', 'keydown', 'wheel'] as const;
+      actions.forEach(name => area.ownerDocument.addEventListener(name, release, { once: true, capture: true }));
+      return () => { observer.disconnect(); actions.forEach(name => area.ownerDocument.removeEventListener(name, release, true)); };
+    }
     const selector = location?.line ? `[data-line="${location.line}"]` : location?.anchor ? `#${CSS.escape(`file-heading-${location.anchor}`)}` : null;
     const reveal = () => {
       const target = selector ? area.querySelector<HTMLElement>(selector) : null;

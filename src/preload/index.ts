@@ -13,7 +13,7 @@ function subscribe<T>(channel: string, listener: (value:T)=>void): ()=>void {
   return()=>ipcRenderer.removeListener(channel,handler);
 }
 const api: HelloAPI = {
-  files:{list:(id,path,search)=>call('files.list',id,path,search),read:(id,path)=>call('files.read',id,path),open:(id,path)=>call('files.open',id,path),reveal:(id,path)=>call('files.reveal',id,path),resolvePaths:(id,paths)=>call('files.resolvePaths',id,paths),searchContents:(id,requestId,query,options)=>call('files.searchContents',id,requestId,query,options),cancelSearch:id=>call('files.cancelSearch',id)},
+  files:{list:(id,path,search)=>call('files.list',id,path,search),read:(id,path)=>call('files.read',id,path),open:(id,path)=>call('files.open',id,path),reveal:(id,path)=>call('files.reveal',id,path),resolvePaths:(id,paths)=>call('files.resolvePaths',id,paths),searchContents:(id,requestId,query,options)=>call('files.searchContents',id,requestId,query,options),cancelSearch:id=>call('files.cancelSearch',id),onChange:listener=>subscribe('hello:files-changed',listener)},
   bootstrap:()=>call('bootstrap'),
   workspace:{toolOrder:id=>call('workspace.toolOrder',id),saveToolOrder:(id,order)=>call('workspace.saveToolOrder',id,order)},
   conversations:{list:()=>call('conversations.list'),create:title=>call('conversations.create',title),update:(id,patch)=>call('conversations.update',id,patch),delete:id=>call('conversations.delete',id),restart:id=>call('conversations.restart',id),search:query=>call('conversations.search',query),reset:(id,options)=>call('conversations.reset',id,options),messages:id=>call('conversations.messages',id),export:id=>call('conversations.export',id)},

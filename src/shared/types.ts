@@ -293,6 +293,8 @@ export interface Bootstrap { conversations: Conversation[]; settings: AppSetting
 
 export interface HelloAPI {
   files: {
+    /** Successful model file edits/writes only; not a filesystem watcher. */
+    onChange?(listener: (event: import('./files').ModelFileChange) => void): () => void;
     list(conversationId: string, path?: string, search?: string): Promise<FileListing>;
     read(conversationId: string, path: string): Promise<FileDocument>;
     open(conversationId: string, path: string): Promise<void>;

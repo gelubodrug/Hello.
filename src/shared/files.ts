@@ -1,4 +1,6 @@
 /** Paths are relative to the conversation folder; only main resolves authority. */
+export interface ModelFileChange { conversationId: string; folder: string; path: string; source: 'file_edit' | 'file_write' }
+
 export interface FileEntry {
   path: string;
   name: string;

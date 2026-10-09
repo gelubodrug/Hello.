@@ -65,6 +65,7 @@ import { McpManager, type McpToolHandle } from '../extensions/mcp';
 import { WebResearch } from './web-tools';
 import { ChatAttachments, type AttachmentContext } from './attachments';
 import { modelVision } from './model-vision';
+import type { ModelFileChange } from '../../shared/files';
 
 type WireMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -179,6 +180,7 @@ class WatchedMap<K, V> extends Map<K, V> {
   override clear(): void { const had = this.size > 0; super.clear(); if (had) this.changed(); }
 }
 export interface ChatServiceOptions {
+  emitFileChange?(event: ModelFileChange): void;
   store: DataStore;
   emit(event: ChatEvent): void;
   /** The waiting list changed without the renderer asking. */
@@ -484,6 +486,7 @@ function commandSaid(message: unknown): string | undefined {
 export class ChatService {
   private readonly store: DataStore;
   private readonly emit: ChatServiceOptions['emit'];
+  private readonly emitFileChange?: ChatServiceOptions['emitFileChange'];
   private readonly emitQueue?: ChatServiceOptions['emitQueue'];
   private readonly emitExtensionUi?: ChatServiceOptions['emitExtensionUi'];
   private readonly emitPending?: ChatServiceOptions['emitPending'];
@@ -544,6 +547,7 @@ export class ChatService {
     this.mcp = options.mcp ?? new McpManager(options.store);
     this.skillCatalog = options.skillCatalog;
     this.emit = options.emit;
+    this.emitFileChange = options.emitFileChange;
     this.emitQueue = options.emitQueue;
     this.emitExtensionUi = options.emitExtensionUi;
     this.emitPending = options.emitPending;
@@ -1952,6 +1956,7 @@ export class ChatService {
         const output = await executeToolOutput(name, args, {
           store: this.store, conversationId, signal, browser: this.browser, workers: this.workers, web: run.web, notedDomains,
           redactValues: [run.key],
+          fileChanged: this.emitFileChange,
           approve: () => this.approvalFor(name, run, part!, signal),
           skills: {
             // A skill turned on during this reply is not in the snapshot the

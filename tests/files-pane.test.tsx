@@ -2,19 +2,20 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ContentSearch, FileDocument } from '../src/shared/files';
+import type { ContentSearch, FileDocument, ModelFileChange } from '../src/shared/files';
 import type { Conversation } from '../src/shared/types';
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   read: vi.fn(),
+  onChange: vi.fn(),
   searchContents: vi.fn(),
   cancelSearch: vi.fn(async () => {}),
   copy: vi.fn(async () => {}),
 }));
 vi.mock('../src/renderer/api', () => ({
   api: {
-    files: { list: mocks.list, read: mocks.read, open: vi.fn(), reveal: vi.fn(), resolvePaths: vi.fn(), searchContents: mocks.searchContents, cancelSearch: mocks.cancelSearch },
+    files: { list: mocks.list, read: mocks.read, onChange: mocks.onChange, open: vi.fn(), reveal: vi.fn(), resolvePaths: vi.fn(), searchContents: mocks.searchContents, cancelSearch: mocks.cancelSearch },
     system: { copy: mocks.copy },
   },
   onNativeBrowserFocus: () => () => {},
@@ -31,6 +32,7 @@ const answer = (requestId: string, matches: ContentSearch['matches'], extra: Par
 
 let root: Root;
 let host: HTMLDivElement;
+let changed: ((event: ModelFileChange) => void) | undefined;
 const render = async (props: { conversation?: Conversation; visible?: boolean; request?: FileRequest | null; onQuote?: (text: string, extra?: { verbatim?: boolean }) => void }) => {
   await act(async () => {
     root.render(createElement(FilesPane, { conversation: props.conversation ?? chat, visible: props.visible ?? true, request: props.request ?? null, onChooseFolder: vi.fn(), onQuote: props.onQuote }));
@@ -62,6 +64,8 @@ const select = async (from: [number, number], to: [number, number]) => {
 beforeEach(() => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  changed = undefined;
+  mocks.onChange.mockImplementation((listener: (event: ModelFileChange) => void) => { changed = listener; return () => { changed = undefined; }; });
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0));
@@ -77,6 +81,42 @@ afterEach(async () => {
   document.getSelection()?.removeAllRanges();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('refresh after model file mutations', () => {
+  const event = (extra: Partial<ModelFileChange> = {}): ModelFileChange => ({ conversationId: chat.id, folder: chat.folder!, path: 'notes.txt', source: 'file_edit', ...extra });
+  it('refreshes just the open file, retaining scroll and text selection without repeated reads', async () => {
+    mocks.read.mockResolvedValueOnce(doc('notes.txt', 'alpha\nbeta\ngamma')).mockResolvedValueOnce(doc('notes.txt', 'alpha\nbeta\ngamma changed'));
+    await render({ request: { path: 'notes.txt', nonce: 1 } });
+    const area = host.querySelector<HTMLElement>('.files-document')!;
+    await select([2, 1], [2, 3]);
+    area.scrollTop = 240; area.scrollLeft = 41;
+    await act(async () => {
+      changed?.(event({ path: 'other.txt' }));
+      changed?.(event({ conversationId: 'other-chat' }));
+      changed?.(event({ folder: '/other-folder' }));
+    });
+    await wait(100);
+    expect(mocks.read).toHaveBeenCalledTimes(1);
+    await act(async () => { changed?.(event()); changed?.(event({ source: 'file_write' })); });
+    await wait(75);
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(area.textContent).toContain('gamma changed');
+    expect(area.scrollTop).toBe(240); expect(area.scrollLeft).toBe(41);
+    expect(document.getSelection()?.toString()).toBe('et');
+    await wait(5000);
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
+  it('does not replace a newly opened file with an older refresh result', async () => {
+    const stale = deferred<FileDocument>();
+    mocks.read.mockResolvedValueOnce(doc('notes.txt', 'old')).mockReturnValueOnce(stale.promise).mockResolvedValueOnce(doc('other.txt', 'current'));
+    await render({ request: { path: 'notes.txt', nonce: 1 } });
+    await act(async () => { changed?.(event()); }); await wait(75);
+    await render({ request: { path: 'other.txt', nonce: 2 } });
+    await act(async () => { stale.resolve(doc('notes.txt', 'stale result')); });
+    expect(host.querySelector('.files-document')?.textContent).toContain('current');
+    expect(host.querySelector('.files-document')?.textContent).not.toContain('stale result');
+  });
 });
 
 describe('Files: Contents', () => {

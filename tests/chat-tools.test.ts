@@ -706,6 +706,20 @@ describe('changing a file without losing it', () => {
   };
   const read = (file: string) => import('node:fs/promises').then(fs => fs.readFile(file, 'utf8'));
 
+  it('notifies Files only after successful edits/writes, with a canonical relative path', async () => {
+    const { folder, context } = await setup();
+    const changed = vi.fn();
+    const withEvents = { ...context, fileChanged: changed };
+    await executeTool('file_edit', { path: './View.tsx', old: "import { a } from './a';", new: "import { b } from './b';" }, withEvents);
+    expect(changed).toHaveBeenLastCalledWith({ conversationId: 'chat-1', folder, path: 'View.tsx', source: 'file_edit' });
+    await executeTool('file_write', { path: 'new.txt', content: 'new text' }, withEvents);
+    expect(changed).toHaveBeenLastCalledWith({ conversationId: 'chat-1', folder, path: 'new.txt', source: 'file_write' });
+    await executeTool('file_read', { path: 'new.txt' }, withEvents);
+    await expect(executeTool('file_edit', { path: 'new.txt', old: 'absent', new: 'never written' }, withEvents)).rejects.toThrow(/does not contain/);
+    await expect(executeTool('file_write', { path: 'new.txt', content: 'declined' }, { ...withEvents, approve: async () => false })).rejects.toThrow(/declined/);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
   it('replaces the exact text once, keeps the previous version, and says so', async () => {
     const { folder, dataDir, context, view } = await setup();
     const said = await executeTool('file_edit', { path: 'View.tsx', old: "import { a } from './a';\n", new: "import { a } from './a';\nimport { ContextMeter } from './ContextMeter';\n" }, context);

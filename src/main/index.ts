@@ -266,7 +266,7 @@ else {
       search:(query:string,options:{online?:boolean;signal?:AbortSignal})=>skillCatalog.search(query,options),
       use:async(id:string,conversationId:string,signal?:AbortSignal)=>{const used=await skillCatalog.use(id,conversationId,signal);emit('hello:extensions-changed',{});return used;},
     };
-    const chat=chatService=new ChatService({store,mcp,library,skillCatalog:skills,piEntry:()=>piEngine.entry(),emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),emitExtensionUi:state=>emit('hello:chat-extension-ui',state),emitPending:state=>emit('hello:chat-pending',state),browser:browserHooks,workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
+    const chat=chatService=new ChatService({store,mcp,library,skillCatalog:skills,piEntry:()=>piEngine.entry(),emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),emitFileChange:event=>emit('hello:files-changed',event),emitExtensionUi:state=>emit('hello:chat-extension-ui',state),emitPending:state=>emit('hello:chat-pending',state),browser:browserHooks,workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
     // Settle the selected model's published limits once at startup, so a
     // profile stored before this app knew how to ask still launches on the
     // model's real context window rather than the shipped default.
