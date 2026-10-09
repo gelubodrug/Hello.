@@ -155,6 +155,50 @@ export function matchGroups(groups: ToolGroup[], need: string): ToolGroup[] {
   return [scored[0].group];
 }
 
+/**
+ * Words that say which of Hello's own groups the model means, whatever it
+ * called it (user, 09.10: "browser" is a clear intent — answer with the browser
+ * tools, never with a failed round). A word two groups could claim — "read",
+ * "open", "terminal" — is in neither.
+ */
+const FAMILIES: Record<string, readonly string[]> = {
+  browser: ['browser', 'browsers', 'browse', 'browsing', 'web', 'website', 'websites', 'site', 'page', 'pages', 'tab', 'tabs', 'url', 'urls', 'link', 'links', 'html', 'chart', 'charts', 'visual', 'navigate', 'screenshot'],
+  coding: ['code', 'coding', 'coder', 'file', 'files', 'folder', 'edit', 'shell', 'bash', 'command', 'commands'],
+  workers: ['worker', 'workers', 'agent', 'agents', 'cli', 'claude', 'codex', 'kimi', 'qwen', 'opencode', 'pane', 'panes'],
+  notebook: ['notebook', 'notebooks', 'runbook', 'tasks', 'plan', 'plans', 'todo'],
+};
+
+/**
+ * The groups a tools_find call means, read by intent from every string in it,
+ * whatever field the model put it in (`group`, `groups`, `name`, `tool`…): a
+ * group's id or name (`github` is `mcp:github`), one of its tools
+ * (TOOL_BROWSER_OPEN is browser_open, so browser), or a word of its family
+ * ("web", "page", "tab" are browser). A string two groups could claim decides
+ * nothing; when nothing decides, the words are scored as a description of the
+ * task. `unknown` is what looked like a group's name and is none.
+ */
+export function groupsByIntent(groups: ToolGroup[], input: Record<string, unknown>): { chosen: ToolGroup[]; unknown: string[] } {
+  const said = Object.values(input).flatMap(value => typeof value === 'string' ? [value]
+    : Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
+  const open = groups.filter(group => !group.core);
+  const short = (group: ToolGroup) => group.id.split(':').at(-1)!.toLowerCase();
+  const chosen = new Set<ToolGroup>();
+  const unknown: string[] = [];
+  for (const words of said) {
+    const key = words.trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/^(?:mcp__hello__|tools?_)/, '');
+    if (!key || groups.some(group => group.core && group.id === key)) continue;
+    const exact = open.find(group => group.id.toLowerCase() === key || short(group) === key || group.title.toLowerCase() === key)
+      ?? open.find(group => group.tools.some(tool => tool.toLowerCase() === key));
+    const family = exact ? [exact] : [...new Set(key.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+      .flatMap(word => open.filter(group => FAMILIES[group.id]?.includes(word) || short(group) === word)))];
+    if (family.length === 1) chosen.add(family[0]);
+    // Only a single word reads as a group's name; a sentence is a description of the task.
+    else if (!/\s/.test(words.trim())) unknown.push(words);
+  }
+  if (!chosen.size) return { chosen: matchGroups(groups, said.join(' ')), unknown };
+  return { chosen: [...chosen], unknown };
+}
+
 /** tools_find's own description: the rule, and every group this chat has. */
 export function toolsFindDescription(groups: ToolGroup[]): string {
   const catalog = groups.filter(group => !group.core)

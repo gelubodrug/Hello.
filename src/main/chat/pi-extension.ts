@@ -8,7 +8,7 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { readToolOutput } from './tool-output';
 import {
-  activeToolNames, firstSentence, matchGroups, pluginToolGroups, toolsFindDescription, TOOLS_FIND,
+  activeToolNames, firstSentence, groupsByIntent, pluginToolGroups, toolsFindDescription, TOOLS_FIND,
   type ToolCatalog, type ToolGroup,
 } from './tool-groups';
 
@@ -180,15 +180,15 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
   function registerToolsFind(groups: ToolGroup[]): void {
     const ids = groups.filter(group => !group.core).map(group => group.id);
     const description = toolsFindDescription(groups);
-    // No enum: an id this step's schema does not know yet (a group that just
-    // arrived) or a bare server name gets the listing back, not a rejected call.
+    // No enum, no closed object, a name or a list alike: the call is read by
+    // intent (groupsByIntent), so `group: "browser"` or `tool: "browser_open"`
+    // loads the browser group instead of failing validation and costing the
+    // model a round to learn the field's name (user, 09.10).
     const parameters = {
       type: 'object',
-      additionalProperties: false,
       properties: {
         groups: {
-          type: 'array',
-          items: { type: 'string' },
+          anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
           description: 'The groups to load, from the list in this tool’s description.',
         },
         need: { type: 'string', description: 'A few words about the task, when you are not sure which group fits.' },
@@ -206,13 +206,7 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
       async execute(_toolCallId, params) {
         const input = object(params) ? params : {};
         const groups = allGroups();
-        const requested = Array.isArray(input.groups) ? input.groups.filter((id): id is string => typeof id === 'string') : [];
-        // A bare server or plugin name means its group: `github` is `mcp:github`.
-        const named = (id: string) => groups.find(group => !group.core &&
-          (group.id === id || group.id.toLowerCase() === id.toLowerCase() || group.id.split(':')[1]?.toLowerCase() === id.toLowerCase()));
-        let chosen = [...new Set(requested.map(named).filter((group): group is ToolGroup => Boolean(group)))];
-        const unknown = requested.filter(id => !named(id) && !groups.some(group => group.core && group.id === id));
-        if (!chosen.length && typeof input.need === 'string') chosen = matchGroups(groups, input.need);
+        const { chosen, unknown } = groupsByIntent(groups, input);
         const listing = toolsFindDescription(groups).split('\n').slice(1).join('\n');
         if (!chosen.length) {
           return {

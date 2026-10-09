@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import helloTools from '../src/main/chat/pi-extension';
 import type { ToolDefinition } from '../src/main/chat/tools';
-import { activeToolNames, helloToolGroups, matchGroups, pluginToolGroups, toolsFindDescription, type ToolCatalog } from '../src/main/chat/tool-groups';
+import { activeToolNames, groupsByIntent, helloToolGroups, matchGroups, pluginToolGroups, toolsFindDescription, type ToolCatalog } from '../src/main/chat/tool-groups';
 
 // Tools are prompt-context driven (user, 29.09: "ai treabă în browser,
 // descoperi tool-urile de browser"). A fake Pi and a fake bridge: no Pi
@@ -79,6 +79,25 @@ Report what changed and what was verified; never claim a check you did not run."
     expect(matchGroups(groups, 'xyzzy')).toEqual([]);
     expect(toolsFindDescription(groups)).toContain('- browser: open, read or drive a web page');
     expect(toolsFindDescription(groups)).not.toContain('- core:');
+  });
+
+  // "browser" is a clear intent: answer with the browser tools, never with a
+  // failed round spent learning a field's name (user, 09.10).
+  it('reads a call by intent: a name, a tool, a word of its family, in any field', () => {
+    const { groups } = catalogFor(tools);
+    const ids = (input: Record<string, unknown>) => groupsByIntent(groups, input).chosen.map(group => group.id);
+    expect(ids({ group: 'browser' })).toEqual(['browser']);
+    expect(ids({ groups: 'Browser' })).toEqual(['browser']);
+    expect(ids({ tool: 'TOOL_BROWSER_OPEN' })).toEqual(['browser']);
+    expect(ids({ name: 'browser_screenshot' })).toEqual(['browser']);
+    expect(ids({ area: 'web' })).toEqual(['browser']);
+    expect(ids({ query: 'mcp__hello__worker_say' })).toEqual(['workers']);
+    expect(ids({ groups: ['tabs', 'notebook'] })).toEqual(['browser', 'notebook']);
+    expect(ids({ need: 'open google in a page' })).toEqual(['browser']);
+    expect(ids({ server: 'github' })).toEqual(['mcp:github']);
+    // A word two groups could claim decides nothing; a single unknown word is said to be none.
+    expect(groupsByIntent(groups, { group: 'read' })).toEqual({ chosen: [], unknown: ['read'] });
+    expect(ids({ groups: 'core' })).toEqual([]);
   });
 });
 
@@ -200,7 +219,17 @@ describe('tools in a running chat', () => {
     expect(pi.active).toContain('mcp_github_search');
     expect(result.details).toEqual({ loaded: ['mcp:github'] });
     expect(result.content[0].text).toContain('No group named spreadsheet; the others are:');
-    expect(pi.registered.get('tools_find')!.parameters).toMatchObject({ properties: { groups: { items: { type: 'string' } } } });
+    expect(pi.registered.get('tools_find')!.parameters).toMatchObject({ properties: { groups: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }] } } });
+  });
+
+  it('loads the group a call means even under the wrong field, instead of failing validation', async () => {
+    await start();
+    // No closed object: Pi has no extra field to reject before the call reaches Hello.
+    expect(pi.registered.get('tools_find')!.parameters).not.toHaveProperty('additionalProperties');
+    const result = await find({ group: 'browser' });
+    expect(result.details).toEqual({ loaded: ['browser'] });
+    expect(pi.active).toContain('browser_open');
+    expect((await find({ tool: 'TOOL_WORKER_SAY' })).details).toEqual({ loaded: ['workers'] });
   });
 
   it('unloads what a compaction summarized away, keeps what it kept, and says so', async () => {
