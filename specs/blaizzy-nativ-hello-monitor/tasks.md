@@ -60,7 +60,7 @@
 - [x] T033 [!medium] [#low] Marketul DSH: căutare pe mai multe categorii deodată, reordonarea surselor, scanarea completă dshfind
 - [ ] T034 [!medium] [#low] Suprafața DSH ca tab în panoul de unelte, pe lângă vederea din sidebar
 - [ ] T035 [!medium] [#medium] dsh 0.2.x stabil: pini exacți, procedura de upgrade, pluginurile de top reverificate (tema Hello și shim-ul sunt pentru 0.1.7-rc.2)
-- [ ] T036 [!medium] [#low] Bugetul de memorie și CPU al gazdei DSH
+- [x] T036 [!medium] [#low] Bugetul de memorie și CPU al gazdei DSH
 - [ ] T037 [!medium] [#medium] Extensii Pi: require() CommonJS al modulelor date de Pi într-un pachet împachetat; „Found on this Mac” poate lista o extensie pe care importul o refuză
 - [ ] T038 [!medium] [#low] WebGPU în tab-urile Hello (navigator.gpu): manualul de browser, embeddings locale
 - [x] T039 [!low] [#medium] /review al unui șablon de prompt poate fi luat de meniul / când un skill conține cuvântul
