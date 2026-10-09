@@ -59,27 +59,9 @@ function previewAPI(): HelloAPI {
     }},
     terminal:{list:async()=>[],workers:async()=>[],create:unsupported,attach:unsupported,write:unsupported,resize:async()=>{},close:async()=>{},onCreated:()=>()=>{},onData:()=>()=>{},onExit:()=>()=>{}},
     browser:{create:unsupported,navigate:unsupported,action:unsupported,setActive:async()=>{},attach:unsupported,detach:async()=>{},control:unsupported,read:unsupported,close:async()=>{},onUpdate:()=>()=>{},downloads:{list:async()=>[],open:unsupported,reveal:unsupported,cancel:unsupported,remove:unsupported,clear:unsupported,folder:unsupported,onChange:()=>()=>{}},mode:{arm:unsupported,disarm:async()=>{},release:async()=>{},capture:unsupported,copy:unsupported,onEvent:()=>()=>{}}},
-    // The design preview shows the market and the DSH surface with sample
-    // data — the 1024Store's top three as of 28.09.2026 — and fetches nothing.
     // The Pi row with an update on offer, as the sidebar shows it; updating needs the desktop app.
     piEngine:{status:async()=>({version:'0.99.1',bundled:'0.99.1',latest:'0.99.2',state:'idle'}),update:unsupported,useBundled:unsupported,onStatus:()=>()=>{}},
-    dsh:{status:async()=>({state:'absent',version:'0.1.7-rc.2',profileDir:'(desktop app only)',logFile:'',checkpoints:[]}),install:unsupported,start:unsupported,stop:unsupported,restart:unsupported,restore:unsupported,attach:unsupported,detach:async()=>{},reload:async()=>{},revealLogs:unsupported,onStatus:()=>()=>{},onOpenLink:()=>()=>{}},
-    market:{
-      sources:async()=>[
-        {id:'dsh-1024store',name:'DSH 1024Store',description:'Partner provider catalog. The user must add and enable it explicitly. Being listed does not mean a plugin was reviewed or recommended.',homepage:'https://deepseek1024.com',endpointHost:'deepseek1024.com',builtIn:true,partner:true,selected:true,available:true,added:true,attribution:{name:'DSH 1024Store',url:'https://deepseek1024.com',notice:'Community catalog data provided by a cooperating provider.'}},
-        {id:'dshfind',name:'dshfind',description:'Partner provider catalog. The user must add and enable it explicitly. Being listed does not mean a plugin was reviewed or recommended.',homepage:'https://dshfind.com',endpointHost:'api.dshfind.com',builtIn:true,partner:true,selected:false,available:true,added:false,attribution:{name:'dshfind',url:'https://dshfind.com',notice:'Community catalog data provided by a cooperating provider.'}},
-      ],
-      addSource:unsupported,addStandardSource:unsupported,removeSource:unsupported,selectSource:unsupported,
-      query:async(query)=>{
-        const items=[
-          {key:'p:1',name:'dsh1024',summary:'The DSH 1024Store client plugin: browse and search the live deepseek1024.com catalog from Settings, filter by category, confirmed one-click installs and uninstalls, plus self-update checks.',publisher:'imsai-sh',categories:['tools'],repository:'https://github.com/imsai-sh/awesome-deepseek-harness-plugins',installable:false,manualCommand:'dsh plugin --profile web add github:imsai-sh/awesome-deepseek-harness-plugins',sourceName:'DSH 1024Store',installs:793,stars:251},
-          {key:'p:2',name:'dsh-memory-plugin',summary:'Unifies long-term memory, knowledge retrieval, and skills into a self-evolving context database for agents.',publisher:'volcengine',categories:['memory'],repository:'https://github.com/volcengine/OpenViking',installable:true,sourceName:'DSH 1024Store',installs:386,stars:38859},
-          {key:'p:3',name:'deepseek-harness',summary:'Generates self-contained, motion-rich diagrams for architecture, workflow, and data-flow with crisp export, packaged as an agent skill.',publisher:'tt-a1i',categories:['skill'],repository:'https://github.com/tt-a1i/archify',installable:true,sourceName:'DSH 1024Store',installs:245,stars:72621},
-        ].filter(item=>(!query.installable||item.installable)&&(!query.category||item.categories.includes(query.category))&&(!query.q||item.name.includes(query.q)||item.summary.toLowerCase().includes(query.q.toLowerCase())));
-        return {items,total:items.length,categories:['tools','ui','dev','skill','session','model','workflow','fun','notify','theme','memory']};
-      },
-      icon:async()=>null,installed:async()=>[],preview:unsupported,previewByName:unsupported,previewUninstall:unsupported,previewFolder:unsupported,confirm:unsupported,
-    },
+    dsh:{status:async()=>({state:'absent',version:'latest',profileDir:'(desktop app only)',logFile:''}),install:unsupported,start:unsupported,stop:unsupported,restart:unsupported,attach:unsupported,detach:async()=>{},reload:async()=>{},revealLogs:unsupported,onStatus:()=>()=>{},onOpenLink:()=>()=>{}},
     // The Pi market with three packages from npm's list as of 29.09.2026; nothing is fetched.
     piMarket:{
       sources:async()=>[{id:'pi-gallery',name:'Pi packages',description:'pi.dev/packages, the official gallery of every npm package marked “pi-package”. Being listed does not mean a package was reviewed or recommended.',homepage:'https://pi.dev/packages',endpointHost:'pi.dev',builtIn:true,partner:false,selected:true,available:true,added:true,attribution:{name:'pi.dev/packages',url:'https://pi.dev/packages',notice:'Listing from the official Pi gallery; npm’s search stands in when it does not answer. Packages install from the npm registry.'}}],

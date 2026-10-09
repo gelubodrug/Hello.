@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DshStatus } from '../src/shared/types';
-import { DSH_VERSION, dshLayout, type DshLayout } from '../src/main/dsh/layout';
+import { dshLayout, type DshLayout } from '../src/main/dsh/layout';
 import { DshService, type SurfaceConnector } from '../src/main/dsh/service';
 import { forkSpawn } from '../src/main/dsh/spawn';
 import type { HostReady } from '../src/main/dsh/host';
@@ -19,7 +19,7 @@ afterEach(async () => {
 
 function fakeInstall(place: DshLayout) {
   mkdirSync(join(place.runtime, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
-  writeFileSync(place.installAnchor, JSON.stringify({ version: DSH_VERSION }));
+  writeFileSync(place.installAnchor, JSON.stringify({ version: '0.2.0-rc.2' }));
   mkdirSync(join(place.runtime, 'node_modules', 'node-addon-require-builtin'), { recursive: true });
   writeFileSync(join(place.runtime, 'node_modules', 'node-addon-require-builtin', 'package.json'), '{}');
 }
@@ -43,6 +43,7 @@ function service(mode = 'ready', options: { install?: 'ok' | 'fail'; installed?:
     surface,
     pnpm: { command: process.execPath, args: [fakePnpm], env: { ELECTRON_RUN_AS_NODE: '1' } },
     emit: status => statuses.push(status),
+    latest: async () => '0.2.0-rc.2',
     install: async (layoutArg, _pnpm, installOptions) => {
       installOptions?.onProgress?.({ resolved: 10, reused: 0, downloaded: 4, added: 10, done: true });
       if (options.install === 'fail') throw new Error('Installing the DSH runtime failed.\nERR_PNPM_FETCH_404');
@@ -56,7 +57,7 @@ function service(mode = 'ready', options: { install?: 'ok' | 'fail'; installed?:
 describe('DshService', () => {
   it('starts absent when nothing is installed', () => {
     const { service: created } = service();
-    expect(created.status()).toMatchObject({ state: 'absent', version: DSH_VERSION, checkpoints: [] });
+    expect(created.status()).toMatchObject({ state: 'absent', version: 'latest' });
   });
 
   it('installs on the first start, then runs and connects the surface', async () => {
@@ -66,21 +67,7 @@ describe('DshService', () => {
     expect(statuses.map(item => item.state)).toEqual(expect.arrayContaining(['installing', 'stopped', 'starting', 'running']));
     // The counters, with when the install began and when pnpm last spoke (the live panel).
     expect(statuses.map(item => item.progress).filter(Boolean).at(-1)).toMatchObject({ resolved: 10, downloaded: 4, added: 10, done: true, startedAt: expect.any(Number), at: expect.any(Number) });
-    expect(surface.connected).toEqual([{ port: 4567, url: 'http://127.0.0.1:4567/?token=SECRET-TOKEN-1234567890', bridgePort: 4568 }]);
-  });
-
-  it('mints a tool-bridge token per start, and forgets the bridge with the host', async () => {
-    const { service: created } = service('ready', { installed: true });
-    expect(created.bridge()).toBeUndefined();
-    await created.start();
-    const first = created.bridge()!;
-    expect(first).toMatchObject({ port: 4568, generation: 1 });
-    expect(first.token).toMatch(/^[\w-]{43}$/);
-    await created.stop();
-    expect(created.bridge()).toBeUndefined();
-    await created.start();
-    expect(created.bridge()).toMatchObject({ generation: 2 });
-    expect(created.bridge()!.token).not.toBe(first.token);
+    expect(surface.connected).toEqual([{ port: 4567, url: 'http://127.0.0.1:4567/?token=SECRET-TOKEN-1234567890' }]);
   });
 
   it('reports a failed install and stays absent', async () => {
@@ -114,24 +101,6 @@ describe('DshService', () => {
     expect(surface.connected).toHaveLength(2);
   });
 
-  it('takes a healthy restore point after a start', async () => {
-    const { service: created } = service('ready', { installed: true });
-    const status = await created.start();
-    expect(status.checkpoints).toHaveLength(1);
-    expect(status.checkpoints[0]).toMatchObject({ kind: 'healthy' });
-  });
-
-  it('creates the profile with Hello’s bundle linked, keeping plugins the person added', async () => {
-    const { service: created, place } = service('ready', { installed: true });
-    mkdirSync(place.profile, { recursive: true });
-    writeFileSync(join(place.profile, 'package.json'), JSON.stringify({ dependencies: { dsh1024: '0.5.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh1024'] } } }));
-    expect((await created.start()).state).toBe('running');
-    const { readFileSync } = await import('node:fs');
-    const manifest = JSON.parse(readFileSync(join(place.profile, 'package.json'), 'utf8'));
-    expect(manifest.dependencies).toEqual({ dsh1024: '0.5.0', 'hello-dsh': `link:${join(place.resources, 'hello-dsh')}` });
-    expect(manifest.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh1024', 'hello-dsh']);
-  });
-
   it('writes Hello’s patch layer before the host starts', async () => {
     const { service: created, place } = service('ready', { installed: true });
     await created.start();
@@ -139,24 +108,8 @@ describe('DshService', () => {
     const patch = readFileSync(join(place.root, 'hello.patch.yml'), 'utf8');
     expect(patch).toContain('printUrl: false');
     expect(patch).toContain('openBrowser: false');
-  });
-
-  it('waits for the person when the profile changed outside Hello, and starts once accepted', async () => {
-    const { service: created, place } = service('ready', { installed: true });
-    expect((await created.start()).state).toBe('running');
-    await created.stop();
-    const { readFileSync } = await import('node:fs');
-    const manifest = JSON.parse(readFileSync(join(place.profile, 'package.json'), 'utf8'));
-    manifest.dependencies['sneaky-plugin'] = '1.0.0';
-    writeFileSync(join(place.profile, 'package.json'), JSON.stringify(manifest));
-    const waiting = await created.start();
-    expect(waiting).toMatchObject({ state: 'stopped', profileChange: { added: ['sneaky-plugin'], removed: [], changed: [] } });
-    expect(waiting.message).toContain('sneaky-plugin');
-    const accepted = await created.start({ acceptProfileChange: true });
-    expect(accepted.state).toBe('running');
-    expect(accepted.profileChange).toBeUndefined();
-    await created.stop();
-    expect((await created.start()).state).toBe('running');
+    expect(patch).not.toContain('llm-pi-ai');
+    expect(patch).not.toContain('agent-default-model');
   });
 
   it('shows a plugin boot failure until the next start', async () => {
@@ -169,27 +122,4 @@ describe('DshService', () => {
     expect(created.status().bootFailure).toBeUndefined();
   });
 
-  it('uses Hello’s connection by default, and dsh’s own providers when told to', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hello-dsh-model-'));
-    folders.push(root);
-    const place = dshLayout(root, join(root, 'resources'));
-    fakeInstall(place);
-    const created = new DshService({
-      layout: place, hostEntry: fixture,
-      spawn: (entry, args, spawnOptions) => forkSpawn(entry, args, { ...spawnOptions, env: { ...spawnOptions.env, FAKE_DSH_MODE: 'ready' } }),
-      surface: { async connect() {}, disconnect() {} },
-      pnpm: { command: process.execPath, args: [fakePnpm], env: { ELECTRON_RUN_AS_NODE: '1' } },
-      emit: () => {},
-      model: () => ({ endpointUrl: 'http://127.0.0.1:9/v1', model: 'local-model', apiKey: '' }),
-    });
-    services.push(created);
-    const { readFileSync } = await import('node:fs');
-    expect(created.status().useHelloModel).toBe(true);
-    await created.start();
-    expect(readFileSync(join(place.root, 'hello.patch.yml'), 'utf8')).toContain('local-model');
-    await created.stop();
-    expect(created.setUseHelloModel(false).useHelloModel).toBe(false);
-    await created.start();
-    expect(readFileSync(join(place.root, 'hello.patch.yml'), 'utf8')).not.toContain('llm-pi-ai');
-  });
 });

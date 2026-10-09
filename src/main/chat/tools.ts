@@ -549,7 +549,7 @@ export function toolDefinitions(
   if (extensions.skillsCatalog)
     result.push(tool(
       'skills_find',
-      'Find a skill for the task at hand: step-by-step instructions someone wrote for a kind of work — documents, slides, spreadsheets, PDFs, frontend design, an API, a framework. Searches Hello’s library, the skills other agents on this Mac keep (Claude Code, Anthropic’s plugins, dsh, Codex, Pi…) and, with online, the skills.sh registry, which holds Anthropic’s own skills too. Returns ids; load the best fit with skill_load using its id. Call it before a task where a skill could help, not for a plain question.',
+      'Find a skill for the task at hand: step-by-step instructions someone wrote for a kind of work — documents, slides, spreadsheets, PDFs, frontend design, an API, a framework. Searches Hello’s library, the skills other agents on this Mac keep (Claude Code, Anthropic’s plugins, Codex, Pi…) and, with online, the skills.sh registry, which holds Anthropic’s own skills too. Returns ids; load the best fit with skill_load using its id. Call it before a task where a skill could help, not for a plain question.',
       {
         need: property('A few words about the task, in English, such as "create a pptx deck" or "fill a pdf form".'),
         online: { type: 'boolean', description: 'Also search skills.sh online. Default true.' },

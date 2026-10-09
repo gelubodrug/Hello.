@@ -8,7 +8,7 @@ import { parseFrontmatter, type ResourceLibrary } from './library';
 
 // Skills are prompt-context driven, like tools (user, 29.09): every skill
 // this Mac has — Hello's library, what other agents installed (Claude Code,
-// Anthropic's plugins, dsh, Codex, Pi…) — and, online, skills.sh's registry,
+// Anthropic's plugins, Codex, Pi…) — and, online, skills.sh's registry,
 // which holds Anthropic's own skills too, searchable in one place. The model
 // finds one for the task and loads it; Hello copies it into its library and
 // turns it on for the chat. A skill is instructions, never code authority.

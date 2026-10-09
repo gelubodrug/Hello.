@@ -27,16 +27,13 @@ import { dshLayout } from './dsh/layout';
 import { bundledPnpm } from './dsh/pnpm';
 import { utilitySpawn } from './dsh/electron-spawn';
 import { registerDshIPC } from './dsh/ipc';
-import { DshToolLink, dshToolsRow, isDshToolsRow, setDshToolsRow } from './dsh/tool-link';
 import { McpManager } from './extensions/mcp';
 import { ResourceLibrary } from './extensions/library';
 import { SkillCatalog } from './extensions/skill-catalog';
 import { registerSkillIPC } from './extensions/skill-ipc';
 import { discoverSkills } from './extensions/discovery';
-import { dshSkillRoots } from './dsh/skills';
 import { cachedMarketHttp, createMarketHttp } from './market/net';
 import { homedir } from 'node:os';
-import { MarketService } from './market/service';
 import { PiMarketService } from './market/pi-service';
 import { registerMarketIPC } from './market/ipc';
 
@@ -188,13 +185,7 @@ else {
     const dshResources=app.isPackaged?join(process.resourcesPath,'dsh'):[join(bundleDir,'..','..','assets','dsh'),join(process.cwd(),'assets','dsh')].find(candidate=>existsSync(candidate))??join(bundleDir,'..','..','assets','dsh');
     let reportBootFailure=(_entries:string[])=>{};
     const dshSurface=new DshSurface({openLink:url=>emit('hello:dsh-open-link',url),downloadsFolder:()=>app.getPath('downloads'),log:line=>console.log(line),onGone:reason=>console.warn(reason),onBootFailure:entries=>reportBootFailure(entries)});
-    const dsh=new DshService({layout:dshLayout(dataDir,dshResources),hostEntry:join(bundleDir,'dsh-host.js'),spawn:utilitySpawn,surface:dshSurface,pnpm:bundledPnpm(),emit:status=>emit('hello:dsh-status',status),metrics:()=>app.getAppMetrics(),model:()=>{
-      // The chat's own connection, read at each start and each proxied request.
-      const settings=store.getSettings();
-      if(!settings.endpointUrl||!settings.model)return undefined;
-      let apiKey='';try{apiKey=store.getApiKey();}catch{/* a locked keychain proxies without a key */}
-      return {endpointUrl:settings.endpointUrl,model:settings.model,apiKey,...(settings.contextWindow?{contextWindow:settings.contextWindow}:{}),...(settings.maxOutputTokens?{maxOutputTokens:settings.maxOutputTokens}:{})};
-    }});
+    const dsh=new DshService({layout:dshLayout(dataDir,dshResources),hostEntry:join(bundleDir,'dsh-host.js'),spawn:utilitySpawn,surface:dshSurface,pnpm:bundledPnpm(),emit:status=>emit('hello:dsh-status',status),metrics:()=>app.getAppMetrics()});
     reportBootFailure=entries=>dsh.reportBootFailure(entries);
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params)||dshSurface.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>{if(!dshSurface.adoptGuest(guest))browser.adoptGuest(guest);});
@@ -257,13 +248,16 @@ else {
     const piEngine=new PiEngine({root:join(dataDir,'pi'),pnpm:bundledPnpm(),emit:status=>emit('hello:pi-engine',status)});
     const terminal=new MainTerminalService({lookupConversation(id){try{return store.getConversation(id);}catch{return undefined;}},endpoint:()=>({...store.getSettings(),apiKey:store.getApiKey()}),notebookPaths:id=>store.notebookPaths(id),openNotebookContext:(conversationId,cwd)=>createWorkerNotebookContext({store,conversationId,cwd,userDataDir:dataDir,browser:browserHooks,piExtension:helloPiExtensionPath()}),userDataDir:dataDir,piCli:()=>join(dirname(piEngine.entry()),'cli.js'),emitData:event=>emit('hello:terminal-data',event),emitExit:event=>emit('hello:terminal-exit',event),onWorkerReport:event=>chatService?.workerReported(event)});
     terminalService=terminal;
-    // The DSH surface's plugin tools reach chats as an MCP server reached in-process.
-    const mcp=new McpManager(store,{links:row=>isDshToolsRow(row)?new DshToolLink(dsh):undefined});
+    // Retire only the former built-in DSH bridge, including its chat activations.
+    for (const row of store.listResourceRows()) {
+      if (row.kind === 'mcp' && row.source === 'hello:dsh') store.deleteResourceRow(row.id);
+    }
+    const mcp=new McpManager(store);
     // Every skill on this Mac and in skills.sh's registry, for skills_find (user, 29.09).
     const library=new ResourceLibrary(store);
     const skillCatalog=new SkillCatalog({
       store,library,http:cachedMarketHttp(createMarketHttp()),stagingDir:join(dataDir,'skill-staging'),
-      discover:()=>discoverSkills(process.env.HELLO_HOME_DIR||homedir(),store.listConversations().map(item=>item.folder).filter((folder): folder is string=>Boolean(folder)),dshSkillRoots(store.dataDir)),
+      discover:()=>discoverSkills(process.env.HELLO_HOME_DIR||homedir(),store.listConversations().map(item=>item.folder).filter((folder): folder is string=>Boolean(folder))),
     });
     library.remote=source=>skillCatalog.remote(source);
     const skills={
@@ -287,20 +281,8 @@ else {
     const lookForUpdates=()=>{void piEngine.checkLatest().catch(()=>{});void dsh.checkLatest().catch(()=>{});};
     const firstUpdateLook=setTimeout(lookForUpdates,5_000);
     const updateLooks=setInterval(lookForUpdates,6*60*60_000);
-    const unregisterDsh=registerDshIPC(window,dsh,dshSurface,{
-      inLibrary:()=>Boolean(dshToolsRow(store)),
-      set:async wanted=>{
-        const before=dshToolsRow(store);
-        setDshToolsRow(store,wanted);
-        if(!wanted&&before)await chat.mcp.disconnect(before.id);
-        emit('hello:extensions-changed',{});
-        return Boolean(dshToolsRow(store));
-      },
-    });
-    // The Community Plugin Market installs into the DSH profile; icons are re-encoded here, never loaded by the page.
+    const unregisterDsh=registerDshIPC(window,dsh,dshSurface);
     const normalizeIcon=(bytes:Buffer)=>{const image=nativeImage.createFromBuffer(bytes);return image.isEmpty()?null:image.resize({width:128,height:128,quality:'best'}).toDataURL();};
-    const market=new MarketService({layout:dshLayout(dataDir,dshResources),pnpm:bundledPnpm(),log:line=>console.log(line),normalizeIcon});
-    const unregisterMarket=registerMarketIPC(window,market);
     // The Pi package market (user, 29.09): the same window; a package installs
     // with pnpm into Hello's library, where each chat turns it on.
     const piMarket=new PiMarketService({store,library,pnpm:bundledPnpm(),stagingDir:join(dataDir,'pi-staging'),log:line=>console.log(line),normalizeIcon,changed:()=>emit('hello:extensions-changed',{})});
@@ -314,7 +296,6 @@ else {
         {name:'Voice',dispose:()=>{voice.dispose();voiceService=null;}},
         {name:'DSH IPC',dispose:unregisterDsh},
         {name:'Pi engine IPC',dispose:()=>{clearTimeout(firstUpdateLook);clearInterval(updateLooks);unregisterPiEngine();}},
-        {name:'market IPC',dispose:unregisterMarket},
         {name:'Pi market IPC',dispose:unregisterPiMarket},
         {name:'skills IPC',dispose:unregisterSkills},
         {name:'DSH surface',dispose:async()=>{dshSurface.dispose();await dsh.dispose();}},

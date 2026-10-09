@@ -17,7 +17,7 @@ boundary is recorded in
 | Web content | Remote pages in `<webview>` guests, separately sandboxed and without the app preload; every preference written by main at attach | [`browser/manager.ts`](../src/main/browser/manager.ts) |
 | Chat child | Pi in persistent RPC mode — the version pinned in package.json, or one updated from the sidebar into `<data>/pi/runtime`; agent execution and session context | [`chat/pi-rpc.ts`](../src/main/chat/pi-rpc.ts), [`chat/pi-extension.ts`](../src/main/chat/pi-extension.ts) |
 | Terminal children | Interactive shells and explicitly launched CLI clients; separate from the chat engine | [`terminal/`](../src/main/terminal/) |
-| DSH host (utility process) | One DeepSeek Harness profile (`hello`), booted like dsh's own desktop host; runs dsh plugins, third-party code | [`dsh/host-entry.ts`](../src/main/dsh/host-entry.ts), [`dsh/service.ts`](../src/main/dsh/service.ts) |
+| DSH host (utility process) | One DeepSeek Harness profile (`hello`), booted like dsh's own desktop host; hosts the upstream DSH application | [`dsh/host-entry.ts`](../src/main/dsh/host-entry.ts), [`dsh/service.ts`](../src/main/dsh/service.ts) |
 | DSH surface (web content) | dsh's own web client in one `<webview>` of partition `persist:hello-dsh`, no preload; src and every preference from main | [`dsh/surface.ts`](../src/main/dsh/surface.ts), [`renderer/dsh/DshView.tsx`](../src/renderer/dsh/DshView.tsx) |
 
 The main window uses context isolation, Electron sandboxing and no Node
@@ -201,9 +201,8 @@ into `<data>/pi/runtime` (a staging folder renamed into place); chats start Pi
 from it while it is newer than the bundled one, and the engine is part of the
 session fingerprint, so a chat moves at its next message. Going back removes the
 folder and the bundled Pi runs again; a Hello that brings a newer Pi of its own
-outgrows an older update. The DSH row does the same for dsh: the version chosen
-lives in `<data>/dsh/version.json`, the runtime is reinstalled at it and the host
-restarted, and a failed install keeps the version that ran. The terminal's Pi tab
+outgrows an older update. The DSH row offers the latest npm release for its
+hosted launch, without a bundled-version fallback (see below). The terminal's Pi tab
 runs this same engine (`cli.js` beside the chats' `rpc-entry.js`, by Electron as
 Node), not a `pi` found on PATH, so one update moves both; its private agent
 folder carries a theme of its own as the current one.
@@ -334,7 +333,7 @@ only Hello's own tool extension failing does.
 
 Skills are found the same way (`src/main/extensions/skill-catalog.ts`). One
 catalog holds Hello's library, every skill another agent on this Mac keeps
-(discovery below, plus Pi's `~/.pi/agent/skills` and dsh plugins' skills) and,
+(discovery below, plus Pi's `~/.pi/agent/skills`) and,
 on request, the skills.sh registry, which also lists Anthropic's own skills.
 The model calls `skills_find` with a few words about the task and
 `skill_load` with an id it returned; the person types `/` in the composer
@@ -488,7 +487,7 @@ next-turn cost (nothing can know them honestly).
 `{ endpointUrl, id }` in `settings` under `chat-model:<id>`, beside its other
 switches: written when a turn starts (the model it runs on) and when the
 composer's picker is used in it. A pick also stays the selection in Settings,
-which a new chat — or one with no model yet — runs on, and which DSH and the CLI
+which a new chat — or one with no model yet — runs on, and which the CLI
 workers use. `ChatService.chatSettings` puts the chat's endpoint and model over
 the selection, with the key filed under that endpoint; the selection's learned
 context scale and its subagent model do not carry to another model or
@@ -806,148 +805,52 @@ does not invalidate a committed database change; explicit path/export requests
 still report export failures. This is shared notebook access, not a scheduler,
 worker orchestration protocol or automatic task-completion detector.
 
-## DSH surface and the plugin market
+## DSH hosted launch
 
-Hello. runs DeepSeek Harness (dsh) plugins without becoming dsh. dsh's interface
-plugins and themes need dsh's own web shell (its module loader, shared React and
-Cordis modules, about twenty infrastructure plugins and the slot declarers), so
-they run in the **DSH surface**: dsh's client, hosted by Hello.
+Owner decision, 2026-10-09: Hello hosts DSH and offers its existing sidebar
+launch entry and upgrades. Plugins and add-ons belong to Hello/Pi. There is no
+Hello theme, layout plugin, DSH market, model proxy, DSH skill discovery or
+DSH tool bridge into Hello chats. DSH has no tools-pane tab.
 
-```
-Hello main ──utilityProcess──▶ DSH host   (runProfile, profile "hello", DSH_HOME = <data>/dsh/home)
-  │  one-time token → cookie: net.request in partition persist:hello-dsh    │ 127.0.0.1:<free port>
-  ├── <webview> "DSH" (src minted by main, no preload) ◀───────────────────┘ dsh client + UI plugins + Hello theme
-  ├── model proxy 127.0.0.1 (per-start token) ◀── dsh-llm-pi-ai route "hello"
-  ├── tool bridge 127.0.0.1 (per-start token) ──▶ dsh ToolRegistry, global view ◀── McpManager link "dsh-plugins"
-  └── Community Plugin Market: npm latest preview → confirm → pnpm add --save-exact → restart the host
-```
-
-The **Pi package market** is the same window over another backend
-(`src/main/market/pi-service.ts`): the list and its filters are pi.dev/packages'
-own (`pi-gallery.ts`, npm's search as fallback in `pi-catalog.ts`); an install is
-Hello's pnpm into a staging project that becomes a library plugin
-(`pi-install.ts`, `ResourceLibrary.installPackage`), turned on per chat. The
-sidebar's Plugin Market row opens a menu with both markets; each market's
-Installed list updates and removes what it installed.
-
-- **Install.** `@deepseek-ai/dsh@0.1.7-rc.2` (exact, or a newer version the person
-  updated to from the sidebar, kept in `<data>/dsh/version.json`) goes into `<data>/dsh/runtime`
-  with Hello's bundled pnpm (11.8.0, run by Electron as Node), hoisted, on first
-  use: about 0.5 GB. `node-addon-require-builtin`, which reads Node's internal
-  module loader through a native addon that recognises only exact Electron
-  builds, is replaced by Hello's shim (`assets/dsh/shims/`), which answers the same
-  calls through `--expose-internals` (the spike that found it is archived:
-  [`DSH-SPIKE-2026-09-28.md`](archive/DSH-SPIKE-2026-09-28.md)). One family is
-  left out (`ignoredOptionalDependencies`, `dsh/runtime.ts`): the prebuilt
-  LibreOffice that `@deepseek-ai/libreoffice-kit` ships per platform, 148 MB of
-  a 492 MB install for converting and previewing Office documents inside the
-  DSH surface, which Hello routes nothing to. The entry package stays, so the
-  plugins that import it still load and only a conversion fails, with dsh's own
-  message; a name removed from that list brings the engine back.
-  The install panel is live: counters against pnpm's `Packages: +N`, elapsed time,
-  pnpm's latest line in plain words (a retry, a slow download, a build) and, past
-  twenty seconds of silence, how long it has been quiet. Every pnpm run is taken
-  at its word 20 s after it says `Done` (pnpm 11.8 once hung for hours retrying
-  other platforms' tarballs after finishing) and stopped after five minutes with
-  no output, with the reason.
-- **Profile.** `<data>/dsh/home/profiles/hello`: dsh's web template bundles plus
-  Hello's own `hello-dsh` bundle, linked from the app's files. Hello writes a patch
-  layer on every start (`hello.patch.yml`): no browser to open, no URL printed, and
-  with a model connection, the `llm-pi-ai` route `hello` and the default model.
-  The last three healthy profiles and a point before every change are kept.
-- **Theme.** `assets/dsh/hello-dsh/lib/client.js` is generated by
-  `scripts/dsh-theme.mjs` from `src/renderer/styles/tokens.css`: every dsh token
-  (`--dsw-*`), light and dark, through `ctx.theme.overrideTokens('hello', …)`, plus
-  Inter and Hello's mark and name in dsh's brand slots. A test fails when the pinned
-  dsh gains a token without a Hello value. The bundle's patch starts the appearance
-  dark, as Hello's window is; dsh's Settings › Appearance changes it in the
-  profile's own layer. Hello's overlay never sets it: dsh refuses a Settings change
-  that an overlay would override.
-- **Budget.** The host is a second harness inside a chat app, so it runs with a
-  V8 heap ceiling given to the process at start (`--max-old-space-size`, 1 GB:
-  `dsh/budget.ts`), and Hello samples what it really uses from Electron's own
-  process metrics every ten seconds. Past 1 GB resident or 150% of a core for
-  thirty seconds — long enough that a boot or an install is not it — the DSH log
-  says so, once, and again when it comes back under. Nothing is killed: a
-  surface the person is working in is not closed behind their back, and the log
-  is where the host's account of itself already is.
-- **Surface.** One guest, positioned like a browser tab's page over the DSH view,
-  parked while the view is closed, never reparented or reloaded for chrome. It stays
-  on the host's origin; web links open in a browser tab of the chat on screen.
-- **A place of its own.** The DSH view is a destination, like the chat it covers: the
-  chats sidebar stays beside it whatever that chat's layout (an expanded pane, tools
-  open in a narrower window), and asking for a chat — its row, New chat, a
-  notification — leaves the surface for it. With the sidebar hidden (unpinned, or a
-  window under 720 px), the view's header keeps clear of the window's own buttons
-  and starts with the button that pins the sidebar back; its × closes the surface.
-- **Model.** Sessions in the surface talk to Hello's active connection through
-  `dsh/model-proxy.ts`; the real key is added only on the way to the provider. The
-  connection is read on every request — address, key and model: dsh names the model
-  Hello had when the surface started, and the proxy puts Hello's current one in its
-  place, so a model changed in Hello never reaches a server that does not have it.
-- **Market.** `renderer/market/` and `main/market/` port dsh-community-market's
-  views, stylesheet, 1024Store adapter, network rules and install preview. The page
-  never names a package: it installs items main listed under opaque keys, or a
-  package the person typed in Settings. Hello adds a compatibility gate: a package
-  whose dsh peers exclude the pinned dsh is not installed. Sources: DSH 1024Store
-  (the default), dshfind, and standard sources added by manifest URL; one is in
-  use at a time, kept in `<data>/dsh/market-sources.json` in the order the person
-  puts it in (Move up/down; which source is used is still the selected one, not
-  the first). A standard source's
-  paging cursor stays in main, behind a token bound to that source and search.
-  A source's own search is one page and one category at a time, so the person
-  can have Hello read a catalogue through once — the same pages and cursors,
-  bounded at 600 pages and 20,000 entries, a repeated cursor ending the walk
-  (`market/scan.ts`). Every search of that source is then answered from what
-  came back: exact counts, and any number of categories at once (an item in any
-  of them). Refresh drops it and reads the source again. Without a scan, one
-  category still goes to the source and several are narrowed page by page.
-- **Skills and tools in Hello chats.** The skills of installed dsh plugins appear
-  in Extensions › Found on this Mac, to import like any skill. Their tools cross
-  through the tool bridge (`dsh/tool-bridge.ts`), which the host entry starts next
-  to dsh's registry: `GET /tools` lists the global view (dsh's own tools register
-  per agent, so this is what plugins brought, less the reserved `run_code`), and
-  `POST /call` runs one through dsh's policy and guards with no dsh session. In
-  Hello it is one library row, `dsh-plugins` (Settings › DSH surface switches it),
-  which the MCP manager reaches in-process through `dsh/tool-link.ts` instead of
-  spawning a server. It is off in every chat until turned on there, starts a
-  stopped surface when a chat needs it, never installs one, and lists again after
-  a host restart.
-- **Upgrading dsh.** `DSH_VERSION` (`dsh/layout.ts`) is the version this build
-  comes with; the person can run a newer one from the sidebar, kept in
-  `<data>/dsh/version.json`, and `selectedVersion()` — never `DSH_VERSION` — is
-  what the running app judges by. Moving the pin means re-checking, in this
-  order, everything that was measured against the old line:
-  1. `DSH_ALLOWED_BUILDS` (`dsh/layout.ts`): pnpm 11 refuses an install whose
-     dependencies ask for install scripts it was not told about, so the list has
-     to name every one in the new tree. Read it off an installed runtime — every
-     `preinstall`/`install`/`postinstall` in `<data>/dsh/runtime/node_modules` —
-     not off a changelog.
-  2. The `node-addon-require-builtin` shim (`assets/dsh/shims/`): its version
-     must still satisfy the range the new dsh asks for, and its API must still
-     answer what `@deepseek-ai/cordis-plugin-loader` calls.
-  3. `DSH_PRODUCT_TOOLS` (`dsh/tool-bridge.ts`): which tools the new dsh
-     registers in the global view. This one is a runtime measurement — start the
-     surface on a profile with no plugins and list `GET /tools`.
-  4. `assets/dsh/hello-dsh/official-tokens.json` and the Hello theme:
-     `scripts/dsh-theme.mjs --check` fails when the new dsh has a `--dsw-*`
-     token with no Hello value.
-  5. The market's compatibility gate: a plugin is accepted when its
-     `@deepseek-ai/dsh*` peer ranges and its declared `dsh.compatibility.dsh`
-     include the running version (`market/install.ts`, `market.test.ts`). A
-     plugin pinned to the old line is refused on the new one, which is the point.
-  6. The patch layer (`hello.patch.yml`) and the profile template name.
-  7. The host's budget (`dsh/budget.ts`): what a profile loads at boot is dsh's
-     business, so the numbers Hello is willing to spend on it are re-measured
-     with the surface open and idle.
-
-  Checked against **dsh 0.2.0-rc.2**, installed through the sidebar: steps 1 and
-  2 pass unchanged — the five install-script packages in its tree are exactly the
-  five `DSH_ALLOWED_BUILDS` names (`node-pty`,
-  `@deepseek-ai/dsh-subprocess-local`, `koffi`, `protobufjs`, `@google/genai`),
-  and it still asks for `node-addon-require-builtin@^0.1.6`, which the shim's
-  `0.1.6-hello.0` satisfies. Steps 3–6 are unverified here: 3 needs the surface
-  running, and the pin itself waits on a stable 0.2.x being published.
+- **Host and launch.** `src/main/dsh/host-entry.ts` boots upstream `runProfile`
+  in an Electron utility process. Its profile is `hello`, from DSH's `web`
+  template, under `<data>/dsh/home`. The `desktop` profile is deliberately
+  avoided; `DSH_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` remain set.
+- **Installation and upgrades.** First install and the sidebar Update action
+  resolve the official npm `latest` release of `@deepseek-ai/dsh`, then install
+  that exact resolved version into `<data>/dsh/runtime`. No stale rc pin or
+  bundled-version rollback remains. An existing installed runtime, including a
+  version previously chosen in `dsh/version.json`, stays usable offline. Hello
+  records a successful update in that file for compatibility with older releases;
+  it does not use an old selection as the default for a new install. Updating a
+  running host stops it, installs the release and starts it again. Install
+  failures are shown; an interrupted in-place pnpm install may need a retry.
+- **Host compatibility and budget.** The packaged `node-addon-require-builtin`
+  shim and pnpm override remain necessary for Electron's `--expose-internals`
+  boot path. `DSH_ALLOWED_BUILDS` permits the native host builds (`node-pty`,
+  `@deepseek-ai/dsh-subprocess-local`, `koffi`) and declines the informational
+  scripts (`protobufjs`, `@google/genai`). The existing optional LibreOffice
+  engine exclusions remain an installation footprint limit; Office conversion
+  in DSH is unavailable without that engine. The heap, process memory and CPU
+  limits in `dsh/budget.ts` remain enforced.
+- **Profile.** DSH owns its settings and model selection. On start Hello writes
+  only the `web-runtime` launch patch in `<data>/dsh/hello.patch.yml`: do not open
+  an external browser or print the authentication URL. `llm-pi-ai` and
+  `agent-default-model` are no longer overridden. Existing profiles receive only
+  a narrow removal of the retired `hello-dsh` dependency and bundle reference;
+  other manifest fields and the person's patch file are untouched. There is no
+  profile checkpoint, plugin reconciliation or plugin installation service.
+- **Surface.** Main exchanges the one-time login token for a cookie in the
+  `persist:hello-dsh` partition and mints the guest's URL. The renderer places
+  one persistent `<webview>` over the sidebar destination's slot, parking it
+  behind the window when that destination is closed. Opening and closing app
+  chrome neither detaches nor reloads the page. Guest preferences, permissions
+  and navigation remain main's responsibility; the guest has no Hello preload.
+- **Pi packages.** `src/main/market/pi-service.ts`, `pi-install.ts`, the shared
+  network and npm validation helpers, and `renderer/market/` continue to serve
+  the Pi package market. Installs enter Hello's library and are enabled per chat.
+  The former built-in DSH MCP library row is retired with its chat activations;
+  ordinary MCP servers and Pi plugins are unchanged.
 
 ## Validation boundary
 

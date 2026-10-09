@@ -9,8 +9,8 @@ import { cachedMarketHttp, createMarketHttp, type MarketHttp } from './net';
 import { PiCatalog, type PiPackage } from './pi-catalog';
 import { fetchGallery, GALLERY_TYPES, galleryUrl, type GalleryPage } from './pi-gallery';
 import { newerVersion, piCompatibility, readPiForHello, stagePiPackage, verifyPiPackage, type PiVerified } from './pi-install';
-import type { MarketItemView, MarketPageView, MarketSourceView } from './service';
-import type { CatalogQuery } from './store1024';
+import type { MarketItemView, MarketPageView, MarketSourceView } from './types';
+import type { CatalogQuery } from './types';
 
 /**
  * The Pi package market (user, 29.09: "fiecare cu fereastra lui, făcută la

@@ -5,10 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DshStatus, PiEngineStatus } from '../src/shared/types';
 import { newer, npmLatest } from '../src/main/updates';
 import { PiEngine } from '../src/main/chat/pi-engine';
-import { DSH_VERSION, dshLayout, selectedVersion, type DshLayout } from '../src/main/dsh/layout';
+import { dshLayout, selectedVersion, type DshLayout } from '../src/main/dsh/layout';
 import { DshService } from '../src/main/dsh/service';
 import { installRuntime } from '../src/main/dsh/runtime';
-import { selectVersion } from '../src/main/dsh/layout';
 import { forkSpawn } from '../src/main/dsh/spawn';
 
 // User, 01.10: "DSH v.xxx (update) jos în bară … update dacă există versiune
@@ -118,7 +117,7 @@ describe('the DSH runtime', () => {
   const service = (options: { fail?: boolean; install?: Install } = {}) => {
     const root = folder('hello-dsh-update-');
     const place = dshLayout(root, join(root, 'resources'));
-    installed(place, DSH_VERSION);
+    installed(place, '0.1.7-rc.2');
     const statuses: DshStatus[] = [];
     const created = new DshService({
       layout: place,
@@ -128,32 +127,29 @@ describe('the DSH runtime', () => {
       pnpm: { command: process.execPath, args: [resolve(__dirname, 'fixtures/fake-pnpm.mjs')], env: {} },
       emit: status => statuses.push(status),
       latest: async () => '0.2.0-rc.2',
-      install: options.install ?? (async layoutArg => {
+      install: options.install ?? (async (layoutArg, _pnpm, installOptions) => {
         if (options.fail) throw new Error('Installing the DSH runtime failed.\nERR_PNPM_FETCH_404');
-        installed(layoutArg, selectedVersion(layoutArg));
+        installed(layoutArg, installOptions.version);
       }),
     });
     services.push(created);
     return { service: created, place, statuses };
   };
 
-  it('offers the newer dsh, installs it on update, and goes back to the one Hello came with', async () => {
+  it('offers and installs the latest dsh without a bundled fallback', async () => {
     const { service: dsh, place } = service();
-    expect(await dsh.checkLatest()).toMatchObject({ version: DSH_VERSION, bundledVersion: DSH_VERSION, latest: '0.2.0-rc.2' });
+    expect(await dsh.checkLatest()).toMatchObject({ version: '0.1.7-rc.2', latest: '0.2.0-rc.2' });
     const updated = await dsh.update();
     expect(updated).toMatchObject({ state: 'stopped', version: '0.2.0-rc.2', installedVersion: '0.2.0-rc.2' });
     expect(updated.latest).toBeUndefined();
     expect(selectedVersion(place)).toBe('0.2.0-rc.2');
-    const back = await dsh.useBundled();
-    expect(back).toMatchObject({ state: 'stopped', version: DSH_VERSION, installedVersion: DSH_VERSION, latest: '0.2.0-rc.2' });
-    expect(existsSync(join(place.root, 'version.json'))).toBe(false);
   });
 
   it('keeps the dsh that ran when the update cannot be installed, and says why beside its version', async () => {
     const { service: dsh, place } = service({ fail: true });
     await dsh.checkLatest();
-    expect(await dsh.update()).toMatchObject({ state: 'stopped', version: DSH_VERSION, latest: '0.2.0-rc.2', updateError: expect.stringContaining('ERR_PNPM_FETCH_404') });
-    expect(selectedVersion(place)).toBe(DSH_VERSION);
+    expect(await dsh.update()).toMatchObject({ state: 'stopped', version: '0.1.7-rc.2', latest: '0.2.0-rc.2', updateError: expect.stringContaining('ERR_PNPM_FETCH_404') });
+    expect(selectedVersion(place)).toBe('0.1.7-rc.2');
   });
 
   // User, 01.10: "pune ceva viu aici, că nu știi nimic ce face".
@@ -163,7 +159,7 @@ describe('the DSH runtime', () => {
         options?.onLine?.('Packages: +315 -85');
         options?.onProgress?.({ resolved: 592, reused: 52, downloaded: 18, added: 35, done: false });
         options?.onLine?.('[WARN] GET https://registry.npmjs.org/@deepseek-ai/libreoffice-kit-wasm/-/libreoffice-kit-wasm-0.1.1.tgz error (23). Will retry in 10 seconds. 2 retries left.');
-        installed(layoutArg, selectedVersion(layoutArg));
+        installed(layoutArg, options.version);
       },
     });
     await dsh.checkLatest();
@@ -179,9 +175,8 @@ describe('the DSH runtime', () => {
     const root = folder('hello-dsh-lockfile-');
     const place = dshLayout(root, join(root, 'resources'));
     const pnpm = { command: process.execPath, args: [resolve(__dirname, 'fixtures/fake-pnpm-lockfile.mjs')], env: {} };
-    await installRuntime(place, pnpm);
-    selectVersion(place, '0.2.0-rc.2');
-    await installRuntime(place, pnpm);
+    await installRuntime(place, pnpm, { version: '0.1.7-rc.2' });
+    await installRuntime(place, pnpm, { version: '0.2.0-rc.2' });
     expect(JSON.parse(readFileSync(place.installAnchor, 'utf8')).version).toBe('0.2.0-rc.2');
   });
 });

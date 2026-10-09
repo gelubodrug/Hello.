@@ -3,7 +3,6 @@ import { AlertTriangle, Blocks, ChevronRight, Cpu, Download, Pencil, Plug, Refre
 import type { DiscoveredResources, LibraryResource, McpServerStatus, ResourceKind } from '../../shared/types';
 import { api } from '../api';
 import { ErrorNote, IconButton, errorText } from '../ui/primitives';
-import { DshSection } from './DshSection';
 
 const groups: Array<{ kind: ResourceKind; title: string; blurb: string }> = [
   { kind: 'skill', title: 'Skills', blurb: 'Instructions and reference files the model loads when a task matches. Import a folder with SKILL.md, or a single SKILL.md file.' },
@@ -54,7 +53,7 @@ function ResourceRow({ resource, status, onChanged, onError, busy, setBusy, onEd
             {status.connected ? `${status.tools.length} tool(s)` : status.error ? 'Failed' : 'Not connected'}
           </span>
         )}
-        {resource.kind === 'mcp' && resource.source !== 'hello:dsh' && (
+        {resource.kind === 'mcp' && (
           <IconButton label={`Edit ${resource.name}`} disabled={busy} onClick={() => onEdit?.(resource)}>
             <Pencil size={14} />
           </IconButton>
@@ -416,7 +415,6 @@ export function ExtensionsSection() {
           </section>
         );
       })}
-      <DshSection />
       {notice && <p className="extension-notice" role="status">{notice}</p>}
       <ErrorNote error={error} />
     </div>

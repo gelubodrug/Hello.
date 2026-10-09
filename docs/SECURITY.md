@@ -186,7 +186,8 @@ The Pi binary is the bundled one unless the person updates it from the
 sidebar: Hello then asks npm's registry for the package's `latest` (one request,
 nothing of the person's in it) and installs exactly that version with its own
 pnpm into its data folder, install scripts off. The model never triggers an
-update, and going back to the bundled Pi is one click. dsh updates the same way.
+update, and going back to the bundled Pi is one click. DSH also resolves npm
+latest for updates, but has no bundled fallback.
 **A plugin's extension is Node code running inside the Pi child**, so it shares
 that child's environment — which contains the current endpoint's key and the
 per-process bridge token — and can call the bridge directly. It is not
@@ -541,63 +542,42 @@ a secure-erasure operation: SQLite/WAL pages, backups, renderer recovery state o
 third-party CLI state can retain prior content. Terminal replay is memory-only
 within Hello.; independently launched clients may keep their own transcripts.
 
-## DSH surface and third-party plugins
+## DSH hosted launch
 
-- **The host runs third-party code.** dsh plugins run in the DSH host, an Electron
-  utility process, with the person's user permissions: they can read files and use
-  the network like any program. Hello's guards are consent and containment, not a
-  sandbox. Before every install, the market shows the exact package and version and
-  warns about local code; the profile is saved as a restore point first. pnpm 11
-  installs nothing published less than a day ago; only the exact version the person
-  confirmed is exempted (`--config.minimum-release-age-exclude=<name>@<version>`),
-  so its dependencies still wait out that day. The same holds for an update from
-  the market's Installed list.
-- **What the host gets.** An environment built from an allowlist (path, home,
-  locale, proxy settings), plus `DSH_HOME`, `DSH_TELEMETRY_DISABLED=1`,
-  `DO_NOT_TRACK=1` and a per-start proxy token. It never gets Hello's model key,
-  MCP secrets or other environment variables. Its profile is named `hello`: the
-  `desktop` name would switch on DeepSeek's desktop telemetry rows.
-- **Loopback only.** The host listens on 127.0.0.1 on a free port. Its one-time
-  login token is exchanged by main, in the surface's own partition
-  (`persist:hello-dsh`). The page receives an HttpOnly, SameSite=Strict cookie; the
-  token never reaches the renderer or a log, and host output is redacted before it is
-  written.
-- **The surface's page.** It has no preload, Node or popups, and no permissions but
-  clipboard writes and full screen. It cannot navigate off the host's origin; web
-  links go to a browser tab of the person's (AI Mode Off). Hello's agent has no tool
-  that reads or drives it.
-- **The model key.** Sessions in the surface reach Hello's active connection
-  through a loopback proxy that accepts only the per-start token and adds the real
-  key upstream. The key is not in the host's environment, the profile or any file.
-- **Plugin tools in chats.** The tool bridge listens on 127.0.0.1 with a token
-  minted for each start, which the host entry reads and removes from its
-  environment before dsh boots, so a shell a dsh tool spawns does not inherit it.
-  It lists and runs only tools a plugin registered globally, never dsh's own or the
-  reserved `run_code`, and caps a call's body at 1 MiB and its text at 60,000
-  characters. In Hello the tools are the MCP server `dsh-plugins`: a library row
-  the person adds from Settings and switches on per chat, whose descriptions and
-  results are framed as untrusted content like any MCP server's.
-- **The market's network.** HTTPS on 443 only, at most three redirects, every name
-  pinned and refused when any address is private, loopback, link-local, multicast or
-  a tunnel prefix, 2 MiB per answer, 8/12/30 s deadlines (ported from
-  dsh-community-market). Catalog text is data. The one thing taken from a
-  displayed install command is an npm package name, from one exact inert shape;
-  commands are never run. Icons are fetched by main from three hosts, re-encoded
-  as PNG and handed to the page as data. A standard source is added only from an
-  https manifest whose endpoint is on the manifest's own origin and ends in
-  `/v1/plugins`; its manifest and every page are checked against the market's
-  schemas, the list file is checked again on every read, and its pages take the
-  same network rules. Only an item's `package` field can make it installable.
-- **What is installed.** npm `latest` with the same name, an exact stable version
-  and a safe `dsh.bundle.patch`, confirmed by a one-shot token bound to that version
-  and to the profile as it was, installed with `pnpm add --save-exact`. The profile
-  runs no plugin install scripts (`strictDepBuilds: false` with no allowlist). The
-  runtime allows exactly three (`node-pty`, `@deepseek-ai/dsh-subprocess-local`,
-  `koffi`).
-- **What leaves the machine** when the surface is used: npm registry requests,
-  1024Store catalog requests, GitHub avatar images, the model provider's traffic
-  through the proxy, and whatever network use a plugin the person installed makes on
-  its own.
+Owner decision, 2026-10-09: Hello only hosts and launches DSH and upgrades its
+runtime. Plugin and add-on integration belongs to Hello/Pi. The DSH market,
+Hello theme, model proxy, profile checkpoints, skill discovery and MCP tool
+bridge have been removed. DSH tools cannot enter Hello chats through that bridge.
+
+- **Host privileges.** Upstream DSH runs in an Electron utility process with the
+  person's permissions. This is process separation, not a sandbox. The existing
+  heap ceiling and sustained CPU/memory budget still apply. DSH controls its own
+  capabilities and network access.
+- **Environment.** An allowlist carries path, home, locale and proxy settings,
+  plus app-owned `DSH_HOME`, `DSH_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1`.
+  The profile is named `hello`, never `desktop` (which activates desktop telemetry).
+  Hello supplies no model key, proxy token or MCP secret. The person configures
+  a provider in DSH's own Models settings; its credentials stay under DSH's control.
+- **Host installation.** The explicit Install and sidebar Update actions resolve
+  npm's `latest` to an exact version. There is no hard-coded DSH rc fallback.
+  The require-builtin shim and pnpm override are retained for the Electron boot
+  path. Only the three required native build scripts (`node-pty`,
+  `@deepseek-ai/dsh-subprocess-local`, `koffi`) are allowed; `protobufjs` and
+  `@google/genai` informational scripts remain declined.
+- **Loopback and authentication.** Main exchanges the one-time login token in
+  `persist:hello-dsh` for an HttpOnly, SameSite=Strict cookie. The host binds to
+  loopback on a free port. Tokens do not reach the renderer or logs; host output
+  is redacted. The remaining `hello.patch.yml` sets only `web-runtime` launch
+  behavior, suppressing external browser launch and printing the login URL.
+- **Guest boundary.** The persistent webview has no Hello preload, Node access
+  or popups; permissions remain limited to clipboard writes and full screen.
+  Navigation stays on the host origin; outside web links open in a Hello browser
+  tab with Agent control Off. Hello's agent cannot read or drive the DSH surface.
+- **Migration.** Only the retired `hello-dsh` dependency/bundle reference is
+  removed from an existing profile's manifest. Other manifest keys and user patch
+  content are preserved. The obsolete built-in DSH MCP library row and its
+  activations are removed. Stored DSH profiles, sessions and old checkpoint files
+  are not deleted by this change.
 
 ## What plugins do while Pi runs headless
 

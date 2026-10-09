@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
-import { DSH_ALLOWED_BUILDS, DSH_VERSION, runtimeReady, selectedVersion, type DshLayout } from './layout';
+import { DSH_ALLOWED_BUILDS, runtimeReady, type DshLayout } from './layout';
 import { parseProgress, pnpmFailure, runPnpm, type InstallProgress, type PnpmInvocation } from './pnpm';
 
 /**
@@ -36,7 +36,7 @@ export const DSH_SKIPPED_OPTIONAL: readonly string[] = [
  * same calls through `--expose-internals`, which the host is started with.
  * One family is left out entirely: the office engine (above).
  */
-export function runtimeManifest(version = DSH_VERSION): Record<string, unknown> {
+export function runtimeManifest(version: string): Record<string, unknown> {
   return {
     name: 'hello-dsh-runtime',
     private: true,
@@ -58,7 +58,7 @@ export function runtimeWorkspace(layout: DshLayout): string {
   });
 }
 
-export function writeRuntimeFiles(layout: DshLayout, version = selectedVersion(layout)): void {
+export function writeRuntimeFiles(layout: DshLayout, version: string): void {
   mkdirSync(layout.runtime, { recursive: true, mode: 0o700 });
   writeFileSync(join(layout.runtime, 'package.json'), `${JSON.stringify(runtimeManifest(version), null, 2)}\n`);
   writeFileSync(join(layout.runtime, 'pnpm-workspace.yaml'), runtimeWorkspace(layout));
@@ -69,11 +69,12 @@ export function writeRuntimeFiles(layout: DshLayout, version = selectedVersion(l
  * is on disk; rejects with pnpm's own last words otherwise.
  */
 export async function installRuntime(layout: DshLayout, pnpm: PnpmInvocation, options: {
+  version: string;
   signal?: AbortSignal;
   onProgress?: (progress: InstallProgress) => void;
   onLine?: (line: string) => void;
-} = {}): Promise<void> {
-  const version = selectedVersion(layout);
+}): Promise<void> {
+  const version = options.version;
   writeRuntimeFiles(layout, version);
   // pnpm runs as in CI, where an install keeps the lockfile frozen; switching
   // dsh's version changes the manifest that lockfile was made for, and a

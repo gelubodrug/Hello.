@@ -3,7 +3,8 @@
 A macOS desktop app (Electron) for working with models. Each chat runs on Pi,
 headless over RPC, beside a browser, terminals and CLI workers (Claude Code,
 Codex, Kimi, Qwen Code, OpenCode, Pi), with a notebook of its own (Runbooks,
-Tasks, Plans) and the DSH surface for dsh plugins. Models come from any
+Tasks, Plans) and a hosted DSH launch from the sidebar, with upgrades to the
+latest npm release. Plugins and add-ons belong to Hello/Pi. Models come from any
 OpenAI-compatible endpoint — a server on this Mac or a provider such as
 OpenRouter — and each chat keeps the model it last used.
 
@@ -50,7 +51,7 @@ unpacked Pi, pnpm and esbuild behave inside `Hello.app`, whether the DSH
 ## Where things are
 
 - `src/main/` — the main process: the chat service and Pi, the browser manager,
-  terminals and CLI workers, the DSH host, the markets, the data store.
+  terminals and CLI workers, the DSH host, the Pi market, the data store.
 - `src/renderer/` — the window: chat, notebook, workspace, browser pane, settings.
 - `docs/ARCHITECTURE.md` — what the app does and how. Start here.
 - `docs/SECURITY.md` — its trust boundaries. `docs/PROVENANCE.md` — what was

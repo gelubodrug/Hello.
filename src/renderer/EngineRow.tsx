@@ -30,7 +30,7 @@ interface Props {
   /** Why the last update failed. */
   error?: string;
   onUpdate(): void;
-  onBack(): void;
+  onBack?(): void;
   /** What the row itself opens, when it opens something. */
   open?: { pressed: boolean; title: string; onClick(): void };
   /** A state mark beside the name. */
@@ -61,7 +61,7 @@ export function EngineRow({ icon: Icon, name, version, bundled, latest, updating
           {latest && version && (
             <button type="button" className="engine-update" title={`Update ${name} to v${latest}`} onClick={onUpdate}>update</button>
           )}
-          {version && bundled && version !== bundled && (
+          {version && bundled && version !== bundled && onBack && (
             <button type="button" className="icon-button engine-back" title={`Back to v${bundled}, the ${name} Hello came with`}
               aria-label={`Back to ${name} v${bundled}`} onClick={onBack}><Undo2 size={13} /></button>
           )}

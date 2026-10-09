@@ -129,5 +129,3 @@
   font-size: var(--fs-13);
 }
 .dsh-banner > span { flex: 1; min-width: 200px; }
-.dsh-change { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--sp-4); font-size: var(--fs-13); color: var(--ink-secondary); }
-.dsh-change code { font: var(--fs-12) var(--font-mono); color: var(--ink-primary); }

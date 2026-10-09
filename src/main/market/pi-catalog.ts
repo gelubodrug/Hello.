@@ -12,7 +12,7 @@
  */
 import { MarketNetworkError, type MarketHttp } from './net';
 import { safePackageName } from './install';
-import type { CatalogQuery } from './store1024';
+import type { CatalogQuery } from './types';
 
 export const NPM_ORIGIN = 'https://registry.npmjs.org';
 export const NPM_SEARCH = `${NPM_ORIGIN}/-/v1/search`;

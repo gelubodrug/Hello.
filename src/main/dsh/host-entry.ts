@@ -7,9 +7,8 @@
  * never imported at build time: it is loaded from the runtime folder the
  * person installed, so the app bundle carries none of it.
  *
- * Messages to main: `ready {port, url, bridgePort?}` once the web server
+ * Messages to main: `ready {port, url}` once the web server
  * listens — `url` carries the one-time token and never leaves main;
- * `bridgePort` is the tool bridge (tool-bridge.ts) when main asked for one —
  * `fatal {message}` when the boot fails, `shutdown-complete` after a
  * requested stop.
  */
@@ -18,10 +17,9 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { BRIDGE_TOKEN_ENV, startToolBridge, type ToolBridgeServer, type ToolRegistryLike } from './tool-bridge';
 
 type HostMessage =
-  | { type: 'ready'; port: number; url: string; bridgePort?: number }
+  | { type: 'ready'; port: number; url: string }
   | { type: 'fatal'; message: string; diagnostic: string }
   | { type: 'shutdown-complete' };
 
@@ -45,15 +43,12 @@ function onMessage(listener: (message: unknown) => void): void {
 const MAX_DIAGNOSTIC = 64 * 1024;
 
 interface RunningApplication {
-  ctx: { webServer: { port: number }; connection: { authenticatedUrl(origin: string): string }; tools?: ToolRegistryLike };
+  ctx: { webServer: { port: number }; connection: { authenticatedUrl(origin: string): string } };
   shutdown: { shutdown(code: number): Promise<void> };
 }
 
 async function main(): Promise<void> {
   const [runtimeDir, profile, template] = process.argv.slice(2);
-  // Read once and gone: a shell a dsh tool spawns inherits this environment.
-  const bridgeToken = process.env[BRIDGE_TOKEN_ENV];
-  delete process.env[BRIDGE_TOKEN_ENV];
   const home = process.env.DSH_HOME;
   if (!runtimeDir || !profile || !home) throw new Error('DSH host: runtime folder, profile and DSH_HOME are required.');
   const require = createRequire(join(runtimeDir, 'package.json'));
@@ -77,9 +72,7 @@ async function main(): Promise<void> {
     } : {}),
   });
   let stopping: Promise<void> | undefined;
-  let bridge: ToolBridgeServer | undefined;
   const stop = () => stopping ??= (async () => {
-    await bridge?.close();
     const running = await application.catch(() => undefined);
     await running?.shutdown.shutdown(0);
     send({ type: 'shutdown-complete' });
@@ -90,12 +83,10 @@ async function main(): Promise<void> {
   });
   const { ctx } = await application;
   const port = ctx.webServer.port;
-  if (bridgeToken) bridge = await startToolBridge(() => ctx.tools, bridgeToken);
   send({
     type: 'ready',
     port,
     url: ctx.connection.authenticatedUrl(`http://127.0.0.1:${String(port)}`),
-    ...(bridge ? { bridgePort: bridge.port } : {}),
   });
 }
 

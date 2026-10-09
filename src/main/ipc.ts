@@ -15,7 +15,6 @@ import { translateVoice, voiceAudio } from './voice/translate';
 import type { ManagedVoice } from './voice/managed';
 import { resolveDropPaths } from './files/drop-paths';
 import { discoverMcpServers, discoverPiExtensions, discoverSkills, withoutSecrets } from './extensions/discovery';
-import { dshSkillRoots } from './dsh/skills';
 import type { NotebookKind, SettingsPatch, WorkerId, AgentControl, McpServerInput, PageRect } from '../shared/types';
 
 function str(value:unknown,label='ID',limit=500): string {
@@ -322,13 +321,13 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   // The folders this app's own chats are attached to are projects too.
   const discoveryProjects=()=>store.listConversations().map(item=>item.folder).filter((folder): folder is string=>Boolean(folder));
   handle('extensions.discover',async()=>{
-    const [mcp,skills,plugins]=await Promise.all([discoverMcpServers(discoveryHome(),discoveryProjects()),discoverSkills(discoveryHome(),discoveryProjects(),dshSkillRoots(store.dataDir)),discoverPiExtensions(...piAgentHome())]);
+    const [mcp,skills,plugins]=await Promise.all([discoverMcpServers(discoveryHome(),discoveryProjects()),discoverSkills(discoveryHome(),discoveryProjects()),discoverPiExtensions(...piAgentHome())]);
     return {mcp:withoutSecrets(mcp),skills,plugins};
   });
   handle('extensions.importDiscovered',async(kind,id)=>{
     const wanted=str(kind,'kind',20);const wantedId=str(id,'id',8192);
     if(wanted==='skill'){
-      const skill=(await discoverSkills(discoveryHome(),discoveryProjects(),dshSkillRoots(store.dataDir))).find(item=>item.id===wantedId);
+      const skill=(await discoverSkills(discoveryHome(),discoveryProjects())).find(item=>item.id===wantedId);
       if(!skill)throw new Error('That skill is no longer where it was found.');
       const imported=await chat.library.importPath('skill',skill.path);
       announceExtensions();

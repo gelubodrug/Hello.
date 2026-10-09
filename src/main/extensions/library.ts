@@ -5,7 +5,6 @@ import { parse as parseYaml } from 'yaml';
 import { minimatch } from 'minimatch';
 import type { LibraryResource, McpServerInput, ResourceKind, ResourceState } from '../../shared/types';
 import type { DataStore, ResourceRow } from '../data/store';
-import { DSH_MCP_COMMAND } from '../dsh/tool-link';
 import { bundleExtension, isBundleFile, type ExtensionBundle } from './bundle';
 
 // Hello owns an approved COPY of every imported skill and plugin. Editing the
@@ -316,7 +315,6 @@ function detailFor(row: ResourceRow): string {
     ].filter(Boolean).join(' · ') || 'no resources';
   }
   const mcp = config as McpConfig;
-  if (mcp.command === DSH_MCP_COMMAND) return 'Built into Hello. · DSH surface';
   // The full command line lives in the details; the row stays readable.
   const command = basename(mcp.command) || mcp.command;
   const first = mcp.args[0] ? ` ${basename(mcp.args[0])}` : '';

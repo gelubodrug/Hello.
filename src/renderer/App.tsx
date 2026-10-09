@@ -186,23 +186,19 @@ function Application() {
   useEffect(() => { if (dshOpen) setDshMounted(true); }, [dshOpen]);
   const dshStatus = useDshStatus();
   const piEngine = usePiEngine();
-  // Two markets, each in its own window made the same way (user, 29.09).
-  const [market, setMarket] = useState<{ open: MarketKind | null; addByName?: string; addFromFolder?: boolean }>({ open: null });
+  // Pi packages live in Hello’s library.
+  const [market, setMarket] = useState<{ open: MarketKind | null; addByName?: string }>({ open: null });
   useEffect(() => {
-    // A name alone is the DSH market's, as Settings has always sent it; `{ kind, name }` picks one.
     const onAdd = (event: Event) => {
       const detail = (event as CustomEvent<string | { kind?: MarketKind; name?: string }>).detail;
-      if (typeof detail === "string") setMarket({ open: "dsh", addByName: detail });
-      else if (detail && typeof detail.name === "string") setMarket({ open: detail.kind === "pi" ? "pi" : "dsh", addByName: detail.name });
+      if (typeof detail === "string") setMarket({ open: "pi", addByName: detail });
+      else if (detail && typeof detail.name === "string") setMarket({ open: "pi", addByName: detail.name });
     };
-    const onFolder = () => setMarket({ open: "dsh", addFromFolder: true });
-    const onOpen = (event: Event) => setMarket({ open: (event as CustomEvent<MarketKind>).detail === "pi" ? "pi" : "dsh" });
+    const onOpen = (event: Event) => setMarket({ open: "pi" });
     window.addEventListener("hello:market-add", onAdd);
-    window.addEventListener("hello:market-add-folder", onFolder);
     window.addEventListener("hello:market-open", onOpen);
     return () => {
       window.removeEventListener("hello:market-add", onAdd);
-      window.removeEventListener("hello:market-add-folder", onFolder);
       window.removeEventListener("hello:market-open", onOpen);
     };
   }, []);
@@ -798,7 +794,6 @@ function Application() {
         command("new-terminal", "New terminal", () => void launch(active, "terminal"), active.title),
       ] : []),
       command("settings", "Settings", () => setSettingsOpen(true)),
-      ...(api.market ? [command("dsh-market", "DSH market", () => setMarket({ open: "dsh" }))] : []),
       ...((api as Partial<typeof api>).piMarket ? [command("pi-market", "Pi market", () => setMarket({ open: "pi" }))] : []),
       command("dsh", "Show DSH", () => setDshOpen(true)),
       command("attention", "Needs your attention", () => setAttentionOpen(true), pending.length ? `${pending.length} waiting` : "Nothing waiting"),
@@ -1183,10 +1178,9 @@ function Application() {
             )}
           </nav>
           <div className="sidebar-footer">
-            {(api.market || (api as Partial<typeof api>).piMarket) && (
+            {((api as Partial<typeof api>).piMarket) && (
               <MenuButton className="sidebar-settings" label="Plugin Market" menuLabel="Plugin Market" align="start"
                 items={[
-                  { id: "dsh", label: "DSH", icon: Blocks, detail: "DeepSeek Harness plugins, from sources you choose", disabled: !api.market, action: () => setMarket({ open: "dsh" }) },
                   { id: "pi", label: "Pi", icon: Package, detail: "Pi packages: extensions, skills and prompt templates", disabled: !(api as Partial<typeof api>).piMarket, action: () => setMarket({ open: "pi" }) },
                 ]}>
                 <Store size={16} aria-hidden /> Plugin Market
@@ -1194,11 +1188,10 @@ function Application() {
             )}
             {api.dsh && (
               <EngineRow icon={Blocks} name="DSH" mark={<span className="dsh-dot" data-state={dshStatus?.state} aria-hidden />}
-                open={{ pressed: dshOpen, title: "DeepSeek Harness plugins, in Hello.", onClick: () => setDshOpen((value) => !value) }}
-                version={dshStatus?.installedVersion ? dshStatus.version : undefined} bundled={dshStatus?.bundledVersion}
+                open={{ pressed: dshOpen, title: "Launch DeepSeek Harness.", onClick: () => setDshOpen((value) => !value) }}
+                version={dshStatus?.installedVersion ? dshStatus.version : undefined}
                 latest={dshStatus?.latest} updating={dshStatus?.state === "installing"} error={dshStatus?.updateError}
-                onUpdate={() => void api.dsh?.update?.().catch(reportError)}
-                onBack={() => void api.dsh?.useBundled?.().catch(reportError)} />
+                onUpdate={() => void api.dsh?.update?.().catch(reportError)} />
             )}
             {api.piEngine && piEngine && (
               <EngineRow icon={Cpu} name="Pi" version={piEngine.version} bundled={piEngine.bundled} latest={piEngine.latest}
@@ -1331,12 +1324,11 @@ function Application() {
             </div>
           </section>
         )}
-        {dshMounted && <DshView open={dshOpen} onClose={() => setDshOpen(false)} onOpenMarket={() => setMarket({ open: "dsh" })}
+        {dshMounted && <DshView open={dshOpen} onClose={() => setDshOpen(false)}
           sidebarHidden={!sidebarVisible} onShowSidebar={toggleSidebarPin} />}
-        {(["dsh", "pi"] as const).map(kind => (
+        {(["pi"] as const).map(kind => (
           <MarketDialog key={kind} kind={kind} open={market.open === kind}
             addByName={market.open === kind ? market.addByName : undefined}
-            addFromFolder={market.open === kind && market.addFromFolder}
             onClose={() => setMarket({ open: null })} />
         ))}
       </main>

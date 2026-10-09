@@ -10,9 +10,7 @@ process.on('message', message => {
     setTimeout(() => process.exit(0), 10);
   }
 });
-// Like the real entry, a bridge only when main minted a token for one.
-const bridge = process.env.HELLO_DSH_BRIDGE_TOKEN ? { bridgePort: 4568 } : {};
-if (mode === 'ready') setTimeout(() => send({ type: 'ready', port: 4567, url: 'http://127.0.0.1:4567/?token=SECRET-TOKEN-1234567890', ...bridge }), 20);
+if (mode === 'ready') setTimeout(() => send({ type: 'ready', port: 4567, url: 'http://127.0.0.1:4567/?token=SECRET-TOKEN-1234567890' }), 20);
 else if (mode === 'fatal') setTimeout(() => { send({ type: 'fatal', message: 'boot failed: ?token=SECRET-TOKEN-1234567890', diagnostic: 'stack' }); setTimeout(() => process.exit(1), 20); }, 20);
 else if (mode === 'exit') setTimeout(() => process.exit(3), 20);
 setInterval(() => {}, 1000);

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Blocks, FolderOpen, Loader2, PanelLeft, Play, RotateCcw, RotateCw, Square, Store, X } from 'lucide-react';
+import { Blocks, FolderOpen, Loader2, PanelLeft, Play, RotateCcw, RotateCw, Square, X } from 'lucide-react';
 import type { DshStatus } from '../../shared/types';
 import { api } from '../api';
 import './dsh.css';
@@ -7,7 +7,6 @@ import './dsh.css';
 interface Props {
   open: boolean;
   onClose(): void;
-  onOpenMarket?(): void;
   /** Hello's chats sidebar is hidden, so nothing beside the surface leads back to the chats. */
   sidebarHidden?: boolean;
   onShowSidebar?(): void;
@@ -90,7 +89,7 @@ export function useDshStatus(): DshStatus | null {
  * not a reloaded one. The page exists only while a host runs; before that,
  * this view says what is happening and offers the one next step.
  */
-export function DshView({ open, onClose, onOpenMarket, sidebarHidden, onShowSidebar }: Props): JSX.Element {
+export function DshView({ open, onClose, sidebarHidden, onShowSidebar }: Props): JSX.Element {
   const status = useDshStatus();
   const slot = useRef<HTMLDivElement>(null);
   const [error, setError] = useState('');
@@ -102,10 +101,10 @@ export function DshView({ open, onClose, onOpenMarket, sidebarHidden, onShowSide
   const started = useRef(false);
 
   // Opening the surface is asking for it: a stopped host starts. An absent one
-  // does not install on its own — that is half a gigabyte, and a choice.
+  // does not install on its own — installing is the person’s choice.
   useEffect(() => {
     if (!open || !status || started.current) return;
-    if (status.state === 'stopped' && !status.profileChange) {
+    if (status.state === 'stopped') {
       started.current = true;
       void api.dsh?.start().catch((reason: Error) => setError(reason.message));
     }
@@ -167,7 +166,6 @@ export function DshView({ open, onClose, onOpenMarket, sidebarHidden, onShowSide
   const bridge = api.dsh;
   const state = status?.state;
   const progress = status?.progress;
-  const latest = status?.checkpoints[0];
 
   return (
     <section className="workspace dsh-view" hidden={!open} data-state={state ?? 'loading'} aria-label="DSH surface">
@@ -183,15 +181,12 @@ export function DshView({ open, onClose, onOpenMarket, sidebarHidden, onShowSide
         {running && <button type="button" className="icon-button" title="Reload the page" aria-label="Reload the page" onClick={() => run(() => bridge?.reload())}><RotateCw size={15} /></button>}
         {(running || state === 'failed') && <button type="button" className="icon-button" title="Restart DSH" aria-label="Restart DSH" disabled={busy} onClick={() => run(() => bridge?.restart())}><RotateCcw size={15} /></button>}
         {running && <button type="button" className="icon-button" title="Stop DSH" aria-label="Stop DSH" disabled={busy} onClick={() => run(() => bridge?.stop())}><Square size={14} /></button>}
-        {onOpenMarket && <button type="button" className="icon-button" title="Community Plugin Market" aria-label="Community Plugin Market" onClick={onOpenMarket}><Store size={15} /></button>}
         <button type="button" className="icon-button" title="Show the host log" aria-label="Show the host log" onClick={() => run(() => bridge?.revealLogs())}><FolderOpen size={15} /></button>
         <button type="button" className="icon-button" title="Close DSH" aria-label="Close DSH" onClick={onClose}><X size={16} /></button>
       </header>
       {running && status?.bootFailure && (
         <div className="dsh-banner" role="alert">
           <span>The DSH page could not start {status.bootFailure.join(', ')}.</span>
-          {onOpenMarket && <button type="button" className="text-button" onClick={onOpenMarket}>Plugin Market</button>}
-          {latest && <button type="button" className="text-button" disabled={busy} onClick={() => run(() => bridge?.restore(latest.id))}>Restore the profile of {new Date(latest.at).toLocaleString()}</button>}
         </div>
       )}
       <div className="dsh-view-body">
@@ -203,28 +198,13 @@ export function DshView({ open, onClose, onOpenMarket, sidebarHidden, onShowSide
             {state === 'absent' && (
               <>
                 <h2>DeepSeek Harness, inside Hello.</h2>
-                <p>dsh’s own client and its plugins — interface plugins, themes, tools — run here, in a surface of their own, in Hello’s colours.</p>
-                <p className="muted">Hello. installs dsh {status?.version} into its own data folder: about 0.5 GB, once. Nothing in ~/.dsh is read or changed. Plugins run as local code with your permissions.</p>
+                <p>Launch DSH’s own client here. Configure its model in DSH’s settings. Hello’s plugins and add-ons belong to Hello/Pi.</p>
+                <p className="muted">Hello. installs the latest DSH release from npm into its own data folder. Nothing in ~/.dsh is read or changed. DSH runs with your user permissions.</p>
                 <button type="button" className="pill dsh-primary" disabled={busy} onClick={() => run(() => bridge?.install().then(next => next.state === 'stopped' ? bridge.start() : next))}>Install DSH</button>
               </>
             )}
             {state === 'installing' && <InstallPanel version={status?.version} progress={progress} />}
-            {state === 'stopped' && status?.profileChange && (
-              <>
-                <h2>The DSH profile changed outside Hello.</h2>
-                <ul className="dsh-change">
-                  {status.profileChange.added.map(name => <li key={`a${name}`}>Added <code>{name}</code></li>)}
-                  {status.profileChange.removed.map(name => <li key={`r${name}`}>Removed <code>{name}</code></li>)}
-                  {status.profileChange.changed.map(name => <li key={`c${name}`}>Changed <code>{name}</code></li>)}
-                </ul>
-                <p className="muted">A plugin runs with your permissions and can install others. Start only with packages you recognise.</p>
-                <div className="dsh-actions">
-                  <button type="button" className="pill dsh-primary" disabled={busy} onClick={() => run(() => bridge?.start(true))}>Start with these changes</button>
-                  {latest && <button type="button" className="pill" disabled={busy} onClick={() => run(() => bridge?.restore(latest.id))}>Restore the profile of {new Date(latest.at).toLocaleString()}</button>}
-                </div>
-              </>
-            )}
-            {state === 'stopped' && !status?.profileChange && (
+            {state === 'stopped' && (
               <>
                 <h2>DSH is stopped.</h2>
                 <button type="button" className="pill dsh-primary" disabled={busy} onClick={() => run(() => bridge?.start())}><Play size={14} /> Start</button>
@@ -237,12 +217,11 @@ export function DshView({ open, onClose, onOpenMarket, sidebarHidden, onShowSide
                 {status?.message && <pre className="dsh-error">{status.message}</pre>}
                 <div className="dsh-actions">
                   <button type="button" className="pill dsh-primary" disabled={busy} onClick={() => run(() => bridge?.start())}><Play size={14} /> Start again</button>
-                  {latest && <button type="button" className="pill" disabled={busy} onClick={() => run(() => bridge?.restore(latest.id))}>Restore the profile of {new Date(latest.at).toLocaleString()}</button>}
                   <button type="button" className="pill" onClick={() => run(() => bridge?.revealLogs())}>Show the log</button>
                 </div>
               </>
             )}
-            {status?.message && state !== 'failed' && state !== 'starting' && !status.profileChange && <p className="error-text">{status.message}</p>}
+            {status?.message && state !== 'failed' && state !== 'starting' && <p className="error-text">{status.message}</p>}
             {error && <p className="error-text">{error}</p>}
           </div>
         )}

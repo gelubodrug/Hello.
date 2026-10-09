@@ -314,39 +314,49 @@ gallery's type rule from keywords. Pi's own installer
 (`pi-coding-agent/dist/core/package-manager.js`, MIT) was read for its pnpm
 settings; Hello's install differs (scripts off, registry pinned, integrity bound).
 
-## DSH surface and Community Plugin Market — 2026-09-28/29
+## DSH hosted launch — 2026-10-09
 
-At the owner's request ("facem suprafața DSH", "il facem la fel ca interfata ...
-nu vreau sa inventam nimic"), these MIT-licensed sources were consulted read-only
-and adapted:
+The owner's decision limits DSH to a hosted launch from the existing sidebar
+entry and upgrades to npm's latest release. No Hello theme/layout plugin, DSH
+market, DSH skill/tool integration or model proxy remains. Plugins and add-ons
+belong to Hello/Pi. The superseded T034 pane-tab and T041 layout commits are not
+part of this integration.
 
-- **`dsh-community-market` 0.1.0-dev.0** (Anywhere Labs, MIT; shipped inside
-  DSH Desktop 2.0.15). Parts ported to TypeScript: `src/client/styles.ts` copied
-  verbatim into `src/renderer/market/market.css`, the English strings, the view
-  structure of `MarketSettingsTab.tsx` and `MarketOverlay.tsx`,
-  `lib/network/restricted-http.js` and `blocked-subnets.js`
-  (`src/main/market/net.ts`), `lib/adapters/dsh-1024store.js` for the direct path
-  (`src/main/market/store1024.ts`), and the npm verifier and profile bundle update
-  from `lib/install/service.js` (`src/main/market/install.ts`), plus
-  `lib/adapters/dshfind.js` and `standard-http.js`, the source and
-  provider-page rules of `lib/contracts/validate.js` and `query.js`, and the
-  `catalog-source` and `catalog-provider-page` schemas
-  (`src/main/market/standard.ts`). The source list follows
-  `lib/catalog/service.js`: several sources, one in use. Not ported: dshfind's
-  full-catalog scan (the provider's paged search is used), source reordering,
-  and the multi-category query.
 - **`deepseek-harness` `apps/desktop-host/src/index.ts`** (MIT, checkout 21638c5):
-  the `runProfile` boot and the `ready`/`fatal`/`shutdown` protocol, reimplemented
-  in `src/main/dsh/host-entry.ts`.
-- **`@deepseek-ai/dsh-client-ui-theme` 0.1.7-rc.2** (MIT): the list of official
-  tokens, snapshotted in `assets/dsh/hello-dsh/official-tokens.json`.
-- **`@deepseek-ai/dsh-client-ui-brand-official`** (MIT): the brand-slot
-  registration shape, reused for Hello's mark and name.
+  the `runProfile` boot and `ready`/`fatal`/`shutdown` protocol, adapted in
+  `src/main/dsh/host-entry.ts`. Hello's host lifecycle, guest boundary and
+  resource budget remain app-owned code.
+- **`node-addon-require-builtin` shim** (`assets/dsh/shims/`): Hello's own
+  compatibility implementation, retained with the pnpm override because the
+  host uses `--expose-internals`. Lane B's read-only measurement of installed
+  **DSH 0.2.0-rc.2** found the same `^0.1.6` dependency and shim version
+  `0.1.6-hello.0`. Boot without it has not been verified. The host's build
+  allowlist, telemetry-disabled environment and non-desktop profile are retained.
+- **DSH model settings**, checked read-only in installed **0.2.0-rc.2**:
+  `dsh-web-app/cordis.patch.yml` enables `ui-settings-models` and
+  `ui-model-selection`; `dsh-base/cordis.patch.yml` documents provider profiles
+  supplied by the web Models page to `llm-pi-ai`, alongside native DeepSeek
+  adapters. This supports removing Hello's model proxy and provider overrides;
+  live model configuration was not exercised. Only the `web-runtime` launch
+  overlay remains. Existing `hello-dsh` manifest references are removed on start
+  without changing other manifest keys or the person's patch file.
+- **Runtime version selection:** the old `0.1.7-rc.2` default pin is removed.
+  First install and Update resolve npm latest, then install that exact release.
+  Existing installed versions remain usable; no rc rollback or custom UI
+  selector maintenance is provided. The prior optional LibreOffice engine
+  exclusion remains an installation footprint limit, not a theme adaptation.
 
-Hello's own parts, written here and not copied: the host manager, surface,
-checkpoints, model proxy, the `node-addon-require-builtin` shim
-(`assets/dsh/shims/`), the theme generator (`scripts/dsh-theme.mjs`) and the
-compatibility gate.
+## Pi market's retained adaptations
+
+**`dsh-community-market` 0.1.0-dev.0** (Anywhere Labs, MIT; originally shipped
+inside DSH Desktop 2.0.15) remains the provenance of `src/renderer/market/market.css`,
+the window/view structure and English strings adapted from `MarketSettingsTab.tsx`
+and `MarketOverlay.tsx`, and `lib/network/restricted-http.js` and
+`blocked-subnets.js` adapted in `src/main/market/net.ts`. The npm validation helpers
+in `src/main/market/install.ts` remain shared Pi infrastructure. These retained
+parts serve only Hello's Pi market. The 1024Store, dshfind, standard-source,
+full-catalog and DSH profile installer adaptations have been removed, along with
+the entire `hello-dsh` theme bundle, generator and theme tests.
 
 ## Pi tab theme and engine — 2026-10-01
 

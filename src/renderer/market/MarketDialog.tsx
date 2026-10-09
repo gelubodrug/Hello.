@@ -1,25 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpRight, ArrowUpCircle, Check, Database, Download, Globe, Library, Plus, Puzzle, RefreshCw, Search, Settings2, Trash2, X } from 'lucide-react';
-import type { MarketInstalledPlugin, MarketItem, MarketKind, MarketPage, MarketPreview, MarketResult, MarketScan, MarketSource } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowUpRight, ArrowUpCircle, Check, Database, Download, Globe, Plus, Puzzle, RefreshCw, Search, Settings2, Trash2, X } from 'lucide-react';
+import type { MarketInstalledPlugin, MarketItem, MarketKind, MarketPage, MarketPreview, MarketResult, MarketSource } from '../../shared/types';
 import { api } from '../api';
 import { errorText } from '../ui/primitives';
 import { MARKETS, type MarketCopy } from './markets';
 import { formatNumber, t } from '../i18n';
 import './market.css';
 
-/**
- * The Community Plugin Market, ported from dsh-community-market
- * (src/client/MarketSettingsTab.tsx, MarketOverlay.tsx; MIT, Anywhere Labs).
- * Same views, same words, same geometry and stylesheet; Hello supplies the
- * primitives, the colours, and a main process that does every fetch and
- * every install. Adaptations: installs go to the DSH surface's profile, a
- * restart restarts the DSH host (not the app), and the confirmation says
- * what the plugin brings to Hello.
- *
- * The same window shows the Pi package market (user, 29.09): `kind` picks the
- * market's handles and words (markets.ts); nothing else differs. An installed
- * package is updated or uninstalled from Installed, in either market.
- */
+/** Pi package market. Its geometry and stylesheet retain the MIT-licensed
+ * dsh-community-market adaptation; it no longer manages DSH plugins. */
 type View = 'discover' | 'installable' | 'installed' | 'sources';
 
 const iconCache = new Map<string, Promise<string | null>>();
@@ -164,7 +153,7 @@ interface Operation {
   result?: MarketResult;
 }
 
-export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'installable', addByName, addFromFolder }: { /** Which market this window shows. */ kind?: MarketKind; open: boolean; onClose(): void; initialView?: View; /** A package the person typed in Settings: previewed at once. */ addByName?: string; /** Asks main for a plugin folder, then previews it. */ addFromFolder?: boolean }): JSX.Element | null {
+export function MarketDialog({ kind = 'pi', open, onClose, initialView = 'installable', addByName }: { /** Which market this window shows. */ kind?: MarketKind; open: boolean; onClose(): void; initialView?: View; /** A package the person typed in Settings: previewed at once. */ addByName?: string;  }): JSX.Element | null {
   const definition = MARKETS[kind];
   const market = definition.api();
   const copy = definition.copy;
@@ -172,11 +161,6 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [category, setCategory] = useState<string | undefined>();
-  // The DSH market's pills pick several at once (an item in any of them); the
-  // Pi market's one <select> keeps using `category`.
-  const [picked, setPicked] = useState<string[]>([]);
-  const [scan, setScan] = useState<MarketScan | undefined>();
-  const [scanning, setScanning] = useState(false);
   const [sort, setSort] = useState<'downloads' | 'updated' | 'name'>('downloads');
   const [pages, setPages] = useState<Record<'discover' | 'installable', MarketPage | undefined>>({ discover: undefined, installable: undefined });
   const [loading, setLoading] = useState(false);
@@ -185,11 +169,6 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
   const [installed, setInstalled] = useState<MarketInstalledPlugin[] | undefined>();
   const [sources, setSources] = useState<MarketSource[]>([]);
   const [operation, setOperation] = useState<Operation | null>(null);
-  const [restarting, setRestarting] = useState(false);
-  const [sourcePending, setSourcePending] = useState(false);
-  const [sourceError, setSourceError] = useState<string | undefined>();
-  const [addOpen, setAddOpen] = useState(false);
-  const [manifestUrl, setManifestUrl] = useState('');
   const request = useRef(0);
 
   const load = useCallback(async (which: 'discover' | 'installable', options: { more?: boolean; reload?: boolean } = {}) => {
@@ -203,7 +182,6 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
       const page = await market.query({
         ...(submitted ? { q: submitted } : {}),
         ...(category ? { category } : {}),
-        ...(picked.length ? { categories: picked } : {}),
         ...(copy.filters && sort !== 'downloads' ? { sort } : {}),
         ...(which === 'installable' ? { installable: true } : { limit: 50 }),
         ...(options.more && current?.nextCursor ? { cursor: current.nextCursor } : {}),
@@ -218,40 +196,13 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
     } finally {
       if (id === request.current) setLoading(false);
     }
-  }, [market, submitted, category, picked, sort, pages, copy.filters]);
-
-  /** A change to the source list: the lists shown so far belonged to the old source. */
-  const mutateSources = async (change: () => Promise<MarketSource[]> | undefined): Promise<boolean> => {
-    setSourcePending(true);
-    setSourceError(undefined);
-    try {
-      const next = await change();
-      if (!next) return false;
-      const before = sources.find(source => source.selected)?.id;
-      setSources(next);
-      if (next.find(source => source.selected)?.id !== before) {
-        setPages({ discover: undefined, installable: undefined });
-        setCategory(undefined);
-        setPicked([]);
-        // A catalogue is read per source; the one held is not this one's.
-        setScan(undefined);
-        void market?.scanState?.().then(setScan).catch(() => {});
-      }
-      return true;
-    } catch (reason) {
-      setSourceError(errorText(reason));
-      return false;
-    } finally {
-      setSourcePending(false);
-    }
-  };
+  }, [market, submitted, category, sort, pages, copy.filters]);
 
   const refreshInstalled = useCallback(() => {
     void market?.installed().then(setInstalled).catch(reason => setError(errorText(reason)));
   }, [market]);
 
   useEffect(() => { if (open) void market?.sources().then(setSources).catch(() => {}); }, [open, market]);
-  useEffect(() => { if (open) void market?.scanState?.().then(setScan).catch(() => {}); }, [open, market]);
   useEffect(() => {
     if (!open || !addByName || !market) return;
     let alive = true;
@@ -262,21 +213,11 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
     return () => { alive = false; };
   }, [open, addByName, market]);
   useEffect(() => {
-    if (!open || !addFromFolder || !market?.previewFolder) return;
-    let alive = true;
-    setView('installed');
-    void market.previewFolder()
-      .then(preview => { if (alive) setOperation(preview ? { preview, phase: 'confirm' } : null); if (!preview && alive) onClose(); })
-      .catch(reason => { if (alive) setError(errorText(reason)); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, addFromFolder, market]);
-  useEffect(() => {
     if (!open) return;
     if (view === 'discover' || view === 'installable') void load(view);
     if (view === 'installed') refreshInstalled();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, view, submitted, category, picked, sort]);
+  }, [open, view, submitted, category, sort]);
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -323,40 +264,12 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
       setOperation({ ...current, phase: 'failed', error: errorText(reason) });
     }
   };
-  const restart = async () => {
-    if (!definition.restart) { setOperation(null); return; }
-    setRestarting(true);
-    try {
-      await definition.restart();
-      setOperation(null);
-    } catch (reason) {
-      setOperation(current => current ? { ...current, error: errorText(reason) } : current);
-    } finally {
-      setRestarting(false);
-    }
-  };
-
   const page = view === 'discover' || view === 'installable' ? pages[view] : undefined;
   const current = sources.find(source => source.selected);
-  const categories = useMemo(() => pages.discover?.categories ?? pages.installable?.categories ?? [], [pages]);
   if (!open || !market) return null;
 
   const filters = copy.filters;
-  const reset = () => { setQuery(''); setSubmitted(''); setCategory(undefined); setPicked([]); setSort('downloads'); };
-  const readCatalogue = async () => {
-    if (!market?.scan) return;
-    setScanning(true);
-    setError(undefined);
-    try {
-      setScan(await market.scan());
-      setPages({ discover: undefined, installable: undefined });
-      await load(view === 'installable' ? 'installable' : 'discover');
-    } catch (reason) {
-      setError(errorText(reason));
-    } finally {
-      setScanning(false);
-    }
-  };
+  const reset = () => { setQuery(''); setSubmitted(''); setCategory(undefined); setSort('downloads'); };
   // "1–50 / 305 (of 5548)", as the gallery counts.
   const counted = page ? `${page.items.length ? 1 : 0}–${page.items.length} / ${page.total.toLocaleString('en-US')}${page.unfiltered !== undefined && page.unfiltered !== page.total ? ` (of ${page.unfiltered.toLocaleString('en-US')})` : ''}` : '';
   const toolbar = (
@@ -381,31 +294,6 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
       <Button variant="ghost" size="sm" iconOnly aria-label="Refresh" title="Refresh" disabled={loading} onClick={() => void load(view as 'discover', { reload: true })} icon={<RefreshCw size={14} />} />
       {filters ? <span className="dshMarketCount" role="status">{counted}</span> : <Pill>{page?.items.length ?? 0}</Pill>}
     </form>
-  );
-  const categoryPills = !filters && (categories.length > 0 || market.scan) && (
-    <div className="dshMarketCategories" role="group" aria-label="Categories">
-      <span>Categories</span>
-      {categories.map(name => (
-        <Pill key={name} pressed={picked.includes(name)} onClick={() => setPicked(value => value.includes(name) ? value.filter(item => item !== name) : [...value, name])}>{name}</Pill>
-      ))}
-      {picked.length > 1 && <Pill onClick={() => setPicked([])}>Clear {picked.length}</Pill>}
-      {/* Several categories and an exact count need the whole catalogue: a
-          source's own search is one page and one category at a time. */}
-      {market.scan && (
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={scanning || loading}
-          icon={<Library size={14} />}
-          title={scan?.scanned
-            ? `${scan.items.toLocaleString('en-US')} entries read from ${scan.pages} page(s)${scan.complete ? '' : ', stopped before the end'}. Searches are answered from these.`
-            : 'Read every page of this source once, so searches are counted exactly and several categories can be picked at a time'}
-          onClick={() => void readCatalogue()}
-        >
-          {scanning ? 'Reading the catalogue…' : scan?.scanned ? `Catalogue: ${scan.items.toLocaleString('en-US')}` : 'Read the whole catalogue'}
-        </Button>
-      )}
-    </div>
   );
   const grid = (items: MarketItem[], action?: string) => (
     <>
@@ -444,7 +332,6 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
                 : <span>No source selected</span>}</Pill>
             </div>
             <main className="dshMarketMain">
-              {view === 'discover' && <div>{toolbar}{categoryPills}{grid(page?.items ?? [])}</div>}
               {view === 'installable' && (
                 <div className="dshMarketContent">
                   <div className="dshMarketSectionHead">
@@ -452,7 +339,6 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
                     <Button size="sm" disabled={loading} icon={<RefreshCw size={14} />} onClick={() => void load('installable', { reload: true })}>Check again</Button>
                   </div>
                   {page?.generatedAt && <div className="dshMarketIndexMeta" role="status"><span>Catalog updated: {new Date(page.generatedAt).toLocaleString()}</span></div>}
-                  {toolbar}{categoryPills}{grid(page?.items ?? [], 'Install')}
                 </div>
               )}
               {view === 'installed' && (
@@ -490,12 +376,11 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
                 <div className="dshMarketContent">
                   <div className="dshMarketSectionHead">
                     <div><h2>Sources</h2><p>{copy.sourcesBlurb}</p></div>
-                    <Button disabled={sourcePending || !market.addStandardSource} icon={<Plus size={14} />} onClick={() => { setSourceError(undefined); setAddOpen(true); }}>Add standard source</Button>
+                    <Button disabled icon={<Plus size={14} />}>Add standard source</Button>
                   </div>
                   <div className="dshMarketBanner dshMarketSourceGuide"><Globe size={14} /><span>{copy.sourcesGuide}</span></div>
-                  {sourceError && !addOpen && <div className="dshMarketBanner" role="alert"><Dot state="error" />{sourceError}</div>}
                   <div className="dshMarketSources" role="radiogroup" aria-label="Choose plugin source">
-                    {sources.filter(source => source.added !== false).map((source, at, added) => (
+                    {sources.filter(source => source.added !== false).map(source => (
                       <div className="dshMarketSource" key={source.id}>
                         <div>
                           <h3>{source.name}{source.partner && <Pill>Partner provider</Pill>}</h3>
@@ -504,59 +389,26 @@ export function MarketDialog({ kind = 'dsh', open, onClose, initialView = 'insta
                           <div className="dshMarketSourceMeta"><span>{source.endpointHost}</span><span>{source.builtIn ? 'Built-in adapter' : 'Standard protocol'}</span>{source.selected && <span><Dot state={error ? 'error' : 'done'} />{error ? 'Unavailable on last check' : 'Available on last check'}</span>}</div>
                         </div>
                         <div className="dshMarketSourceActions">
-                          <Button size="sm" role="radio" aria-checked={source.selected} disabled={sourcePending || !market.selectSource} icon={source.selected ? <Check size={14} /> : undefined} onClick={() => { if (!source.selected) void mutateSources(() => market.selectSource?.(source.id)); }}>{source.selected ? 'Current source' : 'Select this source'}</Button>
-                          {/* The person's own order for the list. Which source
-                              is used is still the selected one, not the first. */}
-                          {market.moveSource && added.length > 1 && (
-                            <>
-                              <Button variant="ghost" size="sm" iconOnly aria-label={`Move ${source.name} up`} title="Move up" disabled={sourcePending || at === 0} icon={<ArrowUp size={14} />} onClick={() => void mutateSources(() => market.moveSource?.(source.id, 'up'))} />
-                              <Button variant="ghost" size="sm" iconOnly aria-label={`Move ${source.name} down`} title="Move down" disabled={sourcePending || at === added.length - 1} icon={<ArrowDown size={14} />} onClick={() => void mutateSources(() => market.moveSource?.(source.id, 'down'))} />
-                            </>
-                          )}
-                          <Button variant="ghost" size="sm" iconOnly aria-label="Remove source" title="Remove source" disabled={sourcePending || !market.removeSource} icon={<Trash2 size={14} />} onClick={() => void mutateSources(() => market.removeSource?.(source.id))} />
+                          <Button size="sm" role="radio" aria-checked={source.selected} disabled icon={source.selected ? <Check size={14} /> : undefined}>{source.selected ? 'Current source' : 'Select this source'}</Button>
+                          <Button variant="ghost" size="sm" iconOnly aria-label="Remove source" title="Remove source" disabled icon={<Trash2 size={14} />} />
                         </div>
                       </div>
                     ))}
                   </div>
-                  {sources.some(source => source.added === false) && (
-                    <div className="dshMarketSources dshMarketAvailableSources">
-                      {sources.filter(source => source.added === false).map(source => (
-                        <div className="dshMarketSource" key={source.id}>
-                          <div>
-                            <h3>{source.name}{source.partner && <Pill>Partner provider</Pill>}</h3>
-                            <p>{source.description}</p>
-                            <div className="dshMarketSourceAttribution"><a href={source.attribution.url} onClick={event => { event.preventDefault(); void api.system.openExternal(source.attribution.url); }}>{source.attribution.name}</a>{source.attribution.notice && <span>{source.attribution.notice}</span>}</div>
-                          </div>
-                          <Button size="sm" disabled={sourcePending || !market.addSource} icon={<Plus size={14} />} onClick={() => void mutateSources(() => market.addSource?.(source.id))}>Add</Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+
                 </div>
               )}
             </main>
           </section>
         </div>
       </section>
-      {operation && <OperationModal kind={kind} copy={copy} canRestart={Boolean(definition.restart)} operation={operation} source={sources.find(source => source.name === operation.item?.sourceName)} restarting={restarting} onClose={() => setOperation(null)} onConfirm={() => void confirm()} onRestart={() => void restart()} />}
-      {addOpen && (
-        <Modal title="Add standard source" description="You can add multiple sources, but only one is used at a time. Use only plugin sources you trust." className="dshMarketSourceModal" onClose={() => { if (!sourcePending) setAddOpen(false); }}
-          footer={<>
-            <Button variant="ghost" disabled={sourcePending} onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button variant="primary" icon={<Plus size={14} />} disabled={sourcePending || !manifestUrl.trim()} onClick={() => { void mutateSources(() => market.addStandardSource?.(manifestUrl.trim())).then(added => { if (added) { setManifestUrl(''); setAddOpen(false); } }); }}>Add source</Button>
-          </>}>
-          <div className="dshMarketModalField">
-            <label htmlFor={`${kind}-market-manifest`}>Source manifest URL</label>
-            <div className="p-input"><input id={`${kind}-market-manifest`} value={manifestUrl} disabled={sourcePending} placeholder="https://example.com/catalog-source.json" onChange={event => setManifestUrl(event.currentTarget.value)} style={{ paddingLeft: 12 }} /></div>
-            {sourceError && <div className="dshMarketError" role="alert">{sourceError}</div>}
-          </div>
-        </Modal>
-      )}
+      {operation && <OperationModal kind={kind} copy={copy} operation={operation} source={sources.find(source => source.name === operation.item?.sourceName)} onClose={() => setOperation(null)} onConfirm={() => void confirm()} />}
+
     </div>
   );
 }
 
-function OperationModal({ kind, copy, canRestart, operation, source, restarting, onClose, onConfirm, onRestart }: { kind: MarketKind; copy: MarketCopy; canRestart: boolean; operation: Operation; source?: MarketSource; restarting: boolean; onClose(): void; onConfirm(): void; onRestart(): void }): JSX.Element {
+function OperationModal({ kind, copy, operation, source, onClose, onConfirm }: { kind: MarketKind; copy: MarketCopy; operation: Operation; source?: MarketSource; onClose(): void; onConfirm(): void }): JSX.Element {
   const { item, preview, phase } = operation;
   const openRepository = () => { if (item) void api.system.openExternal(item.repository); };
   const noun = copy.item;
@@ -564,9 +416,7 @@ function OperationModal({ kind, copy, canRestart, operation, source, restarting,
     const title = preview.action === 'install' ? `${noun} installed` : preview.action === 'update' ? `${noun} updated` : `${noun} uninstalled`;
     return (
       <Modal title={title} className="dshMarketStatusModal" onClose={onClose}
-        footer={canRestart
-          ? <><Button variant="ghost" disabled={restarting} onClick={onClose}>Restart later</Button><Button variant="primary" disabled={restarting} onClick={onRestart} icon={<RefreshCw size={14} />}>{restarting ? 'Restarting...' : 'Restart now'}</Button></>
-          : <Button variant="primary" onClick={onClose}>Close</Button>}>
+        footer={<Button variant="primary" onClick={onClose}>Close</Button>}>
         <div className="dshMarketOperationReview">
           <Facts preview={preview} copy={copy} extra={operation.result && <div><dt>{preview.action === 'uninstall' ? 'Removed at' : 'Installed at'}</dt><dd>{new Date(operation.result.installedAt).toLocaleTimeString()}</dd></div>} />
           <div className="dshMarketOperationSuccess"><Dot state="done" /><span>{copy.done(preview)}</span></div>
@@ -619,15 +469,7 @@ function OperationModal({ kind, copy, canRestart, operation, source, restarting,
           <div className="dshMarketDetailsIntro"><PluginIcon item={item} kind={kind} large /><p>{item.summary}</p></div>
           {phase === 'checking' && <div className="dshMarketOperationProgress" role="status"><Dot state="ongoing" />Checking available installation methods...</div>}
           {operation.error && <div className="dshMarketBanner" role="alert"><Dot state="warning" /><span>{operation.error}</span></div>}
-          {phase === 'details' && !item.installable && item.manualCommand ? (
-            <div className="dshMarketManualInstall">
-              <div><h3>Manual installation</h3><p>This catalog entry names a GitHub repository, not an npm package. Hello. installs only an exact npm version, so this entry cannot be installed from here. If the plugin is on npm, use Settings › Extensions › DSH surface › Add by npm name.</p></div>
-              <div className="dshMarketCommand"><span>Install command (for DSH)</span><code>{item.manualCommand}</code></div>
-              <Warning>This display-only command has not passed the complete package verification required for managed installation. Verify the source, contents, and compatibility yourself.</Warning>
-              <Warning>This GitHub target follows the repository’s current HEAD. Its contents can change and are not pinned to the code shown now.</Warning>
-              <Warning>Plugins run as local code with your user permissions. Install only plugins you trust.</Warning>
-            </div>
-          ) : phase === 'details' && !operation.error ? <div>This {noun.toLowerCase()} cannot currently be installed automatically in Hello. You can still review its details and source repository.</div> : null}
+          {phase === 'details' && !operation.error ? <div>This {noun.toLowerCase()} cannot currently be installed automatically in Hello. You can still review its details and source repository.</div> : null}
         </div>
       )}
     </Modal>

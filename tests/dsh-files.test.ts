@@ -3,10 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { listCheckpoints, profileFingerprint, restoreCheckpoint, saveCheckpoint } from '../src/main/dsh/checkpoints';
-import { DSH_PROFILE, DSH_VERSION, dshLayout, installedVersion, runtimeReady } from '../src/main/dsh/layout';
+import { DSH_PROFILE, dshLayout, installedVersion, runtimeReady, selectedVersion } from '../src/main/dsh/layout';
 import { inheritedEnv, parseProgress, pnpmFailure } from '../src/main/dsh/pnpm';
-import { ensureProfileWorkspace } from '../src/main/dsh/profile';
+import { removeLegacyTheme } from '../src/main/dsh/profile';
 import { DSH_SKIPPED_OPTIONAL, runtimeManifest, runtimeWorkspace, writeRuntimeFiles } from '../src/main/dsh/runtime';
 
 const folders: string[] = [];
@@ -26,14 +25,14 @@ describe('dsh layout', () => {
     expect(place.installAnchor).toBe(join(place.runtime, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'));
   });
 
-  it('calls the runtime ready only for the pinned version with the shim in place', () => {
+  it('calls the runtime ready for an installed version with the shim in place', () => {
     const place = layout();
     expect(runtimeReady(place)).toBe(false);
     mkdirSync(join(place.runtime, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
     writeFileSync(place.installAnchor, JSON.stringify({ version: '0.0.1' }));
     expect(installedVersion(place)).toBe('0.0.1');
     expect(runtimeReady(place)).toBe(false);
-    writeFileSync(place.installAnchor, JSON.stringify({ version: DSH_VERSION }));
+    writeFileSync(place.installAnchor, JSON.stringify({ version: '0.2.0-rc.2' }));
     expect(runtimeReady(place)).toBe(false);
     mkdirSync(join(place.runtime, 'node_modules', 'node-addon-require-builtin'), { recursive: true });
     writeFileSync(join(place.runtime, 'node_modules', 'node-addon-require-builtin', 'package.json'), '{}');
@@ -42,9 +41,9 @@ describe('dsh layout', () => {
 });
 
 describe('runtime files', () => {
-  it('pins dsh exactly and replaces the fingerprinted addon with the shim', () => {
+  it('installs the resolved dsh exactly and replaces the fingerprinted addon with the shim', () => {
     const place = layout();
-    expect(runtimeManifest()).toMatchObject({ private: true, dependencies: { '@deepseek-ai/dsh': DSH_VERSION } });
+    expect(runtimeManifest('0.2.0-rc.2')).toMatchObject({ private: true, dependencies: { '@deepseek-ai/dsh': '0.2.0-rc.2' } });
     const workspace = parse(runtimeWorkspace(place)) as Record<string, any>;
     expect(workspace.nodeLinker).toBe('hoisted');
     expect(workspace.managePackageManagerVersions).toBe(false);
@@ -68,8 +67,8 @@ describe('runtime files', () => {
 
   it('writes both files into the runtime folder', () => {
     const place = layout();
-    writeRuntimeFiles(place);
-    expect(JSON.parse(readFileSync(join(place.runtime, 'package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']).toBe(DSH_VERSION);
+    writeRuntimeFiles(place, '0.2.0-rc.2');
+    expect(JSON.parse(readFileSync(join(place.runtime, 'package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']).toBe('0.2.0-rc.2');
     expect(existsSync(join(place.runtime, 'pnpm-workspace.yaml'))).toBe(true);
   });
 });
@@ -94,96 +93,37 @@ describe('pnpm helpers', () => {
   });
 });
 
-describe('restore points', () => {
-  function profile(place: ReturnType<typeof layout>, packages: string) {
-    mkdirSync(place.profile, { recursive: true });
-    writeFileSync(join(place.profile, 'package.json'), packages);
-    writeFileSync(join(place.profile, 'cordis.patch.yml'), '[]\n');
-  }
-
-  it('takes nothing before there is a profile', () => {
-    expect(saveCheckpoint(layout(), 'healthy', 'x')).toBeUndefined();
-  });
-
-  it('takes a healthy point once per distinct profile, newest first', () => {
-    const place = layout();
-    profile(place, '{"a":1}');
-    expect(saveCheckpoint(place, 'healthy', 'first', 1000)).toBeDefined();
-    expect(saveCheckpoint(place, 'healthy', 'same again', 2000)).toBeUndefined();
-    profile(place, '{"a":2}');
-    expect(saveCheckpoint(place, 'healthy', 'second', 3000)).toBeDefined();
-    expect(listCheckpoints(place).map(point => point.label)).toEqual(['second', 'first']);
-  });
-
-  it('keeps the last three healthy points', () => {
-    const place = layout();
-    for (let index = 0; index < 5; index++) {
-      profile(place, `{"n":${index}}`);
-      saveCheckpoint(place, 'healthy', `p${index}`, 1000 + index);
-    }
-    expect(listCheckpoints(place).map(point => point.label)).toEqual(['p4', 'p3', 'p2']);
-  });
-
-  it('writes a point back, removing files it did not have', () => {
-    const place = layout();
-    profile(place, '{"good":true}');
-    const point = saveCheckpoint(place, 'healthy', 'good', 1000)!;
-    const good = profileFingerprint(place);
-    writeFileSync(join(place.profile, 'package.json'), '{"broken":true}');
-    writeFileSync(join(place.profile, 'pnpm-lock.yaml'), 'lock');
-    restoreCheckpoint(place, point.id);
-    expect(readFileSync(join(place.profile, 'package.json'), 'utf8')).toBe('{"good":true}');
-    expect(existsSync(join(place.profile, 'pnpm-lock.yaml'))).toBe(false);
-    expect(profileFingerprint(place)).toBe(good);
-    expect(() => restoreCheckpoint(place, 'gone')).toThrow('no longer exists');
-  });
-});
-
-describe('profile workspace', () => {
-  it('keeps dsh’s settings and adds Hello’s two', () => {
+describe('retiring the Hello theme', () => {
+  it('removes only its manifest references and preserves all user patch content', () => {
     const place = layout();
     mkdirSync(place.profile, { recursive: true });
-    writeFileSync(join(place.profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\n');
-    ensureProfileWorkspace(place);
-    const workspace = parse(readFileSync(join(place.profile, 'pnpm-workspace.yaml'), 'utf8')) as Record<string, unknown>;
-    expect(workspace).toMatchObject({ nodeLinker: 'hoisted', autoInstallPeers: false, strictDepBuilds: false, managePackageManagerVersions: false });
+    const manifest = {
+      name: 'my-profile', private: true, custom: { keep: ['this'] },
+      dependencies: { 'hello-dsh': 'link:old-app/hello-dsh', 'my-plugin': '1.2.3' },
+      dsh: { other: 'keep', profile: { other: true, bundles: ['@deepseek-ai/dsh-base', 'hello-dsh', 'my-plugin'] } },
+    };
+    const file = join(place.profile, 'package.json');
+    const patch = '# Personal settings\n- id: custom\n  config:\n    untouched: true\n';
+    writeFileSync(file, JSON.stringify(manifest));
+    writeFileSync(join(place.profile, 'cordis.patch.yml'), patch);
+    removeLegacyTheme(place);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      ...manifest,
+      dependencies: { 'my-plugin': '1.2.3' },
+      dsh: { ...manifest.dsh, profile: { other: true, bundles: ['@deepseek-ai/dsh-base', 'my-plugin'] } },
+    });
+    expect(readFileSync(join(place.profile, 'cordis.patch.yml'), 'utf8')).toBe(patch);
+    const after = readFileSync(file, 'utf8');
+    removeLegacyTheme(place);
+    expect(readFileSync(file, 'utf8')).toBe(after);
   });
-});
 
-describe('changes made outside Hello', () => {
-  it('knows nothing before Hello first left the profile, then sees added, removed and changed packages', async () => {
-    const { profileChange, rememberProfile } = await import('../src/main/dsh/profile');
+  it('leaves fresh profile creation to upstream and does not revive an old version selection', () => {
     const place = layout();
-    mkdirSync(place.profile, { recursive: true });
-    const write = (dependencies: Record<string, string>) => writeFileSync(join(place.profile, 'package.json'), JSON.stringify({ dependencies }));
-    write({ a: '1.0.0', b: '1.0.0' });
-    expect(profileChange(place)).toBeUndefined();
-    rememberProfile(place);
-    expect(profileChange(place)).toBeUndefined();
-    write({ a: '1.0.1', c: '2.0.0' });
-    expect(profileChange(place)).toEqual({ added: ['c'], removed: ['b'], changed: ['a'] });
-    rememberProfile(place);
-    expect(profileChange(place)).toBeUndefined();
-  });
-});
-
-describe('skills from DSH plugins', () => {
-  it('offers the skill folders of the plugins the person installed, and not Hello’s own bundle', async () => {
-    const { dshSkillRoots } = await import('../src/main/dsh/skills');
-    const { discoverSkills } = await import('../src/main/extensions/discovery');
-    const root = mkdtempSync(join(tmpdir(), 'hello-dsh-skills-'));
-    folders.push(root);
-    const place = dshLayout(root, '');
-    mkdirSync(join(place.profile, 'node_modules', '@tt-a1i', 'archify-dsh', 'skills', 'archify'), { recursive: true });
-    mkdirSync(join(place.profile, 'node_modules', 'hello-dsh', 'skills', 'mine'), { recursive: true });
-    writeFileSync(join(place.profile, 'node_modules', '@tt-a1i', 'archify-dsh', 'skills', 'archify', 'SKILL.md'), '---\nname: archify\ndescription: Diagrams as HTML.\n---\n# Archify\n');
-    writeFileSync(join(place.profile, 'node_modules', 'hello-dsh', 'skills', 'mine', 'SKILL.md'), '---\nname: mine\n---\n');
-    writeFileSync(join(place.profile, 'package.json'), JSON.stringify({ dependencies: { '@tt-a1i/archify-dsh': '0.1.0', 'hello-dsh': 'link:x' }, dsh: { profile: { bundles: ['@tt-a1i/archify-dsh', 'hello-dsh'] } } }));
-    const roots = dshSkillRoots(root);
-    expect(roots).toEqual([{ label: 'DSH plugin · @tt-a1i/archify-dsh', path: join(place.profile, 'node_modules', '@tt-a1i', 'archify-dsh', 'skills') }]);
-    const empty = mkdtempSync(join(tmpdir(), 'hello-home-'));
-    folders.push(empty);
-    const skills = await discoverSkills(empty, [], roots);
-    expect(skills.map(skill => [skill.name, skill.source, skill.description])).toEqual([['archify', 'DSH plugin · @tt-a1i/archify-dsh', 'Diagrams as HTML.']]);
+    removeLegacyTheme(place);
+    expect(existsSync(place.profile)).toBe(false);
+    mkdirSync(place.root, { recursive: true });
+    writeFileSync(join(place.root, 'version.json'), '{"version":"0.1.7-rc.2"}');
+    expect(selectedVersion(place)).toBe('latest');
   });
 });

@@ -1,16 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { atomicWriteFileSync } from '../atomic-write';
 import { join } from 'node:path';
 
-/**
- * Where the DSH surface lives on disk, and the one dsh version this app runs.
- *
- * dsh is not bundled: the runtime is installed into the app's own data folder
- * the first time the person opens the surface, from exact versions only (the
- * npm `latest` tags of several dsh packages lag behind). `DSH_HOME` is ours
- * too, so nothing in `~/.dsh` — another harness's credentials, sessions or
- * profiles — is read or written.
- */
-export const DSH_VERSION = '0.1.7-rc.2';
 /** Not `desktop`: that profile name switches on DeepSeek's desktop telemetry rows. */
 export const DSH_PROFILE = 'hello';
 /** The profile template the first start copies its bundle list from. */
@@ -39,8 +30,7 @@ export interface DshLayout {
   /** The profile the host boots: its package.json, patch layer and plugins. */
   profile: string;
   logs: string;
-  checkpoints: string;
-  /** Files that ship with Hello: the require-builtin shim and Hello's own dsh bundle. */
+  /** Files that ship with Hello: the require-builtin shim. */
   resources: string;
   /** package.json of the installed dsh, the anchor dsh resolves its bundles from. */
   installAnchor: string;
@@ -56,7 +46,6 @@ export function dshLayout(dataDir: string, resources: string): DshLayout {
     home,
     profile: join(home, 'profiles', DSH_PROFILE),
     logs: join(root, 'logs'),
-    checkpoints: join(root, 'checkpoints'),
     resources,
     installAnchor: join(runtime, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
   };
@@ -73,30 +62,19 @@ export function installedVersion(layout: DshLayout): string | undefined {
   }
 }
 
-/**
- * The dsh version this app runs: the one it came with, unless the person
- * updated to a newer one from the sidebar (user, 01.10) — kept in
- * `<data>/dsh/version.json` until they go back.
- */
+/** Installed versions, including a previously selected sidebar update, stay usable offline.
+ * A fresh install resolves npm latest; there is no bundled rc pin or downgrade path. */
 export function selectedVersion(layout: DshLayout): string {
-  try {
-    const version = (JSON.parse(readFileSync(join(layout.root, 'version.json'), 'utf8')) as { version?: unknown }).version;
-    return typeof version === 'string' && /^\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(version) ? version : DSH_VERSION;
-  } catch {
-    return DSH_VERSION;
-  }
+  return installedVersion(layout) ?? 'latest';
 }
 
-/** Runs `version` from the next install on; the version this app came with forgets the choice. */
+/** Record a successful update for older Hello versions sharing this data folder. */
 export function selectVersion(layout: DshLayout, version: string): void {
-  const file = join(layout.root, 'version.json');
-  if (version === DSH_VERSION) { rmSync(file, { force: true }); return; }
   mkdirSync(layout.root, { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify({ version }, null, 2)}\n`);
+  atomicWriteFileSync(join(layout.root, 'version.json'), `${JSON.stringify({ version }, null, 2)}\n`);
 }
 
-/** The runtime is usable only when it holds exactly the version this app runs. */
-export function runtimeReady(layout: DshLayout, version = selectedVersion(layout)): boolean {
-  return installedVersion(layout) === version
+export function runtimeReady(layout: DshLayout, version = installedVersion(layout)): boolean {
+  return !!version && installedVersion(layout) === version
     && existsSync(join(layout.runtime, 'node_modules', 'node-addon-require-builtin', 'package.json'));
 }

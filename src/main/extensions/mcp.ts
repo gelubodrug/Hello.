@@ -21,8 +21,6 @@ const MAX_RESULT_CHARS = 60_000;
 const IDLE_TIMEOUT_MS = 5 * 60_000;
 export interface McpOptions {
   connectTimeoutMs?: number; callTimeoutMs?: number; maxMessageBytes?: number;
-  /** A server Hello itself provides, reached in-process instead of over stdio (the DSH surface's tools). */
-  links?: (row: ResourceRow) => McpLink | undefined;
 }
 
 interface JsonRpcResponse { jsonrpc: '2.0'; id?: number | string | null; result?: unknown; error?: { code?: number; message?: string }; method?: string; }
@@ -318,7 +316,7 @@ export class McpManager {
     const pending = this.starting.get(row.id);
     if (pending) return pending.promise;
     const generation = (this.generations.get(row.id) ?? 0);
-    const connection = this.options.links?.(row) ?? new McpConnection(row, this.store.resourceSecret(row.id), this.options);
+    const connection = new McpConnection(row, this.store.resourceSecret(row.id), this.options);
     const attempt = (async () => {
       try {
         await connection.start();

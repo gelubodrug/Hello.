@@ -469,36 +469,23 @@ export interface HelloAPI {
   /** The DSH surface: dsh's own client, hosted by Hello. Optional for an older preload. */
   dsh?: {
     status(): Promise<DshStatus>;
-    /** Downloads and installs the pinned dsh runtime into the app's data folder. */
+    /** Resolves npm latest and installs the dsh runtime into the app's data folder. */
     install(): Promise<DshStatus>;
-    /** `acceptProfileChange` starts with packages that changed outside Hello. */
-    start(acceptProfileChange?: boolean): Promise<DshStatus>;
+    start(): Promise<DshStatus>;
     stop(): Promise<DshStatus>;
     restart(): Promise<DshStatus>;
-    /** Puts the profile back as a restore point had it, reinstalls, starts again. */
-    restore(checkpointId: string): Promise<DshStatus>;
     /** One-time URL the window may create the surface's page with. */
     attach(): Promise<string>;
     /** The window is dropping the page it created with this nonce. */
     detach(nonce: string): Promise<void>;
     reload(): Promise<void>;
     revealLogs(): Promise<void>;
-    /** Applies on the next start. Optional for an older preload. */
-    setUseHelloModel?(value: boolean): Promise<DshStatus>;
-    /** Whether the plugins' tools are in Hello's library, to switch on per chat. Optional for an older preload. */
-    toolsInLibrary?(): Promise<boolean>;
-    setToolsInLibrary?(value: boolean): Promise<boolean>;
     /** Installs the newer dsh npm offers and runs it. Optional for an older preload. */
     update?(): Promise<DshStatus>;
-    /** Goes back to the dsh this Hello came with. Optional for an older preload. */
-    useBundled?(): Promise<DshStatus>;
     onStatus(listener: (status: DshStatus) => void): () => void;
     /** A web link the surface's page wanted to open. */
     onOpenLink(listener: (url: string) => void): () => void;
   };
-  /** Optional for an older preload. */
-  /** The DSH Community Plugin Market. */
-  market?: MarketApi;
   /** The Pi package market: the same window over Pi packages, installed into Hello's library. Optional for an older preload. */
   piMarket?: MarketApi;
   /** The Pi Hello's chats run on, and its updates. Optional for an older preload. */
@@ -523,21 +510,10 @@ export interface PiEngineStatus {
 }
 
 /** Which market a window shows. */
-export type MarketKind = 'dsh' | 'pi';
-/** One market's handles. Both markets share this shape and the window drawn over it. */
+export type MarketKind = 'pi';
+/** The Pi market's handles. */
 export interface MarketApi {
   sources(): Promise<MarketSource[]>;
-  /** Source list changes; each answers with the list as it now stands. Optional for an older preload. */
-  addSource?(key: string): Promise<MarketSource[]>;
-  /** Main reads and checks the manifest at this URL before adding it. */
-  addStandardSource?(manifestUrl: string): Promise<MarketSource[]>;
-  removeSource?(id: string): Promise<MarketSource[]>;
-  selectSource?(id: string): Promise<MarketSource[]>;
-  /** The person's own order for their list; which source is in use is still `selected`. Optional for an older preload. */
-  moveSource?(id: string, direction: 'up' | 'down'): Promise<MarketSource[]>;
-  /** Reads the selected source's whole catalogue so Hello can count matches and take several categories. Optional for an older preload. */
-  scan?(): Promise<MarketScan>;
-  scanState?(): Promise<MarketScan>;
   query(query: MarketQuery): Promise<MarketPage>;
   /** An item's icon as a data URL, fetched and re-encoded by main; null when there is none. */
   icon(ref: string): Promise<string | null>;
@@ -547,18 +523,14 @@ export interface MarketApi {
   previewUninstall(packageName: string): Promise<MarketPreview>;
   /** Moving an installed package to npm's newest version, from the Installed list. Optional for an older preload. */
   previewUpdate?(packageName: string): Promise<MarketPreview>;
-  /** Main asks for a folder; null when the person cancels. A market without folder installs leaves it out. */
-  previewFolder?(): Promise<MarketPreview | null>;
   confirm(token: string): Promise<MarketResult>;
 }
 
-/** The Community Plugin Market (a port of dsh-community-market), browsing and installing into the DSH profile. */
+/** The Pi package market. */
 export interface MarketSource { id: string; name: string; description: string; homepage: string; endpointHost: string; builtIn: boolean; partner: boolean; selected: boolean; available: boolean; /** In the person's list; a built-in partner is offered to add until then. Absent from an older main: treat as added. */ added?: boolean; attribution: { name: string; url: string; notice: string }; }
 export interface MarketItem { key: string; name: string; summary: string; publisher?: string; categories: string[]; repository: string; installable: boolean; manualCommand?: string; sourceName: string; icon?: string; installs: number; stars: number; updatedAt?: string; }
 export interface MarketPage { items: MarketItem[]; total: number; /** Every entry the source holds, when a filter narrows `total`. */ unfiltered?: number; nextCursor?: string; categories: string[]; generatedAt?: string; }
-export interface MarketQuery { q?: string; category?: string; /** Several at once — an item in any of them. Answered over a scanned catalogue, else page by page. */ categories?: string[]; sort?: 'downloads' | 'updated' | 'name' | 'stars'; cursor?: string; limit?: number; installable?: boolean; reload?: boolean; }
-/** What Hello holds of a source's whole catalogue: nothing until the person asks for it. */
-export interface MarketScan { sourceId: string; scanned: boolean; items: number; pages: number; /** False when a cap or a stop ended the walk before the source did. */ complete: boolean; at?: number; generatedAt?: string; }
+export interface MarketQuery { q?: string; category?: string; /** Several category filters, when supplied by a caller. */ categories?: string[]; sort?: 'downloads' | 'updated' | 'name' | 'stars'; cursor?: string; limit?: number; installable?: boolean; reload?: boolean; }
 export interface MarketInstalledPlugin { packageName: string; version: string; kind: 'plugin' | 'hello' | 'product'; bundle: boolean; /** npm's newest stable version, when it is newer than the one installed. */ latest?: string; }
 export type MarketAction = 'install' | 'uninstall' | 'update';
 export interface MarketPreview { token: string; action: MarketAction; displayName: string; packageName: string; version?: string; /** For an update: the version installed now. */ from?: string; folder?: string; profile: string; expiresAt: number; compatibility: { ok: boolean; reason?: string }; hello?: { ui: boolean; skills: boolean; mcp: boolean; lines: string[] }; }
@@ -566,13 +538,10 @@ export interface MarketResult { action: MarketAction; packageName: string; versi
 
 /** absent: never installed · installing · stopped · starting · running · stopping · failed. */
 export type DshState = 'absent' | 'installing' | 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
-export interface DshCheckpoint { id: string; kind: 'healthy' | 'before'; at: number; label: string; }
 export interface DshStatus {
   state: DshState;
-  /** The dsh version this app runs: the one it came with, or an update chosen since. */
+  /** The installed version, or latest before the first install. */
   version: string;
-  /** The dsh version this app came with. */
-  bundledVersion?: string;
   /** Newer than `version`, when npm has one. */
   latest?: string;
   /** Why the last switch of version failed; gone with the next one. */
@@ -598,13 +567,8 @@ export interface DshStatus {
   startedAt?: number;
   profileDir: string;
   logFile: string;
-  checkpoints: DshCheckpoint[];
-  /** The profile's packages changed outside Hello; a start waits for the person. */
-  profileChange?: { added: string[]; removed: string[]; changed: string[] };
   /** Plugin entries dsh's client could not activate on its last boot. */
   bootFailure?: string[];
-  /** Sessions in the surface use Hello's active connection (through the proxy), not dsh's own providers. */
-  useHelloModel?: boolean;
 }
 
 declare global { interface Window { hello: HelloAPI; } }

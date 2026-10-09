@@ -31,8 +31,6 @@ export interface HostReady {
   port: number;
   /** http://127.0.0.1:<port>/?token=… — for main's login exchange only. */
   url: string;
-  /** The host's tool bridge (tool-bridge.ts), when this start asked for one. */
-  bridgePort?: number;
 }
 
 export interface HostExit {
@@ -150,7 +148,6 @@ export class DshHost {
           resolve({
             port: message.port,
             url: message.url,
-            ...(typeof message.bridgePort === 'number' ? { bridgePort: message.bridgePort } : {}),
           });
         } else if (message.type === 'fatal') {
           this.fatal = redactTokens(typeof message.message === 'string' ? message.message : 'The DSH host failed to start.');
