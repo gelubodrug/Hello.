@@ -263,6 +263,24 @@ describe('what a read lists when a dialog is open, and in what order', () => {
     expect(() => run(locateScript({ ref: 'e9' }))).toThrow(/not from the latest browser_read/);
   });
 
+  // A model that quoted a long card title with its middle left out lost three
+  // rounds to a "not found" that hid what its ref was (user, 09.10).
+  it('takes a long title quoted with its middle left out, by its ref or alone, and says what a ref is when its words are not there', () => {
+    page(`<a id="card" href="/r/qwen/1" data-box="0,0,600,40">Because you joined r/Qwen_AI Introducing Infernix - much faster than Strata on a 5090! 5h ago</a>
+      <a href="/r/other" data-box="0,60,200,20">Something else entirely</a>`);
+    scan();
+    expect(run(locateScript({ ref: 'e1', label: 'Because you joined r/Qwen_AI Introducing Infernix 5h ago' })))
+      .toMatchObject({ what: expect.stringMatching(/^link "Because you joined/) });
+    // Alone too, when one element holds all the words in their order.
+    expect(run(locateScript({ label: 'joined Introducing Infernix' }))).toMatchObject({ what: expect.stringMatching(/^link "Because/) });
+    // Two words are not a quotation: they must stand together on the page.
+    expect(() => run(locateScript({ label: 'Because Infernix' }))).toThrow(/^No visible element shows "Because Infernix". browser_read lists/);
+    // Words that are not on it: the ref is said whole, for the next try to quote from.
+    expect(() => run(locateScript({ ref: 'e1', label: 'Introducing Strata on a 4090' }))).toThrow(
+      'No visible element shows "Introducing Strata on a 4090". Ref e1 is link "Because you joined r/Qwen_AI Introducing Infernix - much faster than Strata on a 5090! 5h ago", not "Introducing Strata on a 4090". Give part of its words exactly as the page shows them.',
+    );
+  });
+
   it('leaves out a background hidden from use while a dialog is open, as Radix does it', () => {
     page(`<div aria-hidden="true"><a href="/projects" data-box="0,140,200,30">Projects</a></div>
       <div role="dialog" data-box="300,100,600,500"><button data-box="310,400,200,30">Billing</button></div>`);

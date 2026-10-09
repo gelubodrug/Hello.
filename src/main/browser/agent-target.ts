@@ -173,9 +173,29 @@ const stateFlags = el => {
 };
 const flagged = flags => flags.length ? ' (' + flags.join(', ') + ')' : '';
 const describe = el => role(el) + ' ' + JSON.stringify(words(el).slice(0, 80));
+// The same, with enough of the words to quote from: an element cut at 80
+// characters reads as a page that cuts its own text, and sends the model
+// looking for a truncation that is not there (user, 09.10).
+const quoted = el => { const all = words(el); return role(el) + ' ' + JSON.stringify(all.slice(0, 200)) + (all.length > 200 ? '…' : ''); };
+// A label of three words or more also names an element whose words hold all of
+// its words in their order, with some left out between: a long title quoted
+// with its middle dropped (user, 09.10: "Because you joined r/Qwen_AI
+// Introducing Infernix 5h ago" for a card that also says what Infernix is).
+const tokens = text => text.toLowerCase().split(' ')
+  .map(word => word.replace(/^[^a-z0-9\\u00c0-\\uffff]+|[^a-z0-9\\u00c0-\\uffff]+$/g, '')).filter(Boolean);
+const inOrder = (have, wanted) => {
+  const want = tokens(wanted);
+  if (want.length < 3) return false;
+  let at = 0;
+  for (const word of tokens(have)) if (word === want[at] && ++at === want.length) return true;
+  return false;
+};
+const shows = (el, wanted) => { const have = words(el).toLowerCase(); return have.includes(wanted) || inOrder(have, wanted); };
 // The refs of the latest browser_read of this page — gone with the page.
 const REFS = '__helloAgentRefs';
 const find = target => {
+  // What the given ref turned out to be, when its words were not the label's.
+  let refSaid = '';
   if (target.ref != null) {
     const match = /^e(\\d{1,4})$/i.exec(fold(target.ref));
     const stored = window[REFS];
@@ -187,9 +207,10 @@ const find = target => {
     const problem = !el ? 'Ref ' + JSON.stringify(target.ref) + ' is not from the latest browser_read of this page. Read the page again and use a current ref.'
       : !el.isConnected || !visible(el) ? 'Ref ' + fold(target.ref) + ' (' + describe(el) + ') is gone or hidden now. Read the page again.'
       : dialog && !dialog.contains(el) ? 'Ref ' + fold(target.ref) + ' (' + describe(el) + ') is behind ' + dialogSaid(dialog) + ', which takes every click now. Close the dialog first (its close button, or browser_press Escape).'
-      : wanted && !words(el).toLowerCase().includes(wanted) ? 'Ref ' + fold(target.ref) + ' is ' + describe(el) + ', not ' + JSON.stringify(target.label) + '.'
+      : wanted && !shows(el, wanted) ? 'Ref ' + fold(target.ref) + ' is ' + quoted(el) + ', not ' + JSON.stringify(target.label) + '.'
       : '';
     if (!problem) return el;
+    if (el && wanted && !shows(el, wanted)) refSaid = problem;
     // A ref that no longer holds, given with the words: the words decide.
     if (target.label == null && target.selector == null) throw new Error(problem);
   }
@@ -201,7 +222,8 @@ const find = target => {
   if (target.label != null) {
     const wanted = fold(target.label).toLowerCase();
     const exact = found.filter(el => words(el).toLowerCase() === wanted);
-    found = exact.length ? exact : found.filter(el => words(el).toLowerCase().includes(wanted));
+    const part = exact.length ? exact : found.filter(el => words(el).toLowerCase().includes(wanted));
+    found = part.length ? part : found.filter(el => inOrder(words(el).toLowerCase(), wanted));
   }
   // "2 visible elements matching "button" show "Enable"" / "2 visible elements match "button"".
   const counted = (count) => count + ' visible ' + (count === 1 ? 'element' : 'elements') + scope + (target.label != null
@@ -214,7 +236,9 @@ const find = target => {
     if (behind.length) throw new Error(describe(behind[0]) + ' is behind ' + dialogSaid(reach.dialog) + ', which takes every click now. Close the dialog first (its close button, or browser_press Escape), then click it.');
   }
   if (!found.length) throw new Error(target.label != null
-    ? 'No visible element' + scope + ' shows ' + JSON.stringify(target.label) + '. browser_read lists the visible controls with their words.'
+    ? 'No visible element' + scope + ' shows ' + JSON.stringify(target.label) + '.' + (refSaid
+      ? ' ' + refSaid + ' Give part of its words exactly as the page shows them.'
+      : ' browser_read lists the visible controls with their words.')
     : 'No visible element matches ' + JSON.stringify(target.selector) + '. browser_read lists the visible controls.');
   if (target.nth != null) {
     if (target.nth >= found.length) throw new Error('nth ' + target.nth + ' is out of range: only ' + counted(found.length) + '.');

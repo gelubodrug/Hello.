@@ -1508,6 +1508,8 @@ export async function executeToolOutput(
             return await browserOperation(signal, () => browser.mark!(conversationId, id, marks, signal));
           } catch (error) {
             if (signal.aborted || !(error instanceof Error) || !/No visible element|is not from the latest|is gone or hidden|, not "/.test(error.message)) throw error;
+            // The element is on this page and only the words were off: the error already says what to quote.
+            if (/Give part of its words/.test(error.message)) throw error;
             throw new Error(`${error.message} This page is ${JSON.stringify(tab.title || tab.url)}. Marks go on the page that shows what they point at: if that is another page, open it (browser_open, or browser_navigate this tab), read it, and mark it there; if no page shows it, say so rather than marking something else.`);
           }
         }
