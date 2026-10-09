@@ -1139,6 +1139,10 @@ export function ConversationView({
   // The model this chat runs on (user, 04.10): the last one used or picked in
   // it, or the selection in Settings for a chat that has none yet.
   const chosen = conversation.model ?? { endpointUrl: settings.endpointUrl, id: settings.model };
+  const chosenModel = catalog.find(connection => endpointIdentity(connection.endpointUrl) === endpointIdentity(chosen.endpointUrl))
+    ?.models.find(model => model.id === chosen.id);
+  const imageWarning = chosenModel?.vision === false && attachments.some(item => item.kind === 'image')
+    ? 'This model is text-only and cannot read images or screenshots. Choose a model with image input.' : null;
   // Its meter reads against that model's window: the one in Settings for the
   // selection, the published one for a model of the chat's own.
   const chosenSettings: AppSettings = endpointIdentity(chosen.endpointUrl) === endpointIdentity(settings.endpointUrl) && chosen.id === settings.model
@@ -1311,6 +1315,7 @@ export function ConversationView({
       )}
       <div className="composer-wrap">
         <ErrorNote error={error} />
+        <ErrorNote error={imageWarning} />
         {extensionUi.above}
         <form
           className="composer"

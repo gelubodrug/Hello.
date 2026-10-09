@@ -70,7 +70,7 @@ export interface SkillUse {
 }
 export interface DiscoveredResources { mcp: DiscoveredMcpServer[]; skills: DiscoveredSkill[]; /** Optional for an older main. */ plugins?: DiscoveredPlugin[]; }
 /** A model the endpoint offers, with the limits it publishes for it. */
-export interface ModelChoice { id: string; contextWindow?: number; maxOutputTokens?: number; /** Costs nothing to ask: on a server of the person's own, or priced at zero by its provider (OpenRouter's `:free`). */ free?: boolean; }
+export interface ModelChoice { id: string; contextWindow?: number; maxOutputTokens?: number; /** From this model's listing; absent means unpublished, not text-only. */ vision?: boolean; /** Costs nothing to ask: on a server of the person's own, or priced at zero by its provider (OpenRouter's `:free`). */ free?: boolean; }
 /** One connection's models for the chat's picker: the one in use (unnamed until kept), a kept one, or a server running on this Mac. A connection that could not answer keeps its place with the reason. */
 export interface ConnectionModels { name: string; endpointUrl: string; active: boolean; models: ModelChoice[]; error?: string; }
 /** A model server found running on this Mac, named after what it is and the port it took. */

@@ -841,6 +841,17 @@ describe('endpoint discovery and legacy-history import helpers', () => {
     expect(await create({ fetch: fetcher }).models()).toEqual([{ id: 'loaded', contextWindow: 8192 }]);
   });
 
+  it('carries each model’s published image capability through the existing catalog', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [
+      { id: 'image', architecture: { input_modalities: ['text', 'image'] } },
+      { id: 'text', type: 'llm', max_context_length: 32768 },
+      { id: 'unknown' },
+    ] })));
+    expect(await create({ fetch: fetcher }).models()).toEqual([
+      { id: 'image', vision: true }, { id: 'text', vision: false, contextWindow: 32768 }, { id: 'unknown' },
+    ]);
+  });
+
   it('settles the stored limits against the provider, once per selection', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       data: [{ id: 'roomy', context_length: 512000, top_provider: { max_completion_tokens: 460800 } }],

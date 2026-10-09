@@ -64,6 +64,7 @@ import { ResourceLibrary } from '../extensions/library';
 import { McpManager, type McpToolHandle } from '../extensions/mcp';
 import { WebResearch } from './web-tools';
 import { ChatAttachments, type AttachmentContext } from './attachments';
+import { modelVision } from './model-vision';
 
 type WireMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -154,6 +155,7 @@ interface ResourceSnapshot {
 /** What a Pi session is asked for with: a reply, or a summary the person asked for. */
 type SessionRequest = Pick<Run, 'conversationId' | 'key' | 'controller' | 'isRetry' | 'message'>;
 interface PiSession {
+  vision?: boolean;
   fingerprint: string;
   rpc: PiRpcProcess;
   bridge: PiToolBridge;
@@ -792,7 +794,8 @@ export class ChatService {
         // model at "0" for both prompt and completion.
         const pricing = record(model?.pricing);
         const free = id.endsWith(':free') || (zero(pricing?.prompt) && zero(pricing?.completion));
-        listed.set(id, { id, ...(context ? { contextWindow: context } : {}), ...(output ? { maxOutputTokens: output } : {}), ...(free ? { free } : {}) });
+        const vision = modelVision(model);
+        listed.set(id, { id, ...(context ? { contextWindow: context } : {}), ...(output ? { maxOutputTokens: output } : {}), ...(vision === undefined ? {} : { vision }), ...(free ? { free } : {}) });
       }
       return [...listed.values()].sort((left, right) => left.id.localeCompare(right.id, 'en'));
     } catch (error) {
@@ -1560,7 +1563,9 @@ export class ChatService {
     // unreadable listing proves nothing, so the setting stands.
     const { subagentModel: _unlisted, ...unlisted } = limited;
     const settings = subagent === null ? unlisted : limited;
-    const subagentLimits = subagent ? { contextWindow: subagent.contextWindow, maxOutputTokens: subagent.maxOutputTokens } : undefined;
+    const subagentLimits = subagent ? { contextWindow: subagent.contextWindow, maxOutputTokens: subagent.maxOutputTokens, vision: subagent.vision } : undefined;
+    const models = await this.listed(settings.endpointUrl).catch(() => this.listings.get(normalizeEndpoint(settings.endpointUrl))?.listed ?? []);
+    const vision = models.find(model => model.id === settings.model)?.vision;
     run.controller.signal.throwIfAborted();
     const conversation = this.store.getConversation(run.conversationId);
     const resources = await this.resourcesFor(run.conversationId, run.controller.signal);
@@ -1571,7 +1576,7 @@ export class ChatService {
     // temperature and reasoningEffort stay: the launch config carries both.
     const { appearance: _a, approvals: _p, connections: _c, apiKeySet: _k, limitsFor: _l, ...launched } = settings;
     const fingerprint = createHash('sha256').update(JSON.stringify({
-      settings: launched, subagentLimits, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
+      settings: launched, vision, subagentLimits, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
       // The instructions name the notebook sections that are on: a switched
       // section starts the next turn in a session whose instructions say so.
       sections: { plan: conversation.planning === true, runbook: conversation.runbook === true, tasks: conversation.tasks === true },
@@ -1645,7 +1650,7 @@ export class ChatService {
         chatMode: conversation.chatMode ?? 'chat', history: wireHistory(history),
         bridgeEnv: bridge.env, requestTimeoutMs: this.requestTimeoutMs,
         skillPaths: resources.skillPaths, extensionPaths: resources.extensionPaths, promptPaths: resources.promptPaths,
-        folder: conversation.folder, subagentLimits,
+        folder: conversation.folder, vision, subagentLimits,
         ...(this.piEntry ? { piEntry: this.piEntry() } : {}),
       });
       run.controller.signal.throwIfAborted();
@@ -1680,7 +1685,7 @@ export class ChatService {
             safeError(exit.error || exit.stderr || 'The Pi chat process stopped unexpectedly.', active.key)));
         },
       });
-      const session: PiSession = { fingerprint, rpc, bridge, resources, lastUsed: Date.now() };
+      const session: PiSession = { fingerprint, vision, rpc, bridge, resources, lastUsed: Date.now() };
       this.sessions.set(run.conversationId, session);
       await rpc.start();
       started = true;
@@ -1936,6 +1941,8 @@ export class ChatService {
       this.publish(run, true);
       const started = Date.now();
       try {
+        if (name === 'browser_screenshot' && this.sessions.get(conversationId)?.vision === false)
+          throw new Error('This model is text-only and cannot read screenshots. Use browser_read or ask the person to choose a model with image input.');
         let notedDomains = this.notedDomains.get(conversationId);
         if (!notedDomains) this.notedDomains.set(conversationId, (notedDomains = new Set<string>()));
         const output = await executeToolOutput(name, args, {
@@ -2029,6 +2036,8 @@ export class ChatService {
       run.controller.signal.throwIfAborted();
       session = await this.sessionFor(run, settings);
       run.controller.signal.throwIfAborted();
+      if (session.vision === false && run.attachments?.images.length)
+        throw new Error('This model is text-only and cannot read images or screenshots. Choose a model with image input, then retry.');
       const mapper = new PiEventMapper(run.message);
       // A plugin's slash command, when this prompt is one: what it posts is its reply.
       let command: string | undefined;

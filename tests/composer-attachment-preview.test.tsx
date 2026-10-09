@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   retry: vi.fn(),
   approve: vi.fn(),
   models: vi.fn(),
+  catalog: vi.fn(),
   settingsSave: vi.fn(),
   settingsRemember: vi.fn(),
   settingsUse: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock("../src/renderer/api", () => ({
       onEvent: vi.fn(() => () => {}),
     },
     settings: {
+      catalog: mocks.catalog,
       models: mocks.models,
       save: mocks.settingsSave,
       rememberConnection: mocks.settingsRemember,
@@ -126,6 +128,7 @@ beforeEach(() => {
   mocks.notebookList.mockResolvedValue([]);
   mocks.notebookOnChange.mockImplementation(() => () => {});
   mocks.models.mockResolvedValue([{ id: "test-model" }]);
+  mocks.catalog.mockResolvedValue([{ endpointUrl: settings.endpointUrl, models: [{ id: settings.model }] }]);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -137,6 +140,11 @@ afterEach(async () => {
 });
 
 describe("composer attachment preview", () => {
+  it('warns about pictures and screenshots for a listed text-only model', async () => {
+    mocks.catalog.mockResolvedValue([{ endpointUrl: settings.endpointUrl, models: [{ id: settings.model, vision: false }] }]);
+    await render([picture]);
+    expect(host.textContent).toContain('This model is text-only and cannot read images or screenshots.');
+  });
   it("double-clicking an image chip opens its picture in a dialog; Escape closes it", async () => {
     await render([picture, notes]);
     await dblclick(chip(picture.name));

@@ -115,8 +115,10 @@ export interface PiLaunchConfiguration {
   promptPaths?: string[];
   /** The Pi to start: an update installed from the sidebar. Absent, the bundled one. */
   piEntry?: string;
+  /** Published image-input capability of the selected model. */
+  vision?: boolean;
   /** What the provider publishes for settings.subagentModel, when it is listed. */
-  subagentLimits?: { contextWindow?: number; maxOutputTokens?: number };
+  subagentLimits?: { contextWindow?: number; maxOutputTokens?: number; vision?: boolean };
 }
 
 /** Isolated resources and credentials; no global Pi config or project discovery. */
@@ -177,10 +179,9 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
       ...(qwen ? { thinkingFormat: 'qwen-chat-template' } : {}),
     };
   };
-  // This custom endpoint descriptor must preserve submitted image blocks.
-  // The selected endpoint/model still decides whether vision is supported;
-  // declaring text-only here would silently discard user attachments in Pi.
-  const describe = (id: string, limits = { contextWindow, maxTokens }) => ({ id, name: id, input: ['text', 'image'],
+  // Unpublished capability keeps the previous behavior; explicit text-only
+  // metadata must not advertise images to Pi or a plugin's subagent.
+  const describe = (id: string, limits: { contextWindow: number; maxTokens: number }, vision?: boolean) => ({ id, name: id, input: vision === false ? ['text'] : ['text', 'image'],
     reasoning: effort !== 'off' || qwenFor(id) || deepseek, ...limits, compat: compatFor(id),
     // Keep the configured temperature except families that reject it.
     ...(/^(?:o[134](?:-|$)|gpt-5)/i.test(id) ? {} : {
@@ -203,7 +204,7 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
     options.subagentLimits?.maxOutputTokens ?? settings.maxOutputTokens ?? 4096, subagentWindow - 8192)) };
   const models = { providers: { hello: {
     baseUrl, api: 'openai-completions', apiKey: '$HELLO_PI_API_KEY',
-    models: [describe(settings.model), ...(subagentModel ? [describe(subagentModel, subagentLimits)] : [])],
+    models: [describe(settings.model, { contextWindow, maxTokens }, options.vision), ...(subagentModel ? [describe(subagentModel, subagentLimits, options.subagentLimits?.vision)] : [])],
   } } };
   const piSettings = {
     defaultProvider: 'hello', defaultModel: settings.model, defaultThinkingLevel: effort,
