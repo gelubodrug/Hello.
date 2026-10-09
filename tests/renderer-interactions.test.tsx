@@ -194,7 +194,6 @@ const view = (messages: Message[] = []) =>
     quote: null,
     onQuoteConsumed: vi.fn(),
     reportError: onError,
-    onEditMessage: vi.fn(),
   });
 
 beforeEach(() => {
@@ -904,17 +903,17 @@ describe("attaching by paste and by the picker", () => {
   });
 });
 
-// Second review (05.10): Edit left focus on a button that had just gone.
-describe("editing your message", () => {
+describe("reusing your message honestly", () => {
   const mine: Message = { id: "mine", conversationId: conversation.id, role: "user", content: "Fix the bug", status: "complete", createdAt: 1 };
-  it("puts the caret at the end of the words, and gives focus back to the message after", async () => {
+  it("offers Use as draft without pretending to edit saved/model history", async () => {
     await render(view([mine]));
-    await click(button("Edit"));
-    const area = document.querySelector<HTMLTextAreaElement>('[aria-label="Edit your message"]')!;
-    expect(document.activeElement).toBe(area);
-    expect(area.selectionStart).toBe("Fix the bug".length);
-    await act(async () => { area.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    expect(document.activeElement).toBe(host.querySelector(".message-user"));
+    expect([...host.querySelectorAll('button')].some(item => item.textContent === 'Edit')).toBe(false);
+    await click(button('Use as draft'));
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('Fix the bug');
+    expect(host.querySelector('.user-bubble')?.textContent).toBe('Fix the bug');
+    expect(mocks.send).not.toHaveBeenCalled();
+    await act(async () => { host.querySelector('.user-bubble')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 })); });
+    expect([...document.querySelectorAll('[role="menuitem"]')].some(item => item.textContent?.includes('Edit message'))).toBe(false);
   });
 });
 
@@ -1582,13 +1581,13 @@ describe("a restarted chat", () => {
 
   it("draws the line before the first message since the restart, and after the last when nothing came since", async () => {
     await render(createElement(ConversationView, { ...view().props, conversation: { ...conversation, freshFrom: 100 },
-      messages: [said("a", 10), said("b", 20, "assistant"), said("c", 150)], onEditMessage: vi.fn() }));
+      messages: [said("a", 10), said("b", 20, "assistant"), said("c", 150)] }));
     const marker = line();
     expect(marker?.textContent).toBe("Restarted — the model starts fresh from here");
     expect(marker?.previousElementSibling?.textContent).toContain("said b");
     expect(marker?.nextElementSibling?.textContent).toContain("said c");
     await render(createElement(ConversationView, { ...view().props, conversation: { ...conversation, freshFrom: 100 },
-      messages: [said("a", 10), said("b", 20, "assistant")], onEditMessage: vi.fn() }));
+      messages: [said("a", 10), said("b", 20, "assistant")] }));
     expect(line()?.previousElementSibling?.textContent).toContain("said b");
     expect(line()?.nextElementSibling).toBeNull();
     // The answer above the line cannot be retried: the model has forgotten it.

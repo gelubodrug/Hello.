@@ -501,18 +501,6 @@ function Application() {
       ),
     [],
   );
-  const handleEditMessage = useCallback((conversationId: string, messageId: string, text: string) => {
-    setMessages((current) => {
-      const messages = current[conversationId];
-      if (!messages) return current;
-      return {
-        ...current,
-        [conversationId]: messages.map((msg) =>
-          msg.id === messageId ? { ...msg, content: text } : msg,
-        ),
-      };
-    });
-  }, []);
   const updateUI = (id: string, patch: WorkspaceUpdate, motion?: "instant" | "animate") =>
     request((current) => {
       const previous = {
@@ -1271,7 +1259,6 @@ function Application() {
                       : current,
                   )
                 }
-                onEditMessage={(id, text) => handleEditMessage(conversation.id, id, text)}
                 quote={quotes[conversation.id] ?? null}
                 onQuote={(text, extra) => {
                   setQuotes((current) => ({

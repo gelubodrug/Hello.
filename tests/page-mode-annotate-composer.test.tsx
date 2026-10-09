@@ -85,7 +85,7 @@ const view = (quote: ChatQuote | null, onQuoteConsumed = vi.fn()) =>
   createElement(ConversationView, {
     conversation, settings, messages: [], workers: [],
     onSettingsChange: vi.fn(), onFolderChange: vi.fn(), onTerminal: vi.fn(), onWorker: vi.fn(),
-    quote, onQuoteConsumed, reportError: vi.fn(), onEditMessage: vi.fn(),
+    quote, onQuoteConsumed, reportError: vi.fn(),
   });
 const attachmentNames = () => [...document.querySelectorAll('.composer-attachments button[aria-label^="Remove attachment "]')]
   .map(item => item.getAttribute("aria-label")!.replace("Remove attachment ", ""));

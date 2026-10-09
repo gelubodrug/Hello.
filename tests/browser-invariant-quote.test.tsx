@@ -177,7 +177,6 @@ const view = (messages: Message[] = []) =>
     quote: null,
     onQuoteConsumed: vi.fn(),
     reportError: onError,
-    onEditMessage: vi.fn(),
   });
 
 beforeEach(() => {
@@ -257,7 +256,6 @@ const withQuote = (quote: ChatQuote | null, onQuoteConsumed = vi.fn()) =>
     quote,
     onQuoteConsumed,
     reportError: onError,
-    onEditMessage: vi.fn(),
   });
 /** What BrowserPane's "Add page to chat" hands App, and App hands the view: `{ ...undefined, text }`. */
 const pageQuote = (text: string): ChatQuote => ({ ...(undefined as ChatQuoteExtra | undefined), text });

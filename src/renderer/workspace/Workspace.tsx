@@ -133,7 +133,6 @@ export interface WorkspaceProps {
   onLaunch: (kind: "browser" | "terminal", workerId?: WorkerId) => void;
   onCloseTool: (tool: BrowserTab | TerminalSession) => void;
   onBrowserChange: (tab: BrowserTab) => void;
-  onEditMessage: (id: string, text: string) => void;
   /** A search result chosen in the sidebar, for this chat's find. */
   jump?: FindJump | null;
   quote: ChatQuote | null;
@@ -571,7 +570,6 @@ export function Workspace(props: WorkspaceProps) {
                   quote={props.quote}
                   onQuoteConsumed={props.onQuoteConsumed}
                   reportError={props.reportError}
-                  onEditMessage={props.onEditMessage}
                   active={active && shownPage === "chat"}
                   jump={props.jump}
                 />

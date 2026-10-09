@@ -430,7 +430,6 @@ function MessageRow({
   onRetry,
   onReuse,
   onAttachSelection,
-  onEditMessage,
   sources,
 }: {
   message: Message;
@@ -439,35 +438,17 @@ function MessageRow({
   onRetry: () => void;
   onReuse: () => void;
   onAttachSelection: (text: string) => void;
-  onEditMessage: (id: string, text: string) => void;
   sources: readonly WebSource[];
 }) {
   const [copied, setCopied] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [kept, setKept] = useState<"saving" | "saved" | null>(null);
-  const [editingMessage, setEditingMessage] = useState(false);
-  const [editDraft, setEditDraft] = useState("");
-  const editLock = useRef(false);
-  const field = useRef<HTMLTextAreaElement>(null);
   const article = useRef<HTMLElement>(null);
   // Copying and keeping are a round trip to main: past a second, the button
   // says it is under way rather than looking dead (second review, 05.10).
   const copyingSlow = useElapsed(copying) >= 1000;
   const keepingSlow = useElapsed(kept === "saving") >= 1000;
-  // Edit puts the caret at the end of the words, and leaving the edit gives
-  // focus back to the message, not to the page.
-  const wasEditing = useRef(false);
-  useLayoutEffect(() => {
-    if (editingMessage) {
-      const node = field.current;
-      node?.focus({ preventScroll: true });
-      node?.setSelectionRange(node.value.length, node.value.length);
-    } else if (wasEditing.current && (!document.activeElement || document.activeElement === document.body)) {
-      article.current?.focus({ preventScroll: true });
-    }
-    wasEditing.current = editingMessage;
-  }, [editingMessage]);
   const [context, setContext] = useState<({ position: { x: number; y: number } } & ReturnType<typeof chatCopySnapshot>) | null>(null);
   const copyPayload = async (payload: { text: string; html?: string }) => {
     setCopying(true);
@@ -504,13 +485,6 @@ function MessageRow({
     const timer = setTimeout(() => setKept(null), 1800);
     return () => clearTimeout(timer);
   }, [kept]);
-  const saveEdit = () => {
-    if (!editDraft.trim() || editLock.current) return;
-    editLock.current = true;
-    onEditMessage(message.id, editDraft.trim());
-    setEditingMessage(false);
-    editLock.current = false;
-  };
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1800);
@@ -569,34 +543,7 @@ function MessageRow({
       )}
       {message.role === "user" ? (
         <>
-          {editingMessage ? (
-            <div className="user-bubble user-bubble--editing">
-              <textarea
-                ref={field}
-                className="message-edit-textarea"
-                aria-label="Edit your message"
-                value={editDraft}
-                rows={2}
-                onChange={(event) => setEditDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    setEditingMessage(false);
-                  }
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    void saveEdit();
-                  }
-                }}
-              />
-              <div className="message-edit-actions">
-                <button className="pill primary-button" disabled={!editDraft.trim()} onClick={() => void saveEdit()}>Save</button>
-                <button className="pill" onClick={() => setEditingMessage(false)}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <div className="user-bubble">{message.content}</div>
-          )}
+          <div className="user-bubble">{message.content}</div>
           <div className="message-actions user-message-actions">
             <IconButton
               label={copied ? "Message copied" : "Copy your message"}
@@ -607,12 +554,6 @@ function MessageRow({
             </IconButton>
             <button className="text-button" onClick={onReuse}>
               Use as draft
-            </button>
-            <button className="text-button" onClick={() => {
-              setEditingMessage(true);
-              setEditDraft(message.content);
-            }}>
-              Edit
             </button>
           </div>
         </>
@@ -673,8 +614,6 @@ function MessageRow({
           { id: 'copy-markdown', label: 'Copy message as Markdown', action: () => void copyPayload(context.markdown) },
           { id: 'attach-selection', label: 'Attach selection as context', separator: true, disabled: !context.selection.text,
             action: () => onAttachSelection(context.selection.text) },
-          { id: 'edit-message', label: 'Edit message', separator: true, disabled: message.role !== 'user',
-            action: () => { setContext(null); setEditingMessage(true); setEditDraft(message.content); } },
         ] : []}
         onClose={reason => {
           // Back to the message the menu was opened on, with the words selected
@@ -706,7 +645,6 @@ export function ConversationView({
   quote,
   onQuoteConsumed,
   reportError,
-  onEditMessage,
   active = true,
   jump = null,
 }: {
@@ -721,7 +659,8 @@ export function ConversationView({
   quote: ChatQuote | null;
   onQuoteConsumed: () => void;
   reportError: (error: unknown) => void;
-  onEditMessage: (id: string, text: string) => void;
+  /** Legacy callers may still pass this; transcript editing is no longer offered or invoked. */
+  onEditMessage?: (id: string, text: string) => void;
   /** Whether this chat is the one on screen: its shortcuts are live only then. */
   active?: boolean;
   /** A search result chosen in the sidebar, to open this chat's find on. */
@@ -1280,9 +1219,6 @@ export function ConversationView({
                       : message.content,
                   );
                   field.current?.focus();
-                }}
-                onEditMessage={(id, text) => {
-                  onEditMessage(id, text);
                 }}
                 onAttachSelection={text => {
                   const quoted = text.split('\n').map(line => `> ${line}`).join('\n');

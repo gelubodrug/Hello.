@@ -47,7 +47,7 @@ function Harness() {
   return createElement(Workspace, {
     active: true, conversation, messages: [], ui: prefs, settings: {} as AppSettings, workers: [], terminals, browsers: [],
     sidebarVisible: true, compact: false, onUI, onSettingsChange: vi.fn(), onConversationChange: vi.fn(), onLaunch: vi.fn(),
-    onCloseTool, onBrowserChange: vi.fn(), onEditMessage: vi.fn(), quote: null, onQuote: vi.fn(), onQuoteConsumed: vi.fn(), reportError: vi.fn(),
+    onCloseTool, onBrowserChange: vi.fn(), quote: null, onQuote: vi.fn(), onQuoteConsumed: vi.fn(), reportError: vi.fn(),
   });
 }
 
