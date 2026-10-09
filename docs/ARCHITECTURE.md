@@ -310,6 +310,20 @@ person answers questions there. Settings' model for subagents is written into
 the chat's private Pi folder as a second model of the same provider and as
 pi-subagents' `subagents.defaultModel`.
 
+What that UI cannot carry is Pi's own, not Hello's: Pi's RPC extension-UI
+context (`createExtensionUIContext` in `pi-coding-agent`'s bundle) emits an
+`extension_ui_request` for `select`, `confirm`, `input`, `editor`, `notify`,
+`setStatus`, `setWidget`, `setTitle` and `set_editor_text`, and discards
+everything that would draw a component: `custom()` is `async custom(){}` — it
+resolves `undefined` without sending anything — and so are `setFooter`,
+`setHeader`, `setEditorComponent`, `onTerminalInput`, `setWorkingMessage` and
+`setHiddenThinkingLabel`. This is why a pi-subagents question whose answer leads
+to another screen (Change model, thinking) closes and goes no further: the
+plugin's next call is `ui.custom()`, Pi sends nothing over RPC, the plugin's
+await resolves with nothing and it drops the flow. Hello never receives a
+request it could answer or report, so there is nothing here to repair; it needs
+Pi to send those screens (or the plugin to fall back to `select`).
+
 Stopping a chat's Pi aborts the reply in progress, ends its input and waits up
 to 1.5 s: that is Pi's own shutdown, which runs extensions' `session_shutdown`
 handlers (a memory plugin's final commit) before it exits. SIGTERM, then SIGKILL, follow only for a Pi that
@@ -426,6 +440,20 @@ guards to prevent late publication. `html-input.ts` converts bounded UTF-8 HTML
 data URLs at the tool boundary for compatibility; native navigation still rejects
 `data:` and `file:`. Tool results report `contentVerified: false`: a loaded tab
 is not evidence of a correct visualization.
+
+Both preview servers answer on `127.0.0.1`, which Chromium treats as a secure
+origin, so a page in a Hello tab has what a secure context gets — `navigator.gpu`
+among it. A generated document can therefore compute in the tab: local
+embeddings, a similarity search over text the person gave the model, work that
+would otherwise need a server. Hello pins a guest's preferences
+(`browser/manager.ts`) and none of them turns the GPU off; `navigator.gpu` is
+still absent on a Mac whose Chromium has no adapter, so the browser manual
+(`chat/pi-instructions.ts`) tells the model to feature-detect it and keep a CPU
+path. Neither server sends `Cross-Origin-Opener-Policy` or
+`Cross-Origin-Embedder-Policy`, so a preview is not cross-origin isolated and
+`SharedArrayBuffer` is unavailable: a wasm runtime in a tab runs
+single-threaded. `require-corp` would buy those threads by breaking every
+cross-origin subresource a page legitimately loads, which is the worse trade.
 
 ## The two design audits (04.10)
 
@@ -809,7 +837,13 @@ Installed list updates and removes what it installed.
   module loader through a native addon that recognises only exact Electron
   builds, is replaced by Hello's shim (`assets/dsh/shims/`), which answers the same
   calls through `--expose-internals` (the spike that found it is archived:
-  [`DSH-SPIKE-2026-09-28.md`](archive/DSH-SPIKE-2026-09-28.md)).
+  [`DSH-SPIKE-2026-09-28.md`](archive/DSH-SPIKE-2026-09-28.md)). One family is
+  left out (`ignoredOptionalDependencies`, `dsh/runtime.ts`): the prebuilt
+  LibreOffice that `@deepseek-ai/libreoffice-kit` ships per platform, 148 MB of
+  a 492 MB install for converting and previewing Office documents inside the
+  DSH surface, which Hello routes nothing to. The entry package stays, so the
+  plugins that import it still load and only a conversion fails, with dsh's own
+  message; a name removed from that list brings the engine back.
   The install panel is live: counters against pnpm's `Packages: +N`, elapsed time,
   pnpm's latest line in plain words (a retry, a slow download, a build) and, past
   twenty seconds of silence, how long it has been quiet. Every pnpm run is taken
@@ -829,6 +863,14 @@ Installed list updates and removes what it installed.
   dark, as Hello's window is; dsh's Settings › Appearance changes it in the
   profile's own layer. Hello's overlay never sets it: dsh refuses a Settings change
   that an overlay would override.
+- **Budget.** The host is a second harness inside a chat app, so it runs with a
+  V8 heap ceiling given to the process at start (`--max-old-space-size`, 1 GB:
+  `dsh/budget.ts`), and Hello samples what it really uses from Electron's own
+  process metrics every ten seconds. Past 1 GB resident or 150% of a core for
+  thirty seconds — long enough that a boot or an install is not it — the DSH log
+  says so, once, and again when it comes back under. Nothing is killed: a
+  surface the person is working in is not closed behind their back, and the log
+  is where the host's account of itself already is.
 - **Surface.** One guest, positioned like a browser tab's page over the DSH view,
   parked while the view is closed, never reparented or reloaded for chrome. It stays
   on the host's origin; web links open in a browser tab of the chat on screen.
@@ -849,8 +891,17 @@ Installed list updates and removes what it installed.
   package the person typed in Settings. Hello adds a compatibility gate: a package
   whose dsh peers exclude the pinned dsh is not installed. Sources: DSH 1024Store
   (the default), dshfind, and standard sources added by manifest URL; one is in
-  use at a time, kept in `<data>/dsh/market-sources.json`. A standard source's
+  use at a time, kept in `<data>/dsh/market-sources.json` in the order the person
+  puts it in (Move up/down; which source is used is still the selected one, not
+  the first). A standard source's
   paging cursor stays in main, behind a token bound to that source and search.
+  A source's own search is one page and one category at a time, so the person
+  can have Hello read a catalogue through once — the same pages and cursors,
+  bounded at 600 pages and 20,000 entries, a repeated cursor ending the walk
+  (`market/scan.ts`). Every search of that source is then answered from what
+  came back: exact counts, and any number of categories at once (an item in any
+  of them). Refresh drops it and reads the source again. Without a scan, one
+  category still goes to the source and several are narrowed page by page.
 - **Skills and tools in Hello chats.** The skills of installed dsh plugins appear
   in Extensions › Found on this Mac, to import like any skill. Their tools cross
   through the tool bridge (`dsh/tool-bridge.ts`), which the host entry starts next
@@ -862,6 +913,41 @@ Installed list updates and removes what it installed.
   spawning a server. It is off in every chat until turned on there, starts a
   stopped surface when a chat needs it, never installs one, and lists again after
   a host restart.
+- **Upgrading dsh.** `DSH_VERSION` (`dsh/layout.ts`) is the version this build
+  comes with; the person can run a newer one from the sidebar, kept in
+  `<data>/dsh/version.json`, and `selectedVersion()` — never `DSH_VERSION` — is
+  what the running app judges by. Moving the pin means re-checking, in this
+  order, everything that was measured against the old line:
+  1. `DSH_ALLOWED_BUILDS` (`dsh/layout.ts`): pnpm 11 refuses an install whose
+     dependencies ask for install scripts it was not told about, so the list has
+     to name every one in the new tree. Read it off an installed runtime — every
+     `preinstall`/`install`/`postinstall` in `<data>/dsh/runtime/node_modules` —
+     not off a changelog.
+  2. The `node-addon-require-builtin` shim (`assets/dsh/shims/`): its version
+     must still satisfy the range the new dsh asks for, and its API must still
+     answer what `@deepseek-ai/cordis-plugin-loader` calls.
+  3. `DSH_PRODUCT_TOOLS` (`dsh/tool-bridge.ts`): which tools the new dsh
+     registers in the global view. This one is a runtime measurement — start the
+     surface on a profile with no plugins and list `GET /tools`.
+  4. `assets/dsh/hello-dsh/official-tokens.json` and the Hello theme:
+     `scripts/dsh-theme.mjs --check` fails when the new dsh has a `--dsw-*`
+     token with no Hello value.
+  5. The market's compatibility gate: a plugin is accepted when its
+     `@deepseek-ai/dsh*` peer ranges and its declared `dsh.compatibility.dsh`
+     include the running version (`market/install.ts`, `market.test.ts`). A
+     plugin pinned to the old line is refused on the new one, which is the point.
+  6. The patch layer (`hello.patch.yml`) and the profile template name.
+  7. The host's budget (`dsh/budget.ts`): what a profile loads at boot is dsh's
+     business, so the numbers Hello is willing to spend on it are re-measured
+     with the surface open and idle.
+
+  Checked against **dsh 0.2.0-rc.2**, installed through the sidebar: steps 1 and
+  2 pass unchanged — the five install-script packages in its tree are exactly the
+  five `DSH_ALLOWED_BUILDS` names (`node-pty`,
+  `@deepseek-ai/dsh-subprocess-local`, `koffi`, `protobufjs`, `@google/genai`),
+  and it still asks for `node-addon-require-builtin@^0.1.6`, which the shim's
+  `0.1.6-hello.0` satisfies. Steps 3–6 are unverified here: 3 needs the surface
+  running, and the pin itself waits on a stable 0.2.x being published.
 
 ## Validation boundary
 

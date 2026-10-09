@@ -1,6 +1,6 @@
 import { dialog, ipcMain, type BrowserWindow } from 'electron';
 import type { InstalledPlugin, OperationPreview, OperationResult } from './install';
-import type { MarketPageView, MarketSourceView } from './service';
+import type { MarketPageView, MarketScanView, MarketSourceView } from './service';
 import type { CatalogQuery } from './store1024';
 
 const SORTS = new Set(['downloads', 'updated', 'name', 'stars']);
@@ -12,6 +12,10 @@ export interface MarketBackend {
   addStandardSource?(manifestUrl: string): Promise<MarketSourceView[]>;
   removeSource?(id: string): MarketSourceView[];
   selectSource?(id: string): MarketSourceView[];
+  moveSource?(id: string, direction: 'up' | 'down'): MarketSourceView[];
+  /** Reading the selected source's whole catalogue, and what is held of it. */
+  scan?(): Promise<MarketScanView>;
+  scanState?(): MarketScanView;
   query(query: CatalogQuery & { reload?: boolean }): Promise<MarketPageView>;
   icon(ref: string): Promise<string | null>;
   installed(): InstalledPlugin[] | Promise<InstalledPlugin[]>;
@@ -39,13 +43,23 @@ export function registerMarketIPC(window: BrowserWindow, market: MarketBackend, 
     registered.push(channel);
   };
   const text = (value: unknown, limit: number) => typeof value === 'string' && value.length <= limit ? value : undefined;
+  /** Several categories, as the window's pills send them: at most sixteen names. */
+  const categories = (value: unknown) => (Array.isArray(value) ? value : [])
+    .filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 80)
+    .slice(0, 16);
   handle('sources', () => market.sources());
   const sourceId = (value: unknown) => { if (typeof value !== 'string' || !/^[\w-]{1,80}$/.test(value)) throw new Error('Invalid source.'); return value; };
-  const { addSource, addStandardSource, removeSource, selectSource, previewUpdate, previewFolder } = market;
+  const { addSource, addStandardSource, removeSource, selectSource, moveSource, scan, scanState, previewUpdate, previewFolder } = market;
   if (addSource) handle('addSource', key => addSource.call(market, sourceId(key)));
   if (addStandardSource) handle('addStandardSource', url => { if (typeof url !== 'string' || !url.trim() || url.length > 2048) throw new Error('Enter the source manifest URL.'); return addStandardSource.call(market, url); });
   if (removeSource) handle('removeSource', id => removeSource.call(market, sourceId(id)));
   if (selectSource) handle('selectSource', id => selectSource.call(market, sourceId(id)));
+  if (moveSource) handle('moveSource', (id, direction) => {
+    if (direction !== 'up' && direction !== 'down') throw new Error('Invalid direction.');
+    return moveSource.call(market, sourceId(id), direction);
+  });
+  if (scan) handle('scan', () => scan.call(market));
+  if (scanState) handle('scanState', () => scanState.call(market));
   handle('query', (raw: unknown) => {
     const query = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
     const sort = text(query.sort, 20);
@@ -53,6 +67,7 @@ export function registerMarketIPC(window: BrowserWindow, market: MarketBackend, 
     return market.query({
       ...(text(query.q, 200)?.trim() ? { q: text(query.q, 200)!.trim() } : {}),
       ...(text(query.category, 80) ? { category: text(query.category, 80) } : {}),
+      ...(categories(query.categories).length ? { categories: categories(query.categories) } : {}),
       ...(sort && SORTS.has(sort) ? { sort: sort as 'downloads' } : {}),
       ...(text(query.cursor, 40) ? { cursor: text(query.cursor, 40) } : {}),
       ...(limit ? { limit } : {}),

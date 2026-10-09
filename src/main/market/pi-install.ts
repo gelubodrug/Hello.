@@ -20,8 +20,14 @@ import { MarketInstallError, NPM_REGISTRY_ORIGIN, outOfSpace, safePackageName, s
 import { pnpmFailure, runPnpm, type PnpmInvocation } from '../dsh/pnpm';
 import { INSTALLED_LIMITS } from '../extensions/library';
 
-/** The Pi Hello runs, and the modules it hands every extension (bundle.ts keeps them out of bundles). */
-export const PI_VERSION = '0.87.1';
+/**
+ * The Pi Hello runs, and the modules it hands every extension (bundle.ts keeps
+ * them out of bundles). This is what an extension's peer range is judged
+ * against, so it has to be the Pi actually in node_modules: it is Hello's own
+ * `@earendil-works/pi-coding-agent` dependency, and market-pi.test.ts reads
+ * package.json to refuse any drift from it.
+ */
+export const PI_VERSION = '1.0.4';
 const TYPEBOX_VERSION = '1.3.27';
 export const PI_PROVIDED: Readonly<Record<string, string>> = Object.fromEntries([
   ...['pi-coding-agent', 'pi-agent-core', 'pi-ai', 'pi-tui'].flatMap(name => [[`@earendil-works/${name}`, PI_VERSION], [`@mariozechner/${name}`, PI_VERSION]]),

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { preparePiLaunch } from '../src/main/chat/pi-session';
+import { reasoningReach } from '../src/shared/reasoning';
 import type { AppSettings } from '../src/shared/types';
 
 const dirs: string[] = [];
@@ -149,5 +150,53 @@ describe('how thinking is switched for the model', () => {
     expect(await compat('https://api.example.test/v1', 'qwen3-27b')).toEqual({ reasoning: false, thinkingFormat: undefined });
     expect(await compat('http://127.0.0.1:18090/v1', 'qwen3-27b', 'openai')).toEqual({ reasoning: false, thinkingFormat: undefined });
     expect(await compat('https://api.example.test/v1', 'any-model', 'qwen-chat-template')).toEqual({ reasoning: true, thinkingFormat: 'qwen-chat-template' });
+  });
+});
+
+/**
+ * Low/Medium/High reached MTPLX and Kimi's endpoint only as "thinking on", and
+ * Settings said nothing about it. Pi sends the level only where the launch
+ * config declares supportsReasoningEffort, or where the provider's own thinking
+ * format carries it (OpenRouter's `reasoning: { effort }`); with neither, the
+ * request has no reasoning field at all, while `reasoning: true` still makes
+ * the chat look as if thinking were on. reasoningReach() is what Settings shows
+ * under the control, so it has to say exactly what the launch config does.
+ */
+describe('how far Low/Medium/High reaches', () => {
+  async function declared(endpointUrl: string, model: string, modelCompatibility?: AppSettings['modelCompatibility']) {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hello-effort-'));
+    dirs.push(dataDir);
+    const settings = { endpointUrl, model, apiKeySet: false, systemPrompt: 'x', temperature: 0.7, connections: [], contextWindow: 32768, maxOutputTokens: 1024, reasoningEffort: 'high', ...(modelCompatibility ? { modelCompatibility } : {}) } as AppSettings;
+    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat' });
+    const root = join(dataDir, 'pi-chat');
+    const dir = join(root, (await import('node:fs')).readdirSync(root)[0], 'agent');
+    const [described] = (JSON.parse(await readFile(join(dir, 'models.json'), 'utf8')) as {
+      providers: { hello: { models: Array<{ reasoning: boolean; compat: { supportsReasoningEffort: boolean; thinkingFormat?: string } }> } };
+    }).providers.hello.models;
+    // What Pi's request builder does with those two: the level travels when the
+    // flag is declared, or inside OpenRouter's own thinking format.
+    const sends = described.compat.supportsReasoningEffort || described.compat.thinkingFormat === 'openrouter'
+      ? 'level'
+      : described.compat.thinkingFormat ? 'switch' : 'nothing';
+    return { sends, reach: reasoningReach(settings), reasoning: described.reasoning };
+  }
+
+  it('agrees with the launch config, connection by connection', async () => {
+    expect(await declared('https://api.openai.com/v1', 'gpt-5')).toMatchObject({ sends: 'level', reach: 'level' });
+    expect(await declared('https://openrouter.ai/api/v1', 'anthropic/claude-sonnet-4')).toMatchObject({ sends: 'level', reach: 'level' });
+    expect(await declared('https://api.deepseek.com/v1', 'deepseek-chat')).toMatchObject({ sends: 'switch', reach: 'switch' });
+    expect(await declared('http://127.0.0.1:18090/v1', 'mlx-community/Qwen3.8-27B-4bit')).toMatchObject({ sends: 'switch', reach: 'switch' });
+    expect(await declared('https://api.example.test/v1', 'any-model', 'qwen-chat-template')).toMatchObject({ sends: 'switch', reach: 'switch' });
+    // MTPLX, Kimi's endpoint, any other OpenAI-compatible server on Automatic.
+    expect(await declared('http://127.0.0.1:18090/v1', 'kimi-k2')).toMatchObject({ sends: 'nothing', reach: 'nothing', reasoning: true });
+    // The remedy Settings now names.
+    expect(await declared('http://127.0.0.1:18090/v1', 'kimi-k2', 'openai')).toMatchObject({ sends: 'level', reach: 'level' });
+  });
+
+  it('needs no server to answer for a connection', () => {
+    expect(reasoningReach({ endpointUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5' })).toBe('level');
+    expect(reasoningReach({ endpointUrl: 'not a url', model: 'm' })).toBe('nothing');
+    expect(reasoningReach({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'm', modelCompatibility: 'openai' })).toBe('level');
+    expect(reasoningReach({ endpointUrl: 'https://api.deepseek.com/v1', model: 'm', modelCompatibility: 'openai' })).toBe('level');
   });
 });

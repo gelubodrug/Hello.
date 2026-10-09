@@ -44,7 +44,11 @@ export interface DiscoveredMcpServer {
 /** A skill folder another agent tool already has on this Mac. */
 export interface DiscoveredSkill { id: string; name: string; description: string; source: string; path: string; }
 /** A Pi extension installed for Pi itself (~/.pi/agent/extensions). */
-export interface DiscoveredPlugin { id: string; name: string; description: string; source: string; path: string; }
+export interface DiscoveredPlugin {
+  id: string; name: string; description: string; source: string; path: string;
+  /** Why Hello cannot import this one, when Pi's own folder holds something the import refuses. */
+  unsupported?: string;
+}
 /** One skill in the catalog skills_find and the composer's / menu search: Hello's library, another agent's on this Mac, or skills.sh's. */
 export interface CatalogSkill {
   /** `library:<resource id>`, `local:<folder>` or `skills.sh:<owner>/<repo>/<skill>`. */
@@ -529,6 +533,11 @@ export interface MarketApi {
   addStandardSource?(manifestUrl: string): Promise<MarketSource[]>;
   removeSource?(id: string): Promise<MarketSource[]>;
   selectSource?(id: string): Promise<MarketSource[]>;
+  /** The person's own order for their list; which source is in use is still `selected`. Optional for an older preload. */
+  moveSource?(id: string, direction: 'up' | 'down'): Promise<MarketSource[]>;
+  /** Reads the selected source's whole catalogue so Hello can count matches and take several categories. Optional for an older preload. */
+  scan?(): Promise<MarketScan>;
+  scanState?(): Promise<MarketScan>;
   query(query: MarketQuery): Promise<MarketPage>;
   /** An item's icon as a data URL, fetched and re-encoded by main; null when there is none. */
   icon(ref: string): Promise<string | null>;
@@ -547,7 +556,9 @@ export interface MarketApi {
 export interface MarketSource { id: string; name: string; description: string; homepage: string; endpointHost: string; builtIn: boolean; partner: boolean; selected: boolean; available: boolean; /** In the person's list; a built-in partner is offered to add until then. Absent from an older main: treat as added. */ added?: boolean; attribution: { name: string; url: string; notice: string }; }
 export interface MarketItem { key: string; name: string; summary: string; publisher?: string; categories: string[]; repository: string; installable: boolean; manualCommand?: string; sourceName: string; icon?: string; installs: number; stars: number; updatedAt?: string; }
 export interface MarketPage { items: MarketItem[]; total: number; /** Every entry the source holds, when a filter narrows `total`. */ unfiltered?: number; nextCursor?: string; categories: string[]; generatedAt?: string; }
-export interface MarketQuery { q?: string; category?: string; sort?: 'downloads' | 'updated' | 'name' | 'stars'; cursor?: string; limit?: number; installable?: boolean; reload?: boolean; }
+export interface MarketQuery { q?: string; category?: string; /** Several at once — an item in any of them. Answered over a scanned catalogue, else page by page. */ categories?: string[]; sort?: 'downloads' | 'updated' | 'name' | 'stars'; cursor?: string; limit?: number; installable?: boolean; reload?: boolean; }
+/** What Hello holds of a source's whole catalogue: nothing until the person asks for it. */
+export interface MarketScan { sourceId: string; scanned: boolean; items: number; pages: number; /** False when a cap or a stop ended the walk before the source did. */ complete: boolean; at?: number; generatedAt?: string; }
 export interface MarketInstalledPlugin { packageName: string; version: string; kind: 'plugin' | 'hello' | 'product'; bundle: boolean; /** npm's newest stable version, when it is newer than the one installed. */ latest?: string; }
 export type MarketAction = 'install' | 'uninstall' | 'update';
 export interface MarketPreview { token: string; action: MarketAction; displayName: string; packageName: string; version?: string; /** For an update: the version installed now. */ from?: string; folder?: string; profile: string; expiresAt: number; compatibility: { ok: boolean; reason?: string }; hello?: { ui: boolean; skills: boolean; mcp: boolean; lines: string[] }; }

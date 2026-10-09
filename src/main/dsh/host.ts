@@ -1,3 +1,4 @@
+import { hostExecArgv, watchHostUsage, type ProcessMetric } from './budget';
 import { DSH_PROFILE, DSH_TEMPLATE, type DshLayout } from './layout';
 
 /**
@@ -55,6 +56,11 @@ export interface HostOptions {
   log(line: string): void;
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
+  /**
+   * Electron's process metrics, for the budget watch (budget.ts). Without it
+   * the host still runs under its heap ceiling; nothing is sampled.
+   */
+  metrics?(): readonly ProcessMetric[];
 }
 
 /** Replaces every login token in a line of host output. */
@@ -73,6 +79,7 @@ function isMessage(value: unknown): value is { type: string } & Record<string, u
 
 export class DshHost {
   private child?: HostChild;
+  private watch?: { stop(): void };
   private stopping?: Promise<void>;
   private exitListeners = new Set<(exit: HostExit) => void>();
   private fatal?: string;
@@ -106,10 +113,18 @@ export class DshHost {
     const child = this.options.spawn(this.options.entry, [layout.runtime, DSH_PROFILE, DSH_TEMPLATE], {
       cwd: layout.home,
       env,
-      execArgv: ['--expose-internals'],
+      // A heap ceiling goes with the process itself, so a runaway plugin fails
+      // inside the host instead of taking the app's memory with it (budget.ts).
+      execArgv: hostExecArgv(),
       serviceName: 'Hello. DSH host',
     });
     this.child = child;
+    const metrics = this.options.metrics;
+    if (metrics) this.watch = watchHostUsage({
+      pid: () => (this.child === child ? child.pid : undefined),
+      metrics,
+      log: line => this.options.log(line),
+    });
     let pending = '';
     child.onOutput(text => {
       pending += text;
@@ -151,6 +166,8 @@ export class DshHost {
         pending = '';
         const expected = this.stopping !== undefined;
         if (this.child === child) this.child = undefined;
+        this.watch?.stop();
+        this.watch = undefined;
         if (!settled) {
           settled = true;
           clearTimeout(timer);

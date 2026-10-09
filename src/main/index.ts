@@ -188,7 +188,7 @@ else {
     const dshResources=app.isPackaged?join(process.resourcesPath,'dsh'):[join(bundleDir,'..','..','assets','dsh'),join(process.cwd(),'assets','dsh')].find(candidate=>existsSync(candidate))??join(bundleDir,'..','..','assets','dsh');
     let reportBootFailure=(_entries:string[])=>{};
     const dshSurface=new DshSurface({openLink:url=>emit('hello:dsh-open-link',url),downloadsFolder:()=>app.getPath('downloads'),log:line=>console.log(line),onGone:reason=>console.warn(reason),onBootFailure:entries=>reportBootFailure(entries)});
-    const dsh=new DshService({layout:dshLayout(dataDir,dshResources),hostEntry:join(bundleDir,'dsh-host.js'),spawn:utilitySpawn,surface:dshSurface,pnpm:bundledPnpm(),emit:status=>emit('hello:dsh-status',status),model:()=>{
+    const dsh=new DshService({layout:dshLayout(dataDir,dshResources),hostEntry:join(bundleDir,'dsh-host.js'),spawn:utilitySpawn,surface:dshSurface,pnpm:bundledPnpm(),emit:status=>emit('hello:dsh-status',status),metrics:()=>app.getAppMetrics(),model:()=>{
       // The chat's own connection, read at each start and each proxied request.
       const settings=store.getSettings();
       if(!settings.endpointUrl||!settings.model)return undefined;

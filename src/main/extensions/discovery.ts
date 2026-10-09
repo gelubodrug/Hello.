@@ -15,7 +15,7 @@ import { basename, dirname, join } from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { parse as parseYaml } from 'yaml';
 import type { DiscoveredMcpServer, DiscoveredPlugin, DiscoveredSkill } from '../../shared/types';
-import { slug } from './library';
+import { readPlugin, slug } from './library';
 
 /** Whole file read into memory; a config far past this is not one of these tools'. */
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
@@ -357,6 +357,14 @@ export async function discoverSkills(
   return found;
 }
 
+/** The reason the importer gave, short enough for a row. */
+async function importRefusal(path: string): Promise<string | undefined> {
+  try { await readPlugin(path); return undefined; } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return reason.slice(0, 300) || 'Hello cannot import this folder.';
+  }
+}
+
 /**
  * Extensions installed for Pi itself, in its global extensions folder — where
  * an installer such as OpenViking's puts one, with its dependencies. Pi's own
@@ -364,6 +372,12 @@ export async function discoverSkills(
  * package.json with a "pi" section. Reading stops at that package.json. The
  * name is the one the library will give it, so an added one is not offered
  * again.
+ *
+ * Pi's rule is wider than Hello's import: a symlink in the folder, a tree past
+ * the import limits, a "pi" section naming files that are not there. Each
+ * candidate is offered to the importer — which reads and executes nothing — so
+ * a row Hello would refuse says why instead of failing on the Add button
+ * (an extension listed under "Found on this Mac" that the import then refused).
  */
 export async function discoverPiExtensions(home = homedir(), agentDir = join(home, '.pi', 'agent')): Promise<DiscoveredPlugin[]> {
   const root = join(agentDir, 'extensions');
@@ -376,7 +390,8 @@ export async function discoverPiExtensions(home = homedir(), agentDir = join(hom
     try { info = await stat(path); } catch { continue; }
     if (info.isFile()) {
       if (!/\.(?:ts|mts|js|mjs)$/.test(name) || /\.hello-bundle\.mjs$/.test(name)) continue;
-      found.push({ id: path, name: slug(name.replace(/\.[^.]+$/, '')), description: '', source: 'Pi', path });
+      const unsupported = await importRefusal(path);
+      found.push({ id: path, name: slug(name.replace(/\.[^.]+$/, '')), description: '', source: 'Pi', path, ...(unsupported ? { unsupported } : {}) });
       continue;
     }
     if (!info.isDirectory()) continue;
@@ -387,12 +402,14 @@ export async function discoverPiExtensions(home = homedir(), agentDir = join(hom
     } catch { /* no manifest: the index decides */ }
     const hasIndex = await Promise.all(['index.ts', 'index.js'].map(file => stat(join(path, file)).then(entry => entry.isFile(), () => false)));
     if (!hasIndex.some(Boolean) && (typeof manifest.pi !== 'object' || manifest.pi === null)) continue;
+    const unsupported = await importRefusal(path);
     found.push({
       id: path,
       name: slug(typeof manifest.name === 'string' && manifest.name ? manifest.name : name),
       description: typeof manifest.description === 'string' ? manifest.description.slice(0, 500) : '',
       source: 'Pi',
       path,
+      ...(unsupported ? { unsupported } : {}),
     });
   }
   return found;

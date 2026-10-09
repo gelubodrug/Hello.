@@ -44,6 +44,8 @@ export interface CatalogItem {
 export interface CatalogPage {
   items: CatalogItem[];
   total: number;
+  /** Every entry the source holds, when a filter narrowed `total`. */
+  unfiltered?: number;
   nextCursor?: string;
   categories: string[];
   generatedAt?: string;
@@ -51,7 +53,10 @@ export interface CatalogPage {
 
 export interface CatalogQuery {
   q?: string;
+  /** One category, the only shape a source's own endpoint takes. */
   category?: string;
+  /** Several, answered by Hello over a scanned catalogue: an item in any of them (scan.ts). */
+  categories?: string[];
   sort?: 'downloads' | 'updated' | 'name' | 'stars';
   cursor?: string;
   limit?: number;

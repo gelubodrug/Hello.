@@ -28,8 +28,39 @@ const EXTERNAL = [
 export const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 export const BUNDLE_SUFFIX = '.hello-bundle.mjs';
 
-// CommonJS packages inside an ES module still call require() for built-ins.
-const BANNER = "import { createRequire as __helloCreateRequire } from 'node:module';\nconst require = __helloCreateRequire(import.meta.url);";
+/**
+ * CommonJS packages inside an ES module still call require() — for built-ins,
+ * and for the modules Pi provides.
+ *
+ * Pi aliases those specifiers for its loader, so an `import` of them resolves
+ * wherever the extension sits. A `require()` of one does not: createRequire
+ * looks for a node_modules beside the bundle, and the approved copy in Hello's
+ * library has none — in a packaged app there is no node_modules on that path at
+ * all. So the prologue imports exactly the Pi modules this bundle reached, as
+ * ESM, and hands them to require() by name; everything else still goes to
+ * Node's own require, with its resolve/cache kept.
+ */
+export function bundlePrologue(piProvided: readonly string[] = []): string {
+  const lines = ["import { createRequire as __helloCreateRequire } from 'node:module';"];
+  const names = piProvided.map((specifier, index) => [specifier, `__helloPi${index}`] as const);
+  for (const [specifier, binding] of names) lines.push(`import * as ${binding} from '${specifier}';`);
+  lines.push('const __helloNodeRequire = __helloCreateRequire(import.meta.url);');
+  if (!names.length) return `${lines.join('\n')}\nconst require = __helloNodeRequire;`;
+  lines.push(`const __helloPiProvided = new Map([${names.map(([specifier, binding]) => `['${specifier}', ${binding}]`).join(', ')}]);`);
+  // Object.assign keeps require.resolve and require.cache on the function.
+  lines.push('const require = Object.assign((__helloId) => __helloPiProvided.get(__helloId) ?? __helloNodeRequire(__helloId), __helloNodeRequire);');
+  return lines.join('\n');
+}
+
+/** The Pi-provided modules a built bundle still imports, in the order esbuild recorded them. */
+export function piProvidedIn(metafile: Metafile): string[] {
+  const provided = new Set(PI_PROVIDED_MODULES);
+  const found = new Set<string>();
+  for (const output of Object.values(metafile.outputs))
+    for (const imported of output.imports ?? [])
+      if (imported.external && provided.has(imported.path)) found.add(imported.path);
+  return [...found];
+}
 
 export interface ExtensionBundle {
   /** The extension entry, relative to the plugin folder. */
@@ -96,12 +127,23 @@ export function packagesIn(metafile: Metafile, root: string): string[] {
   return [...names].sort();
 }
 
-/** The packages behind the specifiers esbuild could not resolve: `@scope/pkg/sub` is `@scope/pkg`. */
-function missingPackages(failure: BuildFailure): string[] {
-  return [...new Set(failure.errors
+/**
+ * What esbuild could not resolve, told apart: npm packages (`@scope/pkg/sub` is
+ * `@scope/pkg`) the person can install, and paths inside the plugin that are
+ * simply not there. The published OpenViking extension is the second kind — its
+ * `shared/` folder is generated at build time and never shipped — and telling
+ * someone to install the dependencies of a missing file of its own was a dead
+ * end.
+ */
+export function unresolved(failure: BuildFailure): { packages: string[]; files: string[] } {
+  const names = [...new Set(failure.errors
     .map(error => /^Could not resolve "([^"]+)"/.exec(error.text)?.[1])
-    .filter((name): name is string => Boolean(name))
-    .map(name => name.startsWith('.') || name.startsWith('/') ? name : name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/')))];
+    .filter((name): name is string => Boolean(name)))];
+  return {
+    packages: [...new Set(names.filter(name => !name.startsWith('.') && !name.startsWith('/'))
+      .map(name => name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/')))],
+    files: names.filter(name => name.startsWith('.') || name.startsWith('/')),
+  };
 }
 
 /**
@@ -124,19 +166,22 @@ export async function bundleExtension(root: string, entry: string): Promise<Exte
       external: EXTERNAL,
       metafile: true,
       logLevel: 'silent',
-      banner: { js: BANNER },
     });
   } catch (error) {
     const failure = error as BuildFailure;
-    const missing = Array.isArray(failure.errors) ? missingPackages(failure) : [];
-    if (missing.length)
-      throw new Error(`${entry} imports ${missing.join(', ')}, which ${missing.length === 1 ? 'is' : 'are'} not installed in that folder. Install the plugin’s dependencies there (for example with npm install), then import it again.`);
+    const missing = Array.isArray(failure.errors) ? unresolved(failure) : { packages: [], files: [] };
+    if (missing.files.length)
+      throw new Error(`${entry} imports ${missing.files.join(', ')}, which ${missing.files.length === 1 ? 'is' : 'are'} not in that folder. Some extensions generate those files when they are built, and a published copy does not carry them: build the plugin in its own folder first, then import it again.`);
+    if (missing.packages.length)
+      throw new Error(`${entry} imports ${missing.packages.join(', ')}, which ${missing.packages.length === 1 ? 'is' : 'are'} not installed in that folder. Install the plugin’s dependencies there (for example with npm install), then import it again.`);
     const first = Array.isArray(failure.errors) ? failure.errors[0] : undefined;
     throw new Error(`${entry} could not be prepared for Pi: ${first ? `${first.text}${first.location ? ` (${first.location.file}:${first.location.line})` : ''}` : (error instanceof Error ? error.message : String(error))}`);
   }
   const packages = packagesIn(result.metafile, root);
   if (!packages.length) return null;
-  const code = result.outputFiles[0]?.text ?? '';
+  // The prologue is written here, not as esbuild's banner, because it depends
+  // on which Pi modules the finished bundle still imports.
+  const code = `${bundlePrologue(piProvidedIn(result.metafile))}\n${result.outputFiles[0]?.text ?? ''}`;
   if (Buffer.byteLength(code) > MAX_BUNDLE_BYTES)
     throw new Error(`${entry} with its npm packages (${packages.join(', ')}) is larger than the 2 MB a Hello extension may be.`);
   return { entry, file: bundleName(entry), packages, code };
@@ -157,7 +202,11 @@ function loadEsbuild(): Promise<typeof import('esbuild')> {
         const require = createRequire(import.meta.url);
         const binary = require.resolve(`@esbuild/${process.platform}-${process.arch}/${process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild'}`);
         const packed = `${sep}app.asar${sep}`;
-        if (binary.includes(packed)) process.env.ESBUILD_BINARY_PATH = binary.replace(packed, `${sep}app.asar.unpacked${sep}`);
+        const unpacked = binary.replace(packed, `${sep}app.asar.unpacked${sep}`);
+        // Only when electron-builder really unpacked it (packaging.test.ts keeps
+        // the pattern): a path that is not there would replace esbuild's own
+        // "binary not found" with a spawn failure nobody can read.
+        if (binary.includes(packed) && existsSync(unpacked)) process.env.ESBUILD_BINARY_PATH = unpacked;
       } catch {
         // No platform package to point at: esbuild reports that itself.
       }

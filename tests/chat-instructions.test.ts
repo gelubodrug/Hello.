@@ -136,6 +136,18 @@ describe('what a chat is told about saving a file from a page', () => {
   });
 });
 
+// A tab is a current Chromium on 127.0.0.1, so a generated page can compute
+// in it. What it cannot do is thread: no cross-origin isolation, no SAB.
+describe('what a chat is told about computing inside a tab', () => {
+  it('names navigator.gpu, the CPU fallback and the missing SharedArrayBuffer', () => {
+    const prompt = browserManual();
+    expect(prompt).toContain('navigator.gpu');
+    expect(prompt).toContain('keep a CPU path');
+    expect(prompt).toContain('SharedArrayBuffer is not available');
+    expect(prompt).toContain('never a CDN you chose');
+  });
+});
+
 // A click by ref, real, then read again: what agent-browser taught (user,
 // 24.09: "nu nimerește butoanele — trebuie să mai implementăm ceva?").
 describe('what a chat is told about clicking in a page', () => {

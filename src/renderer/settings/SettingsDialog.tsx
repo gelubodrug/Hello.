@@ -6,6 +6,7 @@ import { ErrorNote, IconButton, MenuButton, MenuLayerAbove, errorText } from "..
 import { ExtensionsSection } from "./ExtensionsSection";
 import { AppAuditSection } from "./AppAuditSection";
 import { VoiceSection } from "./VoiceSection";
+import { reasoningNote, reasoningReach } from "../../shared/reasoning";
 import { ENDPOINT_PRESETS, endpointIdentity, modelName, presetFor, suggestedName } from "./presets";
 import { compactNumber, t } from "../i18n";
 
@@ -22,7 +23,7 @@ const approvalOptions = [
 ] as const;
 const compatibilityOptions = [
   { value: 'auto', label: 'Automatic', detail: 'Known cloud-provider formatting' },
-  { value: 'openai', label: 'OpenAI-compatible', detail: undefined },
+  { value: 'openai', label: 'OpenAI-compatible', detail: 'Sends reasoning_effort, so Low/Medium/High reach the server' },
   { value: 'qwen-chat-template', label: 'Local Qwen chat template', detail: 'For a local server that accepts Qwen chat-template parameters' },
 ] as const;
 const SAVED_KEY_MASK = "•".repeat(24);
@@ -365,6 +366,13 @@ export function SettingsDialog({
               </span>
               <ChevronDown size={14} />
             </MenuButton>
+            {/* What Low/Medium/High actually reaches this server as. On
+                Automatic an OpenAI-compatible server (MTPLX, Kimi's endpoint)
+                is sent no reasoning field at all, and the chat only looked as
+                if thinking were on. The remedy is one choice below. */}
+            {(draft.reasoningEffort ?? "off") !== "off" && (
+              <span className="muted settings-note">{reasoningNote(reasoningReach(draft))}</span>
+            )}
           </div>
           <div className="settings-field">
             <span>Tool approvals</span>

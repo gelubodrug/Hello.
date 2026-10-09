@@ -7,7 +7,7 @@ import { listCheckpoints, profileFingerprint, restoreCheckpoint, saveCheckpoint 
 import { DSH_PROFILE, DSH_VERSION, dshLayout, installedVersion, runtimeReady } from '../src/main/dsh/layout';
 import { inheritedEnv, parseProgress, pnpmFailure } from '../src/main/dsh/pnpm';
 import { ensureProfileWorkspace } from '../src/main/dsh/profile';
-import { runtimeManifest, runtimeWorkspace, writeRuntimeFiles } from '../src/main/dsh/runtime';
+import { DSH_SKIPPED_OPTIONAL, runtimeManifest, runtimeWorkspace, writeRuntimeFiles } from '../src/main/dsh/runtime';
 
 const folders: string[] = [];
 function layout() {
@@ -51,6 +51,19 @@ describe('runtime files', () => {
     expect(workspace.overrides['node-addon-require-builtin']).toBe(`file:${join(place.resources, 'shims', 'node-addon-require-builtin')}`);
     expect(workspace.allowBuilds['node-pty']).toBe(true);
     expect(workspace.allowBuilds.protobufjs).toBe(false);
+  });
+
+  // 148 MB of a 492 MB install is one prebuilt LibreOffice, for converting
+  // Office documents inside the DSH surface. The entry package stays, so the
+  // plugins that import it still load and only a conversion fails.
+  it('leaves the office engine out of the install, every platform of it', () => {
+    const workspace = parse(runtimeWorkspace(layout())) as Record<string, any>;
+    expect(workspace.ignoredOptionalDependencies).toEqual([...DSH_SKIPPED_OPTIONAL]);
+    expect(workspace.ignoredOptionalDependencies).toContain('@deepseek-ai/libreoffice-kit-darwin-arm64');
+    // Not the entry package: dsh-office-to-pdf imports it at load.
+    expect(workspace.ignoredOptionalDependencies).not.toContain('@deepseek-ai/libreoffice-kit');
+    // Named exactly, and only optional dependencies: nothing dsh needs to boot.
+    for (const name of DSH_SKIPPED_OPTIONAL) expect(name).toMatch(/^@deepseek-ai\/libreoffice-kit-[a-z0-9-]+$/);
   });
 
   it('writes both files into the runtime folder', () => {

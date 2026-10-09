@@ -118,6 +118,26 @@ describe('the market’s sources', () => {
     expect(again.removeSource(added.id).find(source => source.selected)?.id).toBe('dsh-1024store');
   });
 
+  /** The person's own order; which source is in use stays `selected`. */
+  it('keeps the order the person puts the list in', async () => {
+    const manifest = { ...LIVE_DSHFIND, providerId: 'com.example.catalog', name: 'Example', transport: { ...LIVE_DSHFIND.transport, endpoint: 'https://plugins.example.com/v1/plugins' } };
+    const { service, create } = market(url => (url.pathname === '/catalog-source.json' ? manifest : page([memory])));
+    service.addSource('dshfind');
+    await service.addStandardSource('https://plugins.example.com/catalog-source.json');
+    const names = () => service.sources().filter(source => source.added !== false).map(source => source.name);
+    expect(names()).toEqual(['DSH 1024Store', 'dshfind', 'Example']);
+    const example = service.sources().find(source => source.name === 'Example')!.id;
+    expect(service.moveSource(example, 'up').filter(source => source.added !== false).map(source => source.name)).toEqual(['DSH 1024Store', 'Example', 'dshfind']);
+    expect(service.moveSource(example, 'up').filter(source => source.added !== false).map(source => source.name)).toEqual(['Example', 'DSH 1024Store', 'dshfind']);
+    // At an end it stays there rather than wrapping around.
+    expect(service.moveSource(example, 'up').filter(source => source.added !== false).map(source => source.name)).toEqual(['Example', 'DSH 1024Store', 'dshfind']);
+    expect(service.moveSource(example, 'down').filter(source => source.added !== false).map(source => source.name)).toEqual(['DSH 1024Store', 'Example', 'dshfind']);
+    // The order outlives a restart, and the source in use is unchanged by it.
+    expect(service.sources().find(source => source.selected)?.id).toBe('dsh-1024store');
+    expect(create().sources().filter(source => source.added !== false).map(source => source.name)).toEqual(['DSH 1024Store', 'Example', 'dshfind']);
+    expect(() => service.moveSource('not-a-source', 'up')).toThrow(/not in your list/);
+  });
+
   it('says so when no source is selected, and falls back to the default on an unreadable list', async () => {
     const { service, layout } = market(() => page([]));
     service.removeSource('dsh-1024store');
@@ -125,5 +145,99 @@ describe('the market’s sources', () => {
     await expect(service.query({})).rejects.toThrow(/No source selected/);
     writeFileSync(join(layout.root, 'market-sources.json'), '{not json');
     expect(service.sources().find(source => source.selected)?.id).toBe('dsh-1024store');
+  });
+});
+
+/**
+ * A source's own search is one page and one category at a time. Read through
+ * once (the person asks for it), and Hello answers from what came back: exact
+ * counts and several categories, with no further request.
+ */
+describe('reading a source’s whole catalogue', () => {
+  const entry = (id: string, categories: string[], extra: Record<string, unknown> = {}) => ({
+    id, name: id, displayName: id, summary: `${id} does things.`,
+    repository: { url: `https://github.com/acme/${id}` }, categories, ...extra,
+  });
+
+  function paged(pages: unknown[][]) {
+    const asked: URL[] = [];
+    const routes = (url: URL) => {
+      const cursor = url.searchParams.get('cursor');
+      const at = cursor ? Number(cursor.replace('p', '')) : 0;
+      const items = pages[at] ?? [];
+      return page(items, { ...(at + 1 < pages.length ? { nextCursor: `p${at + 1}` } : {}), total: pages.flat().length });
+    };
+    const http: MarketHttp = {
+      async getJson(url) { const parsed = new URL(url); asked.push(parsed); return { value: routes(parsed), finalUrl: url }; },
+      async getBytes() { throw new Error('no icons here'); },
+    };
+    const root = mkdtempSync(join(tmpdir(), 'hello-market-scan-'));
+    folders.push(root);
+    const layout = dshLayout(root, join(root, 'resources'));
+    const service = new MarketService({ layout, pnpm: { command: 'none', args: [], env: {} }, log: () => {}, normalizeIcon: () => null, http });
+    service.addSource('dshfind');
+    service.selectSource('dshfind');
+    return { service, asked };
+  }
+
+  it('follows the source’s own cursors to the end, then answers searches itself', async () => {
+    const { service, asked } = paged([
+      [entry('alpha', ['memory']), entry('beta', ['memory', 'ui'])],
+      [entry('gamma', ['ui']), entry('delta', ['shell'], { package: { registry: 'npm', name: 'delta' } })],
+      [entry('epsilon', ['shell'])],
+    ]);
+    expect(service.scanState()).toMatchObject({ scanned: false, items: 0 });
+    const scan = await service.scan();
+    expect(scan).toMatchObject({ sourceId: 'dshfind', scanned: true, items: 5, pages: 3, complete: true });
+    const walked = asked.length;
+
+    // Any of these categories, counted exactly, without asking the source again.
+    const both = await service.query({ categories: ['memory', 'shell'] });
+    expect(both.items.map(item => item.name)).toEqual(['alpha', 'beta', 'delta', 'epsilon']);
+    expect(both.total).toBe(4);
+    expect(both.unfiltered).toBe(5);
+    expect(asked.length).toBe(walked);
+
+    // One category, the search text, and the installable view, all from the scan.
+    expect((await service.query({ categories: ['ui'] })).items.map(item => item.name)).toEqual(['beta', 'gamma']);
+    expect((await service.query({ q: 'epsilon' })).items.map(item => item.name)).toEqual(['epsilon']);
+    expect((await service.query({ installable: true })).items.map(item => item.name)).toEqual(['delta']);
+    expect(service.scanState().generatedAt).toBe('2026-09-28T13:34:36Z');
+
+    // Paging within the scan, and its categories offered as filters.
+    const first = await service.query({ limit: 2 });
+    expect(first.items.map(item => item.name)).toEqual(['alpha', 'beta']);
+    expect(first.nextCursor).toBe('scan:2');
+    expect(first.categories).toEqual(['memory', 'shell', 'ui']);
+    expect((await service.query({ limit: 2, cursor: first.nextCursor })).items.map(item => item.name)).toEqual(['gamma', 'delta']);
+    await expect(service.query({ cursor: 'scan:bad' })).rejects.toThrow(/expired/);
+
+    // Refresh reads the source again rather than the catalogue Hello holds.
+    await service.query({ reload: true });
+    expect(service.scanState().scanned).toBe(false);
+    expect(asked.length).toBeGreaterThan(walked);
+  });
+
+  it('stops at its caps and on a cursor that repeats itself', async () => {
+    const { service } = paged([[entry('one', [])], [entry('two', [])], [entry('three', [])]]);
+    expect(await service.scan()).toMatchObject({ complete: true, pages: 3 });
+    const { scanCatalog } = await import('../src/main/market/scan');
+    // A source that hands back the same cursor for ever ends the walk.
+    const looping = await scanCatalog(async () => ({ items: [], total: 1, categories: [], nextCursor: 'same' }), new AbortController().signal);
+    expect(looping).toMatchObject({ complete: false, pages: 2 });
+    const capped = await scanCatalog(async () => ({ items: [], total: 1, categories: [], nextCursor: `c${Math.random()}` }), new AbortController().signal, { limits: { pages: 4, items: 10 } });
+    expect(capped).toMatchObject({ complete: false, pages: 4 });
+  });
+
+  it('narrows several categories page by page when there is no scan', async () => {
+    const { service, asked } = paged([[entry('alpha', ['memory']), entry('beta', ['ui'])]]);
+    const one = await service.query({ categories: ['memory'] });
+    expect(asked.at(-1)?.searchParams.get('category')).toBe('memory');
+    expect(one.items.map(item => item.name)).toEqual(['alpha', 'beta']);
+    // Two: the source is asked for no category at all, and Hello keeps the
+    // items in either — sending one of them would have narrowed it wrongly.
+    const two = await service.query({ categories: ['memory', 'shell'] });
+    expect(asked.at(-1)?.searchParams.get('category')).toBeNull();
+    expect(two.items.map(item => item.name)).toEqual(['alpha']);
   });
 });

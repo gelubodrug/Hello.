@@ -7,6 +7,7 @@ import type { PnpmInvocation } from '../dsh/pnpm';
 import { gt, valid } from 'semver';
 import { installedPlugins, MarketInstaller, NPM_REGISTRY_ORIGIN, safePackageName, type InstalledPlugin, type OperationPreview, type OperationResult } from './install';
 import { cachedMarketHttp, createMarketHttp, type MarketHttp } from './net';
+import { filterScanned, requestedCategories, scanCatalog, type ScannedCatalog } from './scan';
 import { DSHFIND_MANIFEST, fetchSourceManifest, fetchStandard, parseSourceManifest, type SourceManifest } from './standard';
 import { fetchStore1024, STORE1024_ORIGIN, type CatalogItem, type CatalogPage, type CatalogQuery } from './store1024';
 
@@ -76,6 +77,19 @@ export interface MarketPageView {
   generatedAt?: string;
 }
 
+/** What Hello holds of a source's whole catalogue (scan.ts), for the window's Catalogue button. */
+export interface MarketScanView {
+  sourceId: string;
+  /** No scan of this source yet. */
+  scanned: boolean;
+  items: number;
+  pages: number;
+  /** False when a cap or a stop ended the walk before the source did. */
+  complete: boolean;
+  at?: number;
+  generatedAt?: string;
+}
+
 const PARTNER_DESCRIPTION = 'Partner provider catalog. The user must add and enable it explicitly. Being listed does not mean a plugin was reviewed or recommended.';
 const NOTICE = 'Community catalog data provided by a cooperating provider.';
 const ICON_HOSTS = new Set(['github.com', 'avatars.githubusercontent.com', 'deepseek1024.com']);
@@ -107,6 +121,8 @@ export class MarketService {
   private cursors = new Map<string, { source: string; query: string; value: string }>();
   /** A standard source lists no categories of its own: the ones its pages showed so far stand in. */
   private seenCategories = new Map<string, Set<string>>();
+  /** A source read through, by source id: every search of it is then answered here (scan.ts). */
+  private scans = new Map<string, ScannedCatalog>();
 
   constructor(private readonly options: {
     layout: DshLayout;
@@ -212,6 +228,23 @@ export class MarketService {
     return this.sources();
   }
 
+  /**
+   * The person's own order for their sources. The list is the order they put it
+   * in — which source is used is `selected`, not the first row — and a source
+   * at an end stays there rather than wrapping around.
+   */
+  moveSource(id: string, direction: 'up' | 'down'): MarketSourceView[] {
+    const state = this.state();
+    const at = state.sources.findIndex(record => record.id === id);
+    if (at < 0) throw new Error('That source is not in your list.');
+    const to = direction === 'up' ? at - 1 : at + 1;
+    if (to < 0 || to >= state.sources.length) return this.sources();
+    const sources = [...state.sources];
+    [sources[at], sources[to]] = [sources[to], sources[at]];
+    this.save({ ...state, sources });
+    return this.sources();
+  }
+
   private view(item: CatalogItem, source: SourceRecord): MarketItemView {
     const key = `${source.key === 'dsh-1024store' ? '1024' : source.id}:${item.id}`;
     this.candidates.delete(key);
@@ -240,17 +273,81 @@ export class MarketService {
     };
   }
 
+  /** The selected source, or the reason there is none. */
+  private selected(): SourceRecord {
+    const state = this.state();
+    const source = state.sources.find(record => record.id === state.selected);
+    if (!source) throw new Error('No source selected. Choose one under Sources.');
+    return source;
+  }
+
+  /** One page of a source, by its own paging: 1024Store's page numbers, a standard source's cursors. */
+  private readPage(source: SourceRecord, query: CatalogQuery, signal: AbortSignal): Promise<CatalogPage> {
+    if (source.key === 'dsh-1024store') return fetchStore1024(this.http, query, signal);
+    const manifest = source.key === 'dshfind' ? DSHFIND_MANIFEST : source.manifest!;
+    return fetchStandard(this.http, manifest, query, signal);
+  }
+
+  scanState(): MarketScanView {
+    const source = this.selected();
+    const scan = this.scans.get(source.id);
+    if (!scan) return { sourceId: source.id, scanned: false, items: 0, pages: 0, complete: false };
+    return {
+      sourceId: source.id, scanned: true, items: scan.items.length, pages: scan.pages,
+      complete: scan.complete, at: scan.at, ...(scan.generatedAt ? { generatedAt: scan.generatedAt } : {}),
+    };
+  }
+
+  /**
+   * Reads the selected source's catalogue through, page by page, and keeps it:
+   * after this, every search of that source is answered here — exact counts,
+   * any number of categories at once — with no further request. The person asks
+   * for it; nothing scans by itself, because it is a few hundred requests to
+   * someone else's service.
+   */
+  async scan(signal = new AbortController().signal): Promise<MarketScanView> {
+    const source = this.selected();
+    const catalogue = await scanCatalog(
+      (cursor, inner) => this.readPage(source, { limit: 200, ...(cursor ? { cursor } : {}) }, inner),
+      signal,
+    );
+    this.scans.set(source.id, catalogue);
+    return this.scanState();
+  }
+
   async query(query: CatalogQuery & { reload?: boolean }, signal = new AbortController().signal): Promise<MarketPageView> {
     if (query.reload) this.http.clear();
     const state = this.state();
     const source = state.sources.find(record => record.id === state.selected);
     if (!source) throw new Error('No source selected. Choose one under Sources.');
+    // Read through once, answered here ever after: this is the only path that
+    // can count what matches and take more than one category.
+    if (query.reload) this.scans.delete(source.id);
+    const scanned = this.scans.get(source.id);
+    if (scanned) {
+      const page = filterScanned(scanned, query);
+      return {
+        items: page.items.map(item => this.view(item, source)), total: page.total,
+        ...(page.unfiltered !== undefined ? { unfiltered: page.unfiltered } : {}),
+        categories: page.categories,
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+        ...(page.generatedAt ? { generatedAt: page.generatedAt } : {}),
+      };
+    }
+    // Without a scan, a source's endpoint takes one category: one goes to the
+    // source as it always did. For several, Hello asks for none — sending one
+    // of them would narrow the page to that one — and keeps the items in any.
+    const wanted = requestedCategories(query);
+    const narrow = wanted.length > 1;
+    query = { ...query, categories: undefined, category: narrow ? undefined : wanted[0] };
     let page: CatalogPage;
     if (source.key === 'dsh-1024store') page = await fetchStore1024(this.http, query, signal);
     else {
       // A standard source's cursor never leaves main: the page gets a token
       // valid only for this source and this search.
-      const shape = JSON.stringify([query.q?.trim() ?? '', query.category ?? '', query.installable === true, query.limit ?? 0, query.sort ?? '']);
+      // The categories Hello narrows by are part of the search a cursor belongs
+      // to, even though they never reach the source.
+      const shape = JSON.stringify([query.q?.trim() ?? '', query.category ?? '', [...wanted].sort(), query.installable === true, query.limit ?? 0, query.sort ?? '']);
       const cursor = query.cursor ? this.cursors.get(query.cursor) : undefined;
       if (query.cursor && (!cursor || cursor.source !== source.id || cursor.query !== shape)) throw new Error('That page of results has expired. Search again.');
       const manifest = source.key === 'dshfind' ? DSHFIND_MANIFEST : source.manifest!;
@@ -266,7 +363,8 @@ export class MarketService {
         page = { ...page, nextCursor: token };
       }
     }
-    return { items: page.items.map(item => this.view(item, source)), total: page.total, categories: page.categories, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), ...(page.generatedAt ? { generatedAt: page.generatedAt } : {}) };
+    const items = narrow ? page.items.filter(item => item.categories.some(category => wanted.includes(category))) : page.items;
+    return { items: items.map(item => this.view(item, source)), total: page.total, categories: page.categories, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), ...(page.generatedAt ? { generatedAt: page.generatedAt } : {}) };
   }
 
   /** An item's icon, fetched and re-encoded here, as a data URL. */
