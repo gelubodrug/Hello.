@@ -273,8 +273,10 @@ escaping it, including resolved symlinks outside the folder. `file_search`
 reuses the Files viewer's bounded search with the automatic tools' secret-path
 exclusions applied before reading or descending; it does not follow links and
 does not require approval. Its snippets enter model context as file data.
-Reads are bounded
-UTF-8 text; common credential filenames and key extensions are excluded. File
+`file_read` scans regular UTF-8 files up to 50 MiB in chunks, returning at most
+2000 lines / 128 KiB (including range metadata), with total lines and an excerpt
+hint for large files. Binary/invalid UTF-8 content is rejected even outside the
+requested range. Common credential filenames and key extensions are excluded. File
 writes revalidate after approval, require an existing parent, and reject final
 symlink, hard-linked or non-regular targets.
 

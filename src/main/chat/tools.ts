@@ -30,6 +30,7 @@ import {
 import type { ElementTarget, WaitCondition } from '../browser/agent-target';
 import { toolOutputText, type ToolImage, type ToolOutput } from './tool-output';
 import { commandTimeout, runApprovedCommand } from './command-run';
+import { readFileRange } from './file-read';
 import { CONTENT_SEARCH_LIMITS, WorkspaceFiles } from '../files/service';
 
 export interface BrowserHooks {
@@ -309,8 +310,10 @@ export function toolDefinitions(
       ),
       tool(
         'file_read',
-        'Read a bounded UTF-8 text file inside this chat’s attached folder. Cannot read outside it, binary files or common secret files.',
-        { path: property('File path relative to this chat’s folder, such as "src/app.ts".') },
+        'Read UTF-8 text inside this chat’s attached folder, up to a 50 MiB file. Returns at most 2000 lines or 128 KiB. For a large file, an omitted range returns its head, totalLines and a hint; ask for another range with startLine/lineCount. Cannot read outside the folder, binary files or common secret files.',
+        { path: property('File path relative to this chat’s folder, such as "src/app.ts".'),
+          startLine: { type: 'integer', minimum: 1, description: 'First line to read (1-based); default 1.' },
+          lineCount: { type: 'integer', minimum: 1, maximum: 2000, description: 'Lines to return; default 2000, subject to the byte cap.' } },
         ['path'],
       ),
       tool(
@@ -1195,23 +1198,7 @@ export async function executeToolOutput(
           conversation.folder,
           text(input, 'path', 4000),
         );
-        const handle = await open(
-          target,
-          constants.O_RDONLY | constants.O_NOFOLLOW,
-        );
-        try {
-          const info = await handle.stat();
-          if (!info.isFile())
-            throw new Error('Only regular files can be read.');
-          if (info.size > 128_000)
-            throw new Error('File exceeds the 128 KB read limit.');
-          const bytes = await handle.readFile();
-          if (bytes.includes(0))
-            throw new Error('Binary files are not supported.');
-          return bytes.toString('utf8');
-        } finally {
-          await handle.close();
-        }
+        return readFileRange(target, input, signal);
       }
       case 'file_edit': {
         const requested = text(input, 'path', 4000);
@@ -1664,7 +1651,7 @@ export async function executeToolOutput(
   // the model to guess that the rest exists.
   // The command's own byte ring preserves its tail; a second head-only cut
   // would discard precisely the final error or completion it was kept for.
-  if (name === 'command_run' || output.length <= TOOL_OUTPUT_LIMIT) return output;
+  if (name === 'command_run' || name === 'file_read' || output.length <= TOOL_OUTPUT_LIMIT) return output;
   const cut = output.length - TOOL_OUTPUT_LIMIT;
   return output.slice(0, TOOL_OUTPUT_LIMIT) +
     `\n[Cut here. ${cut.toLocaleString('en')} more characters were produced and are not in this result, ` +
