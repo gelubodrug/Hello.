@@ -10,6 +10,7 @@ import { speechChunks, spokenProse } from '../../shared/speech-text';
  */
 
 export interface SpeechOutput {
+  cancel?(): void;
   /** One chunk of prose as audio. */
   speak(text: string): Promise<VoiceSpeech>;
   /** Plays one clip; resolves when it ends. The returned stop ends it early. */
@@ -17,6 +18,14 @@ export interface SpeechOutput {
 }
 
 export class SpeechPlayer {
+  private static microphones = new Set<symbol>();
+  private static playing = new Set<SpeechPlayer>();
+  static listen(): () => void {
+    const lease = Symbol();
+    SpeechPlayer.microphones.add(lease);
+    for (const player of SpeechPlayer.playing) player.stop();
+    return () => { SpeechPlayer.microphones.delete(lease); };
+  }
   private generation = 0;
   private current?: () => void;
   private listeners = new Set<(speaking: boolean) => void>();
@@ -34,6 +43,7 @@ export class SpeechPlayer {
   /** Reads a reply's prose aloud, replacing whatever was being said. */
   async say(markdown: string): Promise<void> {
     this.stop();
+    if (SpeechPlayer.microphones.size) return;
     const chunks = speechChunks(spokenProse(markdown));
     if (!chunks.length) return;
     const turn = ++this.generation;
@@ -61,6 +71,7 @@ export class SpeechPlayer {
   /** Silence now: the clip playing ends, and nothing queued is played. */
   stop(): void {
     this.generation++;
+    this.output.cancel?.();
     const stop = this.current;
     this.current = undefined;
     stop?.();
@@ -68,6 +79,7 @@ export class SpeechPlayer {
   }
 
   private set(speaking: boolean): void {
+    if (speaking) SpeechPlayer.playing.add(this); else SpeechPlayer.playing.delete(this);
     if (this.active === speaking) return;
     this.active = speaking;
     for (const listener of this.listeners) listener(speaking);

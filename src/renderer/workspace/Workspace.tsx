@@ -35,6 +35,7 @@ import { BrowserPane } from "../browser/BrowserPane";
 import type { FindJump } from "../chat/ChatFind";
 import { TerminalPane } from "../terminal/TerminalPane";
 import { ToolTabStrip } from './ToolTabStrip';
+import { orderedTools, useToolOrder } from './useToolOrder';
 import { FilesPane, type FileRequest } from '../files/FilesPane';
 import { FileNavigation } from '../files/navigation';
 import { filesTabId, type FileLink, type FilesTab } from '../../shared/files';
@@ -182,7 +183,8 @@ export function Workspace(props: WorkspaceProps) {
   const pageKeys: string[] = [...pages, ...docked.map(session => session.id)];
   const [pageMenu, setPageMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const menuSession = docked.find(session => session.id === pageMenu?.id);
-  const allTools = [...props.browsers, ...props.terminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : [])];
+  const toolOrder = useToolOrder(conversation.id, props.reportError);
+  const allTools = orderedTools([...props.browsers, ...props.terminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : [])], toolOrder.order);
   /**
    * Each terminal is rendered once, into a node of its own that is moved to
    * whichever pane holds it. Rendering it in the other pane instead would
@@ -675,6 +677,7 @@ export function Workspace(props: WorkspaceProps) {
         >
           <header className="panel-header pane-tab-header">
             <ToolTabStrip tools={allTools} selectedId={currentTool?.id}
+              onReorder={toolOrder.reorder}
               onSelect={id => onUI({ toolId: id, focus: 'tools', ...(toolsMinimized ? { toolsMinimized: false } : {}) })}
               onClose={closeTool} onDock={dock} />
             <div className="pane-actions">

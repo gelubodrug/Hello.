@@ -267,6 +267,14 @@ export class PiEventMapper {
         willRetry: event.willRetry === true, tokensBefore: count(result?.tokensBefore),
         estimatedTokensAfter: count(result?.estimatedTokensAfter), ...(error ? { error } : {}),
       };
+      if (result && !error && event.aborted !== true && typeof result.tokensBefore === 'number' && Number.isFinite(result.tokensBefore) && result.tokensBefore >= 0) {
+        this.message.compactions = [...(this.message.compactions ?? []), {
+          partIndex: this.message.parts!.length, tokensBefore: result.tokensBefore,
+          ...(typeof result.estimatedTokensAfter === 'number' && Number.isFinite(result.estimatedTokensAfter) && result.estimatedTokensAfter >= 0
+            ? { tokensAfter: result.estimatedTokensAfter } : {}),
+        }];
+        changed = true;
+      }
       const usage = readUsage(result?.usage);
       if (usage) { this.committedUsage = addUsage(this.committedUsage, usage); this.hasUsage = true; }
       if (error) this.pendingError = error;

@@ -1051,6 +1051,15 @@ export class ChatService {
       const response = await session.rpc.request<{ tokensBefore?: unknown; estimatedTokensAfter?: unknown }>({ type: 'compact' }, 15 * 60_000);
       const before = typeof response.data?.tokensBefore === 'number' ? response.data.tokensBefore : 0;
       const after = typeof response.data?.estimatedTokensAfter === 'number' ? response.data.estimatedTokensAfter : undefined;
+      const last = this.store.listMessages(conversationId).at(-1);
+      if (last && typeof response.data?.tokensBefore === 'number' && Number.isFinite(before) && before >= 0) {
+        last.compactions = [...(last.compactions ?? []), {
+          partIndex: last.parts?.length ?? 0, tokensBefore: before,
+          ...(after !== undefined && Number.isFinite(after) && after >= 0 ? { tokensAfter: after } : {}),
+        }];
+        this.store.saveMessage(last);
+        this.emit({ conversationId, message: last });
+      }
       return { tokensBefore: before, ...(after !== undefined ? { tokensAfter: after } : {}) };
     } finally {
       this.compacting.delete(conversationId);

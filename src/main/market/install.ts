@@ -11,7 +11,8 @@
  * install is `pnpm add --save-exact` of that version, after a restore point.
  */
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { atomicWriteFileSync } from '../atomic-write';
 import { join } from 'node:path';
 import { gt, prerelease, satisfies, valid, validRange } from 'semver';
 import type { MarketHttp } from './net';
@@ -151,9 +152,7 @@ export function setProfileBundle(layout: DshLayout, name: string, present: boole
   const bundles = present ? (current.includes(name) ? current : [...current, name]) : current.filter(bundle => bundle !== name);
   const next = { ...manifest, dsh: { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } } };
   const file = join(layout.profile, 'package.json');
-  const temporary = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-  renameSync(temporary, file);
+  atomicWriteFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
 }
 
 export interface InstalledPlugin {

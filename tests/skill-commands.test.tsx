@@ -107,7 +107,7 @@ describe('the composer’s / menu', () => {
     await type('/fr');
     expect(rows()).toHaveLength(1);
     mocks.use.mockResolvedValue({ name: 'frontend-design', resourceId: 'r2', imported: true, source: 'Claude Code' });
-    await press('Enter');
+    await press('Tab');
     expect(mocks.use).toHaveBeenCalledWith('local:/skills/frontend-design', 'c1');
     expect(textarea().value).toBe('/skill:frontend-design ');
     expect(host.querySelector('[role="listbox"]')).toBeNull();
@@ -182,7 +182,7 @@ describe('the composer’s / menu', () => {
     let resolve!: (value: unknown) => void;
     mocks.use.mockReturnValue(new Promise(done => { resolve = done; }));
     await type('/xl');
-    await press('Enter');
+    await press('Tab');
     await type('make a budget sheet');
     await act(async () => { resolve({ name: 'xlsx', resourceId: 'r4', imported: true, source: 'Claude Code' }); });
     expect(textarea().value).toBe('/skill:xlsx make a budget sheet');
@@ -191,7 +191,7 @@ describe('the composer’s / menu', () => {
   it('reports a skill that could not be turned on, and keeps the draft', async () => {
     mocks.use.mockRejectedValue(new Error('No SKILL.md for xlsx was found.'));
     await type('/xl');
-    await press('Enter');
+    await press('Tab');
     await act(async () => { await Promise.resolve(); });
     expect(errors.map(String)).toEqual(['Error: No SKILL.md for xlsx was found.']);
     expect(textarea().value).toBe('/xl');
@@ -200,6 +200,27 @@ describe('the composer’s / menu', () => {
 
 // The chat's plugin commands too (user, 30.09: "/sub… should offer /subagents").
 describe('plugin commands in the / menu', () => {
+  it.each(['code-review', 'review-helper', 'review'])('sends /review unchanged when a skill named %s is suggested', async name => {
+    mocks.list.mockResolvedValue([skill(name)]);
+    await type('/review');
+    expect(rows()).toHaveLength(1);
+    await press('Enter');
+    expect(sent).toEqual(['/review']);
+    expect(mocks.use).not.toHaveBeenCalled();
+  });
+
+  it('still chooses a skill through its explicit namespace or keyboard navigation', async () => {
+    mocks.list.mockResolvedValue([skill('review')]);
+    mocks.use.mockResolvedValue({ name: 'review', resourceId: 'r5' });
+    await type('/skill:review');
+    await press('Enter');
+    expect(mocks.use).toHaveBeenCalledTimes(1);
+    await type('/review');
+    await press('ArrowDown');
+    await press('Enter');
+    expect(mocks.use).toHaveBeenCalledTimes(2);
+    expect(sent).toEqual([]);
+  });
   it('offers the chat’s plugin commands by name and writes the one picked', async () => {
     mocks.commands.mockResolvedValue([
       { name: 'subagents', description: 'Administer subagents: inspect metadata and update models' },

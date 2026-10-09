@@ -92,7 +92,7 @@
       "icon": "assets/icon.png",
       "darkModeSupport": true,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Hello. listens only while a voice turn is recording, and sends the audio to the voice server you run on this Mac."
+        "NSMicrophoneUsageDescription": "Hello. listens only while you record a voice turn. Audio is processed on this Mac by the local voice engine installed by Hello. or the local server you choose."
       }
     },
     "extraResources": [

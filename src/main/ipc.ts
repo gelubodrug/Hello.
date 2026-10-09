@@ -11,6 +11,8 @@ import type { BrowserManager } from './browser/manager';
 import type { PageModeController } from './browser/page-mode';
 import { WorkspaceFiles } from './files/service';
 import { DEFAULT_TTS_VOICE, SPEECH_TEXT_LIMIT, VoiceSpeaker } from './voice/speak';
+import { translateVoice, voiceAudio } from './voice/translate';
+import type { ManagedVoice } from './voice/managed';
 import { resolveDropPaths } from './files/drop-paths';
 import { discoverMcpServers, discoverPiExtensions, discoverSkills, withoutSecrets } from './extensions/discovery';
 import { dshSkillRoots } from './dsh/skills';
@@ -26,7 +28,7 @@ function record(value:unknown): Record<string,unknown> {
 }
 function kind(value:unknown):NotebookKind {if(value!=='runbook'&&value!=='tasks'&&value!=='plan')throw new Error('Unknown notebook.');return value;}
 
-export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatService, terminal: MainTerminalService, browser: BrowserManager, revokePreviews: (id: string) => void = () => {}, deleteArtifacts: (id: string) => Promise<void> = async () => {}, announceExtensions: ()=>void = () => {}, pageModes?: PageModeController): ()=>void {
+export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatService, terminal: MainTerminalService, browser: BrowserManager, revokePreviews: (id: string) => void = () => {}, deleteArtifacts: (id: string) => Promise<void> = async () => {}, announceExtensions: ()=>void = () => {}, pageModes?: PageModeController, managedVoice?: ManagedVoice): ()=>void {
   const registered: string[]=[];
   const files = new WorkspaceFiles(id => store.getConversation(id).folder);
   const handle=(name:string,run:(...args:any[])=>unknown)=>{
@@ -157,15 +159,42 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('settings.localServers',()=>chat.localServers(true));
   // The same look Settings just asked for: a voice server is found, never started.
   handle('settings.voiceServers',()=>chat.voiceServers());
+  handle('workspace.toolOrder',id=>store.toolOrder(str(id)));
+  handle('workspace.saveToolOrder',(id,order)=>store.saveToolOrder(str(id),order));
   // A chunk of a reply, read aloud by the speech server the person runs here:
   // the one Settings names, else the first one found. Never one off this Mac.
   const speaker=new VoiceSpeaker();
+  handle('voice.status',()=>managedVoice?.status());
+  handle('voice.prepare',async(consent)=>{
+    if(consent!==true)throw new Error('Click Install Voice to approve the displayed downloads.');
+    if(!managedVoice)throw new Error('Restart Hello. to enable automatic Voice installation.');
+    const status=await managedVoice.prepare(true);
+    const settings=store.saveSettings({voice:{enabled:true}});
+    return {status,settings};
+  });
+  handle('voice.cancel',()=>managedVoice?.cancel());
+  handle('voice.stopSpeech',()=>managedVoice?.cancelSpeech());
+  let translating=false;
+  handle('voice.translate',async(audio)=>{
+    const bytes=voiceAudio(audio);
+    const voice=store.getSettings().voice;
+    if(!voice?.enabled)throw new Error('Turn Voice on before speaking.');
+    if(translating)throw new Error('A voice turn is already being translated.');
+    translating=true;
+    try{
+      const server=managedVoice?await managedVoice.translationEndpoint():voice.sttEndpointUrl||(await chat.voiceServers()).find(found=>found.kind==='whisper.cpp')?.baseUrl;
+      if(!server)throw new Error('No speech-to-text server is running on this Mac.');
+      return await translateVoice(server,bytes,{model:voice.sttModel,language:voice.sourceLanguage});
+    }finally{translating=false;}
+  });
   handle('voice.speak',async(text)=>{
     const words=str(text,'text',SPEECH_TEXT_LIMIT);
     const voice=store.getSettings().voice;
-    const server=voice?.ttsEndpointUrl||(await chat.voiceServers()).find(found=>found.kind==='speech')?.baseUrl;
+    if(!voice?.enabled)throw new Error('Turn Voice on to hear replies.');
+    const server=managedVoice?await managedVoice.speechEndpoint():voice?.ttsEndpointUrl||(await chat.voiceServers()).find(found=>found.kind==='speech')?.baseUrl;
+    if(managedVoice&&!server)return managedVoice.speak(words,voice?.ttsVoice??DEFAULT_TTS_VOICE);
     if(!server)throw new Error('No voice server is running on this Mac.');
-    return speaker.speak(server,words,voice?.ttsVoice??DEFAULT_TTS_VOICE);
+    return speaker.speak(server,words,voice?.ttsVoice??DEFAULT_TTS_VOICE,managedVoice?.speechSignal);
   });
   // What macOS says about the microphone, read without asking: the ask is the
   // first voice turn's, through the window's media grant.

@@ -44,6 +44,7 @@ interface Row {
   icon: typeof BookOpen;
   checked?: boolean;
   pending?: boolean;
+  skill?: boolean;
   run(): void;
 }
 
@@ -66,6 +67,9 @@ export function useSkillCommands({ conversationId, draft, setDraft, focus, onErr
   const [pending, setPending] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
+  // A bare /name can be a Pi prompt template, even before Pi has listed it.
+  // Only explicit menu navigation (or Tab/click) chooses a suggested skill.
+  const selectedFor = useRef<string | null>(null);
   const listId = useId();
   const open = Boolean(intent) && dismissed !== draft;
   const loaded = useRef(false);
@@ -118,6 +122,7 @@ export function useSkillCommands({ conversationId, draft, setDraft, focus, onErr
   };
 
   const skillRow = (skill: CatalogSkill): Row => ({
+    skill: true,
     id: skill.id,
     label: skill.name,
     detail: pending === skill.id
@@ -167,12 +172,13 @@ export function useSkillCommands({ conversationId, draft, setDraft, focus, onErr
     const rows = [...command, ...pluginRows, ...matching.slice(0, MAX_ROWS).map(skillRow)];
     return {
       rows,
-      note: matching.length > MAX_ROWS ? `${matching.length - MAX_ROWS} more — type more of the name` : '',
+      note: matching.length > MAX_ROWS ? `${matching.length - MAX_ROWS} more — type more of the name`
+        : matching.length && !/^\/skill:/i.test(draft) ? 'Tab chooses a skill; Enter sends the command as written.' : '',
     };
   };
   const { rows, note } = listing();
 
-  useEffect(() => { setIndex(0); }, [rows.length, intent?.kind]);
+  useEffect(() => { setIndex(0); selectedFor.current = null; }, [draft, rows.length, intent?.kind]);
   const current = Math.min(index, Math.max(rows.length - 1, 0));
   const visible = open && (rows.length > 0 || Boolean(note));
 
@@ -184,10 +190,13 @@ export function useSkillCommands({ conversationId, draft, setDraft, focus, onErr
     if (!rows.length) return false;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
+      selectedFor.current = draft;
       setIndex((current + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length);
       return true;
     }
     if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+      if (event.key === 'Enter' && intent?.kind === 'pick' && rows[current]?.skill && !/^\/skill:/i.test(draft) && selectedFor.current !== draft)
+        return false;
       event.preventDefault();
       rows[current]?.run();
       return true;
@@ -207,7 +216,7 @@ export function useSkillCommands({ conversationId, draft, setDraft, focus, onErr
             aria-disabled={row.pending || undefined}
             className="skill-commands__row"
             data-active={position === current}
-            onPointerMove={() => setIndex(position)}
+            onPointerMove={() => { selectedFor.current = draft; setIndex(position); }}
             // The textarea keeps focus: the menu is read with the caret still in the message.
             onPointerDown={event => event.preventDefault()}
             onClick={() => row.run()}

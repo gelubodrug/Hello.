@@ -5,12 +5,11 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmdirSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { atomicWriteFileSync } from '../atomic-write';
 import { fetchedSources, sourcesForMessage, withSourceLinks } from '../../shared/web';
 import type {
   AppSettings,
@@ -246,7 +245,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 15)
+    if (version > 16)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -448,6 +447,12 @@ export class DataStore {
           this.db.prepare(`INSERT INTO settings (key, value) SELECT 'chat-${page}:' || id, 'on' FROM conversations
             WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'chat-${page}:' || conversations.id)`).run();
         this.db.exec('PRAGMA user_version = 15');
+      })();
+    if (version < 16)
+      this.db.transaction(() => {
+        const columns = (this.db.pragma('table_info(messages)') as Array<{ name: string }>).map(column => column.name);
+        if (!columns.includes('compactions')) this.db.exec('ALTER TABLE messages ADD COLUMN compactions TEXT');
+        this.db.exec('PRAGMA user_version = 16');
       })();
   }
 
@@ -683,6 +688,7 @@ export class DataStore {
   deleteConversation(id: string): void {
     const row = this.getConversation(id);
     this.db.transaction(() => {
+      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`tool-order:${id}`);
       this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?)')
         .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
@@ -790,7 +796,7 @@ export class DataStore {
     const rows = this.db
       .prepare('SELECT * FROM messages WHERE conversationId = ? ORDER BY seq')
       .all(conversationId) as Array<
-      Message & { parts: string; usage: string | null; model: string | null; startedBy: string | null; workedMs: number | null }
+      Omit<Message, 'compactions'> & { compactions: string | null; parts: string; usage: string | null; model: string | null; startedBy: string | null; workedMs: number | null }
     >;
     return rows.map((row) => ({
       id: row.id,
@@ -802,10 +808,25 @@ export class DataStore {
       createdAt: row.createdAt,
       error: row.error,
       usage: parse(row.usage, undefined),
+      compactions: parse(row.compactions, undefined),
       ...(row.model ? { model: row.model } : {}),
       ...(row.startedBy ? { startedBy: row.startedBy } : {}),
       ...(row.workedMs ? { workedMs: row.workedMs } : {}),
     }));
+  }
+  toolOrder(conversationId: string): string[] {
+    this.getConversation(conversationId);
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(`tool-order:${conversationId}`) as { value: string } | undefined;
+    const saved: unknown = parse(row?.value, []);
+    return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
+  }
+  saveToolOrder(conversationId: string, order: unknown): string[] {
+    this.getConversation(conversationId);
+    if (!Array.isArray(order) || order.length > 500 || order.some(id => typeof id !== 'string' || !id || id.length > 200) || new Set(order).size !== order.length)
+      throw new Error('Invalid tool tab order.');
+    this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run(`tool-order:${conversationId}`, JSON.stringify(order));
+    return order;
   }
   saveMessage(message: Message): Message {
     this.getConversation(message.conversationId);
@@ -817,11 +838,11 @@ export class DataStore {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model,startedBy,workedMs)
-        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model,@startedBy,@workedMs)
+          `INSERT INTO messages (id,conversationId,role,content,parts,status,createdAt,error,usage,model,startedBy,workedMs,compactions)
+        VALUES (@id,@conversationId,@role,@content,@parts,@status,@createdAt,@error,@usage,@model,@startedBy,@workedMs,@compactions)
         ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts,
           status=excluded.status, error=excluded.error, usage=excluded.usage, model=COALESCE(excluded.model, messages.model),
-          startedBy=COALESCE(excluded.startedBy, messages.startedBy), workedMs=COALESCE(excluded.workedMs, messages.workedMs)`,
+          startedBy=COALESCE(excluded.startedBy, messages.startedBy), workedMs=COALESCE(excluded.workedMs, messages.workedMs), compactions=excluded.compactions`,
         )
         .run({
           ...message,
@@ -831,6 +852,7 @@ export class DataStore {
           model: message.model ?? null,
           startedBy: message.startedBy ?? null,
           workedMs: message.workedMs ?? null,
+          compactions: message.compactions ? JSON.stringify(message.compactions) : null,
         });
       this.db
         .prepare('UPDATE conversations SET updatedAt = ? WHERE id = ?')
@@ -1140,17 +1162,7 @@ export class DataStore {
         .join('\n');
       if (existsSync(files[kind]) && readFileSync(files[kind], 'utf8') === text)
         continue;
-      const temporary = path.join(directory, `.${kind}-${randomUUID()}.tmp`);
-      try {
-        writeFileSync(temporary, text, {
-          encoding: 'utf8',
-          mode: 0o600,
-          flag: 'wx',
-        });
-        renameSync(temporary, files[kind]);
-      } finally {
-        if (existsSync(temporary)) unlinkSync(temporary);
-      }
+      atomicWriteFileSync(files[kind], text);
     }
     return files;
   }

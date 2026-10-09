@@ -62,6 +62,8 @@ import { ChatDisclosure } from './ChatDisclosure';
 import { ExtensionsPicker } from './ExtensionsPicker';
 import { useSkillCommands } from './SkillCommands';
 import { useExtensionUi } from './ExtensionPanel';
+import { recordVoice } from './voice-input';
+import { SpeechPlayer } from './voice-playback';
 
 const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
 /** The longest message main accepts (ChatService refuses a longer one). */
@@ -355,6 +357,18 @@ export function MessageContent({ message, sources }: { message: Message; sources
   // Keep explicit thinking disclosure choices even when the first arriving tool
   // folds preceding reasoning/commentary into the activity group.
   const [thinkingExpanded, setThinkingExpanded] = useState<Record<number, boolean>>({});
+  if (message.compactions?.length) {
+    const parts = message.parts?.length ? message.parts : message.content ? [{ type: 'text' as const, text: message.content }] : [];
+    let from = 0;
+    return <>{message.compactions.map((marker, index) => {
+      const end = Math.max(from, Math.min(parts.length, marker.partIndex || (message.parts?.length ? 0 : parts.length)));
+      const slice = parts.slice(from, end); from = end;
+      return <Fragment key={index}>
+        {!!slice.length && <MessageContent message={{ ...message, content: '', parts: slice, compactions: undefined, status: 'complete' }} sources={sources} />}
+        <CompactionLine marker={marker} />
+      </Fragment>;
+    })}{from < parts.length && <MessageContent message={{ ...message, content: '', parts: parts.slice(from), compactions: undefined }} sources={sources} />}</>;
+  }
   if (!message.parts?.length) return <Markdown text={message.content} sources={sources} />;
   const parts = message.parts;
   const layout = activityLayout(parts, message.status === 'streaming');
@@ -403,6 +417,11 @@ export function MessageContent({ message, sources }: { message: Message; sources
 /** The line a restart draws through the transcript: the model reads nothing above it. */
 function RestartLine(): JSX.Element {
   return <div className="thread-restart" role="separator" aria-label="Chat restarted">Restarted — the model starts fresh from here</div>;
+}
+function CompactionLine({ marker }: { marker: NonNullable<Message['compactions']>[number] }): JSX.Element {
+  return <div className="thread-restart" role="separator" aria-label="Conversation compacted">
+    Context summarised · {marker.tokensBefore.toLocaleString()} → {marker.tokensAfter === undefined ? 'unknown' : `≈${marker.tokensAfter.toLocaleString()}`} tokens
+  </div>;
 }
 function MessageRow({
   message,
@@ -645,6 +664,7 @@ function MessageRow({
           )}
         </div>
       )}
+      {message.role === 'user' && message.compactions?.map((marker, index) => <CompactionLine key={index} marker={marker} />)}
       <ErrorNote error={copyError} />
       <ContextMenu position={context?.position ?? null} ariaLabel="Chat text actions"
         items={context ? [
@@ -775,6 +795,17 @@ export function ConversationView({
   const sticky = useRef(true);
   const generation = messages.some((message) => message.status === "streaming");
   const busy = sending || generation;
+  const [voicePhase, setVoicePhase] = useState<'idle' | 'listening' | 'working'>('idle');
+  const voiceTurn = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (!active || !settings.voice?.enabled) voiceTurn.current?.abort();
+    return () => { voiceTurn.current?.abort(); };
+  }, [active, settings.voice?.enabled, conversation.id]);
+  useEffect(() => {
+    const cancel = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') voiceTurn.current?.abort(); };
+    window.addEventListener('keydown', cancel, true);
+    return () => window.removeEventListener('keydown', cancel, true);
+  }, []);
   // What the chat's plugins show: their questions, notices, widgets and statuses.
   const extensionUi = useExtensionUi({
     conversationId: conversation.id, onError: reportError,
@@ -959,25 +990,23 @@ export function ConversationView({
     if (fresh.length) setAttachments(kept => [...fresh, ...kept.filter(value => !fresh.some(file => file.id === value.id))]);
     field.current?.focus();
   };
-  const send = async () => {
-    const text = draft.trim();
-    if (importLock.current) return;
+  const send = async (voiceText?: string) => {
+    const fromVoice = voiceText !== undefined;
+    const text = (voiceText ?? draft).trim();
+    if (importLock.current && !fromVoice) return;
     // Typing while the model works is a correction, not a second question: it
     // goes to the turn already running. Nothing is lost if it arrives late —
     // the pill above the composer shows it, and its landing can still change.
     if (busy) {
       if (!text) return;
-      setDraft("");
-      composerDirty.current = false;
+      if (!fromVoice) { setDraft(""); composerDirty.current = false; }
       try { setQueued(await api.chat.queue(conversation.id, text, 'steer')); }
-      catch (reason) { setError(errorText(reason)); keepRefused(text, []); }
+      catch (reason) { setError(errorText(reason)); if (fromVoice) setUnsent(current => [...current, { id: crypto.randomUUID(), text, attachments: [] }]); else keepRefused(text, []); }
       return;
     }
-    if (!text && !attachments.length) return;
-    const sentAttachments = attachments;
-    setDraft("");
-    setAttachments([]);
-    composerDirty.current = false;
+    if (!text && (fromVoice || !attachments.length)) return;
+    const sentAttachments = fromVoice ? [] : attachments;
+    if (!fromVoice) { setDraft(""); setAttachments([]); composerDirty.current = false; }
     setSending(true);
     setError(null);
     sticky.current = true;
@@ -985,10 +1014,30 @@ export function ConversationView({
       await api.chat.send(conversation.id, text, sentAttachments.map(item => item.id));
     } catch (reason) {
       setError(errorText(reason));
-      keepRefused(text, sentAttachments);
+      if (fromVoice) setUnsent(current => [...current, { id: crypto.randomUUID(), text, attachments: [] }]);
+      else keepRefused(text, sentAttachments);
     } finally {
       setSending(false);
     }
+  };
+  const startVoice = async () => {
+    if (voiceTurn.current) { voiceTurn.current.abort(); return; }
+    if (!active || busy || importing || !settings.voice?.enabled || !api.voice?.translate) return;
+    const turn = new AbortController(); voiceTurn.current = turn;
+    const release = SpeechPlayer.listen();
+    setError(null); setVoicePhase('working');
+    try {
+      const audio = await recordVoice(turn.signal, () => setVoicePhase('listening'));
+      if (turn.signal.aborted) return;
+      if (!audio) { setError('No speech was heard. Try again.'); return; }
+      setVoicePhase('working');
+      const text = await api.voice.translate(audio);
+      if (turn.signal.aborted) return;
+      if (!text.trim()) { setError('No speech was heard. Try again.'); return; }
+      release();
+      await send(text);
+    } catch (reason) { if (!turn.signal.aborted) setError(errorText(reason)); }
+    finally { release(); voiceTurn.current = null; if (mounted.current) setVoicePhase('idle'); }
   };
   /** Every way in — a drop, a paste, the picker — lands the same: one at a
    *  time, at most 8, a folder becoming the chat's folder (S209 F4). */
@@ -1439,12 +1488,12 @@ export function ConversationView({
                 {modelLoading ? <Loader2 size={13} className="browser-spinner"/> : <ChevronDown size={13} />}
               </MenuButton>
             </div>
-            {/* Voice input: rendered, disabled with an honest reason until voice turns land. */}
             <IconButton
-              label={settings.voice?.enabled ? "Voice input — speaking to Hello. is not ready yet" : "Voice input — turn Voice on in the sidebar"}
-              disabled
+              label={!settings.voice?.enabled ? "Voice input — turn Voice on in the sidebar" : voicePhase === 'listening' ? 'Listening — pause to send, click to cancel' : voicePhase === 'working' ? 'Preparing voice turn — click to cancel' : 'Speak to Hello.'}
+              disabled={!settings.voice?.enabled || !api.voice?.translate || (voicePhase === 'idle' && (busy || importing))}
+              onClick={() => void startVoice()}
             >
-              <Mic size={18} />
+              {voicePhase === 'working' ? <Loader2 size={18} className="spin" /> : voicePhase === 'listening' ? <Square size={16} /> : <Mic size={18} />}
             </IconButton>
             {busy ? (
               <IconButton

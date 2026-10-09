@@ -361,3 +361,51 @@ compatibility gate.
 Hello's own: the Pi engine updates (`src/main/chat/pi-engine.ts`,
 `src/main/updates.ts`) and running the tab on the chats' Pi.
 
+## Managed Voice installation — 2026-10-09 (T029)
+
+The human requested one click in Settings with automatic, visible sequential
+installation: Whisper engine, Whisper model, and Kokoro spoken replies. Hello's
+installer, streaming atomic writer, supervision, progress IPC and native Kokoro
+adapter are new code. No old application or database was used.
+
+The pinned artifact names, byte counts and SHA-256 digests are the manifest in
+[`src/main/voice/manifest.ts`](../src/main/voice/manifest.ts). Sources checked:
+
+- [OpenWhispr whisper.cpp v1.0.0](https://github.com/sjoerdteunisse/whisper.cpp/releases/tag/v1.0.0)
+  publishes `whisper-server-darwin-arm64.zip` and `whisper-server-darwin-x64.zip`.
+  These are third-party OpenWhispr builds of whisper.cpp, **not binaries
+  published by ggml-org**. The publisher's release metadata and build workflow
+  were read; the small executable ZIPs were inspected and hashed in memory,
+  never executed. Both Mach-O headers require macOS 14.0; installation checks
+  this before downloading and uses the architecture-matching executable.
+- [ggerganov/whisper.cpp, revision 5359861c739e955e79d9a303bcbc70fb988958b1](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1)
+  supplies `ggml-large-v3-turbo.bin` (1,624,555,275 bytes). The SHA-256 is the
+  publisher's LFS object digest, pinned to that repository revision. A HEAD
+  request confirmed its size and redirect to `us.aws.cdn.hf.co`; no model was
+  downloaded. Model selection follows T029; Romanian/English quality and
+  latency remain the separate Voice P4 benchmark, not a claim of this change.
+- [sherpa-onnx v1.13.8](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8)
+  supplies the arm64/x64 macOS native shared runtime archives. The publisher's
+  checksums/metadata and native CLI source were consulted. The arm64 runtime
+  archive's paths were inspected without executing binaries. Runtime libraries
+  are private to this installation, with no Homebrew or Python environment.
+- [sherpa-onnx TTS model release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models)
+  supplies `kokoro-int8-multi-lang-v1_0.tar.bz2` (132,303,094 bytes), pinned by
+  publisher SHA-256. Its model layout and English speaker indices follow the
+  [Kokoro documentation](https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html)
+  and publisher model tree. `af_heart` is speaker 3. The managed path invokes
+  `sherpa-onnx-offline-tts` for each bounded sentence and returns a WAV through
+  existing Voice IPC; existing external speech servers remain supported.
+  During user-triggered installation, a short local synthesis sample is checked
+  and discarded before the Kokoro stage becomes ready.
+
+Downloaded archives retain their upstream contents, including any bundled
+licenses. Source and model attribution is also visible through Settings'
+Download sources links. Installation does not modify system security settings.
+
+Validation here is non-emitting TypeScript checking and source/archive/metadata
+inspection only. Model-store and supervisor unit tests were authored but not
+run, per the active workflow. Full installation, Gatekeeper behavior, audio
+quality, microphone permissions, cancellation/retry UI and process shutdown on
+Apple Silicon and Intel remain user-run application checks. Neither models nor
+model credits were used, and no app/build/packaging/test command was run.

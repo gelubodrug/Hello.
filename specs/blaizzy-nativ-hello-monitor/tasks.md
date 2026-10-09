@@ -7,7 +7,7 @@
 - [x] T001 [P] [US3] Elimina new Date() din src/main/chat/pi-instructions.ts — data exista deja in liveContext snapshot (nativ #680; pi-instructions.ts:56)
 - [x] T002 [P] [US3] Restrange fingerprint AppSettings in src/main/chat/service.ts la campurile care intra in prompt — exclude appearance/approvals/connections/temperature/reasoningEffort daca nu afecteaza helloSystemPrompt (nativ #680; service.ts:1519-1531)
 - [x] T003 [P] [US3] Activeaza tools_find pentru bridge-ul CLI — adauga getCatalog in src/main/terminal/notebook-context.ts (nativ #490; notebook-context.ts:234-240, pi-extension.ts:307-313)
-- [ ] T004 [P] [US3] Scrieri atomice safe cu symlink-uri — resolve symlink inainte de renameSync/writeFileSync la: src/main/data/store.ts:1118, src/main/market/service.ts:151, src/main/market/install.ts:148, src/main/terminal/report-channel.ts:208, src/main/terminal/cli-workers.ts:251/340/433, src/main/dsh/service.ts:173/306 (nativ #642)
+- [x] T004 [P] [US3] Scrieri atomice safe cu symlink-uri — resolve symlink inainte de renameSync/writeFileSync la: src/main/data/store.ts:1118, src/main/market/service.ts:151, src/main/market/install.ts:148, src/main/terminal/report-channel.ts:208, src/main/terminal/cli-workers.ts:251/340/433, src/main/dsh/service.ts:173/306 (nativ #642)
 
 ### Phase 2 — Necesita decizie owner
 
@@ -18,8 +18,8 @@
 
 ### Phase 3 — Prioritate redusa
 
-- [ ] T009 [US2] Marker vizual in transcript la punctul de compactare cu numarul de tokeni inainte/dupa — compact RPC returneaza deja tokensBefore/estimatedTokensAfter; ContextMeter.tsx:10-11, pi-session.ts:198-199 (nativ #655)
-- [ ] T010 [US2] Drag-reorder tab-uri work-pane — necesita ordine persistata in DB inainte de drag handlers; ToolTabStrip.tsx (nativ #663)
+- [x] T009 [US2] Marker vizual in transcript la punctul de compactare cu numarul de tokeni inainte/dupa — compact RPC returneaza deja tokensBefore/estimatedTokensAfter; ContextMeter.tsx:10-11, pi-session.ts:198-199 (nativ #655)
+- [x] T010 [US2] Drag-reorder tab-uri work-pane — necesita ordine persistata in DB inainte de drag handlers; ToolTabStrip.tsx (nativ #663)
 
 ## pass-2026-10-08-001
 
@@ -45,7 +45,7 @@
 ## Pass 2026-10-08-004 — Voice revised (P1–P6, supersedes T018–T022)
 
 - [x] T023 [!low] [#high] Voice P1 — Audio-only media grant: replace blanket callback(false) in index.ts:162 with audio-only predicate (main frame, audio not video, app origin); setPermissionCheckHandler; askForMediaAccess darwin; media-src blob: in CSP; NSMicrophoneUsageDescription in package.json; SECURITY.md companion sentence; predicate exported and unit-tested (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
-- [ ] T024 [!medium] [#high] Voice P2 — Automatic voice turn: voice/translate.ts two-shaped (whisper.cpp multipart translate=true on /inference; OpenAI /v1/audio/translations); IPC hello:voice.translate; Mic button composer idle/listening/working; VAD auto-stop 900 ms silence; bytes to send() not setDraft; nothing-said guard; half-duplex with TTS; unit tests (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
+- [x] T024 [!medium] [#high] Voice P2 — Automatic voice turn: voice/translate.ts two-shaped (whisper.cpp multipart translate=true on /inference; OpenAI /v1/audio/translations); IPC hello:voice.translate; Mic button composer idle/listening/working; VAD auto-stop 900 ms silence; bytes to send() not setDraft; nothing-said guard; half-duplex with TTS; unit tests (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
 - [x] T025 [!low] [#high] Voice P3 — Server discovery: two-probe classify port as (a) GET /v1/audio/voices OpenAI-shaped voice, (b) GET /load or OPTIONS /inference whisper.cpp; voice-only excluded from chat LocalServer[]; service.ts listModels guard against Kokoro voice ids; Settings shows found server or none; regression test (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
 - [ ] T026 [!low] [#high] Voice P4 — STT model comparison: run Romanian clips through whisper-cli --translate -l ro for ggml-large-v3, ggml-large-v3-turbo and ggml-medium; output table with wall-clock and peak RSS; chosen default + reason in docs/PROVENANCE.md; no model downloaded without owner approval; gates P2 default config (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
 - [x] T027 [!medium] [#medium] Voice P5 — Kokoro TTS reply playback: voice/speak.ts POST /v1/audio/speech two-shaped (mlx-audio vs Kokoro-FastAPI); IPC hello:voice.speak; auto-play on reply complete when Voice on; sentence-chunked playback; stop drains queue; Escape and conversation-switch stop; prose only; mic closed while speaking; unit tests (nativ#691) <https://github.com/Blaizzy/nativ/pull/691>
@@ -63,12 +63,12 @@
 - [ ] T036 [!medium] [#low] Bugetul de memorie și CPU al gazdei DSH
 - [ ] T037 [!medium] [#medium] Extensii Pi: require() CommonJS al modulelor date de Pi într-un pachet împachetat; „Found on this Mac” poate lista o extensie pe care importul o refuză
 - [ ] T038 [!medium] [#low] WebGPU în tab-urile Hello (navigator.gpu): manualul de browser, embeddings locale
-- [ ] T039 [!low] [#medium] /review al unui șablon de prompt poate fi luat de meniul / când un skill conține cuvântul
+- [x] T039 [!low] [#medium] /review al unui șablon de prompt poate fi luat de meniul / când un skill conține cuvântul
 - [ ] T040 [!medium] [#low] Întrebările pi-subagents cu pas următor (Change model / thinking) se închid fără continuare: Pi nu trimite acel ecran prin RPC
 - [ ] T041 [!medium] [#low] Opțional: un layout Hello pentru clientul dsh și o descărcare mai mică (motorul office, 147 MB)
 - [ ] T042 [!low] [#low] Limitare: Low/Medium/High ajung la MTPLX (și Kimi) doar ca „gândire pornită”; reasoning_effort nu e trimis
 - [ ] T043 [!low] [#low] Limitare: extensia OpenViking publicată nu se importă (nu are pi în package.json); merge doar împachetată
-- [ ] T044 [!medium] [#low] Limitare: Files › Contents caută literal — normalizează NFC + case fold cu İ↔i și offseturi mapate înapoi, ca ⌘F din chat
+- [x] T044 [!medium] [#low] Limitare: Files › Contents caută literal — normalizează NFC + case fold cu İ↔i și offseturi mapate înapoi, ca ⌘F din chat
 
 ## Din tasks/todo.md (09.10) — De decis (owner)
 

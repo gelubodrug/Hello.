@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ContentMatch, ContentSearch, FileDocument, FileEntry, FileListing } from '../../shared/files';
+import { foldForSearch, originalSearchRange } from '../../shared/search-text';
 
 const MAX_ENTRIES = 10_000;
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -37,8 +38,9 @@ export class WorkspaceFiles {
     this.searches.set(conversationId, { requestId, controller });
     const result: ContentSearch = { requestId, matches: [], limited: false, reasons: [], filesScanned: 0, bytesScanned: 0, skipped: 0 };
     const stop = (reason: ContentSearch['reasons'][number]) => { result.limited = true; if (!result.reasons.includes(reason)) result.reasons.push(reason); };
-    const needle = matchCase ? query : query.toLocaleLowerCase();
+    const needle = foldForSearch(query, matchCase).folded;
     try {
+      if (!needle) return result;
       const target = await this.target(conversationId, '');
       const deadline = Date.now() + CONTENT_SEARCH_LIMITS.ms;
       const pending = [{ absolute: target.absolute, depth: 0 }];
@@ -67,13 +69,15 @@ export class WorkspaceFiles {
             const path = portable(relative(target.root, absolute));
             const lines = text.split(/\r?\n/);
             for (let at = 0; at < lines.length; at++) {
+              if (controller.signal.aborted) break;
+              if (Date.now() > deadline) { stop('time'); break; }
               const line = lines[at];
-              const folded = matchCase ? line : line.toLocaleLowerCase();
-              // A line whose lower case changes its length is searched as written.
-              const found = (folded.length === line.length ? folded : line).indexOf(needle);
+              const { folded, map } = foldForSearch(line, matchCase);
+              const found = folded.indexOf(needle);
               if (found < 0) continue;
               if (result.matches.length >= CONTENT_SEARCH_LIMITS.results) { stop('results'); break; }
-              result.matches.push(snippetOf(path, at + 1, line, found, needle.length));
+              const original = originalSearchRange(line, map, found, needle.length);
+              result.matches.push(snippetOf(path, at + 1, line, original.start, original.end - original.start));
             }
             if (result.limited) break;
           }
