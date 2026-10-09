@@ -103,7 +103,7 @@ and cap bytes/lines before renderer IPC. This is not an OS sandbox against a
 hostile local process changing parent directories concurrently.
 
 `files.list/read/searchContents/cancelSearch/open/reveal` use the trusted main-frame IPC gate. No general
-filesystem bridge, model tool or automatic content injection is added. External
+filesystem bridge or automatic content injection is added by the viewer. External
 Open is a separate human action; unfamiliar/executable file types prompt before
 the default app is invoked. It does not execute a constructed shell command.
 
@@ -116,6 +116,12 @@ history or recovery storage. Request sequencing rejects late document results.
 `shared/files.ts` parses local paths/line anchors without granting access. Markdown
 relative links resolve from the displayed file. Native browsers remain mounted
 but unpresented while Files is selected. Existing tool expand/restore applies.
+
+The coding group's `file_search` (T064) reuses `WorkspaceFiles` for literal
+content and filename searches. Its separate instance uses the same bounds,
+adds the automatic tools' secret-path exclusions and follows the turn's Stop
+signal without cancelling a human search. It needs an attached folder, not an
+approval or a browser grant.
 
 ## Durable data
 

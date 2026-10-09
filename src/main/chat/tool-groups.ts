@@ -31,7 +31,7 @@ export const TOOLS_FIND = 'tools_find';
 
 /** Always there: research, and what the human turned on for this chat by hand. */
 const CORE_TOOLS = new Set(['web_search', 'fetch_url', 'plan_write', 'skill_load', 'skills_find']);
-const CODING_TOOLS = new Set(['file_list', 'file_read', 'file_edit', 'file_write', 'command_run']);
+const CODING_TOOLS = new Set(['file_list', 'file_search', 'file_read', 'file_edit', 'file_write', 'command_run']);
 
 const CODING_MANUAL = [
   'Read relevant source before editing, complete the requested change, and check the result with the available tools when authorized.',

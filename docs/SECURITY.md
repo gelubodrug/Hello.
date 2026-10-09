@@ -269,7 +269,11 @@ associations can run code. These path checks are not isolation from a hostile
 local process racing parent-directory changes.
 
 Automatic file tools resolve paths inside the attached folder and reject paths
-escaping it, including resolved symlinks outside the folder. Reads are bounded
+escaping it, including resolved symlinks outside the folder. `file_search`
+reuses the Files viewer's bounded search with the automatic tools' secret-path
+exclusions applied before reading or descending; it does not follow links and
+does not require approval. Its snippets enter model context as file data.
+Reads are bounded
 UTF-8 text; common credential filenames and key extensions are excluded. File
 writes revalidate after approval, require an existing parent, and reject final
 symlink, hard-linked or non-regular targets.

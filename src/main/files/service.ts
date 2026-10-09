@@ -14,11 +14,12 @@ const SNIPPET = 160;
 const inside = (root: string, target: string) => { const path = relative(root, target); return !path || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)); };
 const portable = (path: string) => path.split(sep).join('/');
 
-/** No renderer-supplied root, arbitrary filesystem IPC, writes or agent tool. */
+/** Main supplies the root and any additional exclusions for automatic tools. */
 export class WorkspaceFiles {
   /** One search of the contents at a time per chat: a newer one stops the older. */
   private searches = new Map<string, { requestId: string; controller: AbortController }>();
-  constructor(private folder: (conversationId: string) => string | null) {}
+  constructor(private folder: (conversationId: string) => string | null,
+    private excluded: (absolute: string) => boolean = () => false) {}
 
   /** Stops the chat's search of the contents, if one runs (Files hidden, folder changed). */
   cancelSearch(conversationId: string): void {
@@ -32,9 +33,12 @@ export class WorkspaceFiles {
    * nowhere; links are not followed, and dependency, build and .git folders
    * are passed over. It stops at a limit with what it has, and says which.
    */
-  async searchContents(conversationId: string, requestId: string, query: string, matchCase = false): Promise<ContentSearch> {
+  async searchContents(conversationId: string, requestId: string, query: string, matchCase = false, signal?: AbortSignal): Promise<ContentSearch> {
+    signal?.throwIfAborted();
     this.cancelSearch(conversationId);
     const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
     this.searches.set(conversationId, { requestId, controller });
     const result: ContentSearch = { requestId, matches: [], limited: false, reasons: [], filesScanned: 0, bytesScanned: 0, skipped: 0 };
     const stop = (reason: ContentSearch['reasons'][number]) => { result.limited = true; if (!result.reasons.includes(reason)) result.reasons.push(reason); };
@@ -57,6 +61,7 @@ export class WorkspaceFiles {
             if (++visited > CONTENT_SEARCH_LIMITS.entries) { stop('entries'); break; }
             if (Date.now() > deadline) { stop('time'); break; }
             const absolute = resolve(directory.absolute, entry.name);
+            if (this.excluded(absolute)) { result.skipped++; continue; }
             if (entry.isDirectory()) {
               if (SEARCH_SKIP.has(entry.name) || directory.depth >= CONTENT_SEARCH_LIMITS.depth) result.skipped++;
               else pending.push({ absolute, depth: directory.depth + 1 });
@@ -83,8 +88,10 @@ export class WorkspaceFiles {
           }
         } catch (error) { if (!index) throw error; result.skipped++; }
       }
+      signal?.throwIfAborted();
       return result;
     } finally {
+      signal?.removeEventListener('abort', abort);
       if (this.searches.get(conversationId)?.controller === controller) this.searches.delete(conversationId);
     }
   }
@@ -128,7 +135,8 @@ export class WorkspaceFiles {
     return { root, absolute, path: portable(relative(root, absolute)) };
   }
 
-  async list(id: string, path = '', search = ''): Promise<FileListing> {
+  async list(id: string, path = '', search = '', signal?: AbortSignal): Promise<FileListing> {
+    signal?.throwIfAborted();
     const target = await this.target(id, path);
     if (!(await lstat(target.absolute)).isDirectory()) throw new Error('This path is not a folder.');
     const query = search.trim().toLocaleLowerCase();
@@ -138,6 +146,7 @@ export class WorkspaceFiles {
     const deadline = Date.now() + 4000;
     let visited = 0;
     for (let index = 0; index < pending.length; index++) {
+      signal?.throwIfAborted();
       if (Date.now() > deadline) { result.limited = true; break; }
       const directory = pending[index];
       // Revalidate directories when dequeued; don't follow links swapped in during traversal.
@@ -145,7 +154,9 @@ export class WorkspaceFiles {
         if ((await realpath(directory.absolute)) !== directory.absolute) { result.skipped++; continue; }
         const stream = await opendir(directory.absolute);
         for await (const entry of stream) {
+          signal?.throwIfAborted();
           if (++visited > MAX_ENTRIES || Date.now() > deadline) { result.limited = true; break; }
+          if (this.excluded(resolve(directory.absolute, entry.name))) { result.skipped++; continue; }
           const entryPath = portable(relative(target.root, resolve(directory.absolute, entry.name)));
           const kind = entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'link' : entry.isFile() ? 'file' : null;
           if (!kind) continue;
@@ -167,6 +178,7 @@ export class WorkspaceFiles {
       } catch (error) { if (!index) throw error; result.skipped++; }
       if (result.limited || !query) break;
     }
+    signal?.throwIfAborted();
     result.entries = [...entries.values()].sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name, undefined, { numeric: true }));
     return result;
   }
