@@ -20,7 +20,7 @@ import { HtmlArtifacts } from './browser/html-artifacts';
 import { PageModeController } from './browser/page-mode';
 import { registerIPC } from './ipc';
 import { ManagedVoice } from './voice/managed';
-import { disposeInOrder } from './lifecycle';
+import { closeWarning, disposeInOrder } from './lifecycle';
 import { DshService } from './dsh/service';
 import { DshSurface } from './dsh/surface';
 import { dshLayout } from './dsh/layout';
@@ -316,10 +316,10 @@ else {
     window.on('closed',()=>{mainWindow=null;app.quit();});
     window.on('close',event=>{
       if(closing){event.preventDefault();return;}
-      const count=terminal.list().filter(item=>item.status==='running').length;
+      const warning=closeWarning(terminal.list().filter(item=>item.status==='running').length,chat.runningReplyCount);
       event.preventDefault();
-      if(count&&!quitConfirmed&&process.env.HELLO_TEST_MODE!=='1'){
-        const choice=dialog.showMessageBoxSync(window,{type:'question',title:'Close Hello.?',message:`${count} terminal ${count===1?'session is':'sessions are'} still running.`,detail:'Closing the application will stop these processes. Your chats and notebooks are saved.',buttons:['Keep working','Quit and stop sessions'],defaultId:0,cancelId:0});
+      if(warning&&!quitConfirmed&&process.env.HELLO_TEST_MODE!=='1'){
+        const choice=dialog.showMessageBoxSync(window,{type:'question',title:'Close Hello.?',...warning,buttons:['Keep working','Quit and stop work'],defaultId:0,cancelId:0});
         if(choice===0)return;
       }
       quitConfirmed=true;closing=true;

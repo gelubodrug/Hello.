@@ -136,7 +136,9 @@ afterEach(async () => {
 function create(options: Pick<ChatServiceOptions, 'fetch' | 'browser' | 'localServers' | 'piEntry' | 'emitPending'> = {}): ChatService {
   // Never the real lsof and the real ports of the machine running the tests.
   service = new ChatService({ store, emit: event => events.push(structuredClone(event)),
-    emitQueue: event => queueEvents.push(structuredClone(event)), localServers: async () => [], ...options });
+    emitQueue: event => queueEvents.push(structuredClone(event)), localServers: async () => [],
+    // Model capability lookup is metadata, still served entirely by this fixture.
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: store.getSettings().model }] })), ...options });
   return service;
 }
 function assistant() {
@@ -198,6 +200,20 @@ function tab(id: string, control: BrowserTab['control'], owner = conversationId)
 }
 
 describe('Pi-backed chat lifecycle with in-memory transport', () => {
+  it('counts only running replies for close, not queued messages or warm runtimes', async () => {
+    const chat = create();
+    expect(chat.runningReplyCount).toBe(0);
+    const pending = chat.send(conversationId, 'hello');
+    const current = await runtime();
+    expect(chat.runningReplyCount).toBe(1);
+    await chat.queue(conversationId, 'keep this as a draft', 'later');
+    expect(chat.runningReplyCount).toBe(1);
+    settle(current.rpc, 'Done.');
+    await pending;
+    expect(current.rpc.isRunning).toBe(true);
+    expect(chat.runningReplyCount).toBe(0);
+    expect(chat.listQueued(conversationId)).toHaveLength(1);
+  });
   it('waits past prompt acceptance and agent_end before completing the response', async () => {
     store.saveNotebook({ conversationId, kind: 'tasks', title: 'Private planning',
       body: 'DO NOT INJECT THIS NOTEBOOK' });

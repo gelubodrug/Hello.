@@ -567,6 +567,10 @@ export class ChatService {
   isRunning(conversationId: string): boolean {
     return this.runs.has(conversationId);
   }
+  /** Replies doing work now; warm Pi sessions and queued drafts do not count. */
+  get runningReplyCount(): number {
+    return [...this.runs.values()].filter(run => !run.finished && !run.settled).length;
+  }
 
   /**
    * A worker spoke: its report, a note it sent while working, or a question it
