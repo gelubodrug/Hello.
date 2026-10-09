@@ -178,9 +178,26 @@ files, skills, templates and themes stay disabled; the explicit Hello extension
 registers the existing main-process tools. Startup verifies that extension
 before sending a model request.
 
+**Coder trusts root project instructions (T141).** Only in Coder mode, Hello
+reads `AGENTS.md` from the attached folder's root, or `CLAUDE.md` if AGENTS.md
+is absent. It imports at most 32 KiB of valid UTF-8 (a clipped final character
+is omitted) and labels a truncated excerpt. Links, hard links, non-regular,
+binary and unreadable files are not loaded. It never searches parent, home or
+nested directories. Chat mode does not load these files; Chat/Coder is the
+switch, with no separate permission setting. Changed instructions restart a
+warm Pi session on its next turn, keeping its conversation history.
+
+The contents of an unfamiliar repository become **instructions to the model**,
+not merely quoted source data. A malicious file can redirect the model's work.
+This is a material trust risk because tool approvals default to permissive
+“Work without asking”: commands have the person's OS authority and can affect
+files outside the attached folder. The 32 KiB cap and root-only loading limit
+discovery, not instruction injection. Main's path and browser gates still
+apply; an instruction file grants no new permissions or approval bypass.
+
 Skills and plugins the human imported and activated for that conversation are
-passed as explicit paths (`--skill`, `-e`, `--prompt-template`); nothing else on
-disk is discovered.
+passed as explicit paths (`--skill`, `-e`, `--prompt-template`); apart from the
+root instructions above, nothing else on disk is discovered.
 
 The Pi binary is the bundled one unless the person updates it from the
 sidebar: Hello then asks npm's registry for the package's `latest` (one request,

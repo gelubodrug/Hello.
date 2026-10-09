@@ -260,6 +260,11 @@ the output cap can raise this minimum. Smaller profiles need separate tuning.
 
 The pinned startup contract disables AGENTS.md/CLAUDE.md discovery with Pi's
 `-nc`; extension/skill/prompt discovery stays disabled with `-ne`, `-ns` and `-np`.
+In Coder mode only, Hello explicitly imports root `AGENTS.md` (or root
+`CLAUDE.md` when AGENTS.md is absent) from the attached folder, capped at 32 KiB.
+It does not walk parents or subfolders or follow file links. The contents join
+the appended system instructions and the session fingerprint, so edits take
+effect on the next turn. Chat mode omits them; there is no separate switch.
 It disables only native tools with `--no-builtin-tools`, while explicitly loading
 the Hello tool extension. `--no-tools` would disable extension tools too and is
 not an equivalent flag.

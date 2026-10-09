@@ -66,6 +66,7 @@ import { WebResearch } from './web-tools';
 import { ChatAttachments, type AttachmentContext } from './attachments';
 import { modelVision } from './model-vision';
 import type { ModelFileChange } from '../../shared/files';
+import { projectInstructionPrompt, readProjectInstructions } from './project-instructions';
 
 type WireMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -1577,6 +1578,7 @@ export class ChatService {
     run.controller.signal.throwIfAborted();
     const conversation = this.store.getConversation(run.conversationId);
     const resources = await this.resourcesFor(run.conversationId, run.controller.signal);
+    const projectInstructions = await readProjectInstructions(conversation.folder, conversation.chatMode ?? 'chat', run.controller.signal);
     run.controller.signal.throwIfAborted();
     // Whatever the launch reads restarts the child; what it never reads does not
     // (nativ #680: a prefix that moves for nothing is a cache thrown away).
@@ -1584,7 +1586,7 @@ export class ChatService {
     // temperature and reasoningEffort stay: the launch config carries both.
     const { appearance: _a, approvals: _p, connections: _c, apiKeySet: _k, limitsFor: _l, ...launched } = settings;
     const fingerprint = createHash('sha256').update(JSON.stringify({
-      settings: launched, vision, subagentLimits, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat',
+      settings: launched, vision, subagentLimits, key: run.key, folder: conversation.folder, chatMode: conversation.chatMode ?? 'chat', projectInstructions,
       // The instructions name the notebook sections that are on: a switched
       // section starts the next turn in a session whose instructions say so.
       sections: { plan: conversation.planning === true, runbook: conversation.runbook === true, tasks: conversation.tasks === true },
@@ -1649,12 +1651,12 @@ export class ChatService {
       if (run.isRetry && run.message.parts?.length) history.push(run.message);
       const launch = await preparePiLaunch({
         dataDir: this.store.dataDir, conversationId: run.conversationId, settings, key: run.key,
-        systemPrompt: helloSystemPrompt(settings, conversation.chatMode ?? 'chat', {
+        systemPrompt: [helloSystemPrompt(settings, conversation.chatMode ?? 'chat', {
           skills: resources.skills.map(skill => ({ name: skill.name, description: skill.description })),
           mcp: resources.mcp.map(tool => ({ name: tool.name, serverName: tool.serverName })),
           catalog: Boolean(this.skillCatalog),
         }, conversation.planning === true,
-        { runbook: conversation.runbook === true, tasks: conversation.tasks === true }),
+        { runbook: conversation.runbook === true, tasks: conversation.tasks === true }), projectInstructionPrompt(projectInstructions)].filter(Boolean).join('\n\n'),
         chatMode: conversation.chatMode ?? 'chat', history: wireHistory(history),
         bridgeEnv: bridge.env, requestTimeoutMs: this.requestTimeoutMs,
         skillPaths: resources.skillPaths, extensionPaths: resources.extensionPaths, promptPaths: resources.promptPaths,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions } from '../src/main/chat/pi-rpc';
@@ -200,6 +200,27 @@ function tab(id: string, control: BrowserTab['control'], owner = conversationId)
 }
 
 describe('Pi-backed chat lifecycle with in-memory transport', () => {
+  it('loads root instructions only in Coder and refreshes a warm session when they change', async () => {
+    const folder = path.join(directory, 'project'); mkdirSync(folder);
+    writeFileSync(path.join(folder, 'AGENTS.md'), 'PROJECT_RULE_ONE');
+    store.updateConversation(conversationId, { folder });
+    const chat = create();
+    const promptPath = path.join(piConversationDir(directory, conversationId), 'system-prompt.md');
+    const turn = async (mode: 'chat' | 'coder', index: number) => {
+      store.updateConversation(conversationId, { chatMode: mode });
+      const pending = chat.send(conversationId, 'Continue');
+      const current = await runtime(index);
+      expect(current.rpc.options.args).toContain('-nc');
+      const prompt = readFileSync(promptPath, 'utf8');
+      settle(current.rpc, 'Done.'); await pending;
+      return prompt;
+    };
+    expect(await turn('chat', 0)).not.toContain('PROJECT_RULE_ONE');
+    expect(await turn('coder', 1)).toContain('PROJECT_RULE_ONE');
+    writeFileSync(path.join(folder, 'AGENTS.md'), 'PROJECT_RULE_TWO');
+    expect(await turn('coder', 2)).toContain('PROJECT_RULE_TWO');
+    expect(await turn('chat', 3)).not.toContain('PROJECT_RULE_TWO');
+  });
   it('counts only running replies for close, not queued messages or warm runtimes', async () => {
     const chat = create();
     expect(chat.runningReplyCount).toBe(0);
