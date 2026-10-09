@@ -36,6 +36,7 @@ import { cachedMarketHttp, createMarketHttp } from './market/net';
 import { homedir } from 'node:os';
 import { PiMarketService } from './market/pi-service';
 import { registerMarketIPC } from './market/ipc';
+import { initializeShellEnv } from './shell-env';
 
 /**
  * The panes a chat may see and speak to: its own terminals and CLI workers,
@@ -105,6 +106,7 @@ if(!app.requestSingleInstanceLock()){app.quit();}
 else {
   app.on('second-instance',()=>{if(mainWindow){if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();}});
   app.whenReady().then(async()=>{
+    await initializeShellEnv();
     const rendererRoot=resolve(bundleDir,'../renderer');
     protocol.handle('hello',request=>{
       const url=new URL(request.url);

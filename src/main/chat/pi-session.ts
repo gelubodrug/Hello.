@@ -4,6 +4,7 @@ import { access, link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AppSettings } from '../../shared/types';
+import { CHILD_PLATFORM_KEYS, shellEnvironment } from '../shell-env';
 import { normalizeEndpoint } from '../data/store';
 import { usesQwenThinkingSwitch } from './qwen-thinking';
 
@@ -228,9 +229,10 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
     writeFile(promptFile, options.systemPrompt, { mode: 0o600 }),
   ]);
   const env: NodeJS.ProcessEnv = {};
+  const source = shellEnvironment();
   // Do not inherit other provider keys, Pi config or code-injection environment.
-  for (const name of ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'TZ', 'SystemRoot', 'WINDIR', 'USERPROFILE']) {
-    if (process.env[name] !== undefined) env[name] = process.env[name];
+  for (const name of CHILD_PLATFORM_KEYS) {
+    if (source[name] !== undefined) env[name] = source[name];
   }
   Object.assign(env, options.bridgeEnv, {
     ELECTRON_RUN_AS_NODE: '1', PI_CODING_AGENT_DIR: agentDir,

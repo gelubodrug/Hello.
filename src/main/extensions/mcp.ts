@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { CHILD_PLATFORM_KEYS, shellEnvironment } from '../shell-env';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import type { McpServerStatus } from '../../shared/types';
@@ -106,8 +107,9 @@ class McpConnection implements McpLink {
     const config = parseConfig(this.row) as McpConfig;
     if (!config.command) throw new Error('This MCP server has no command.');
     const environment: NodeJS.ProcessEnv = {};
-    for (const name of ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'TZ', 'SystemRoot', 'WINDIR', 'USERPROFILE'])
-      if (process.env[name] !== undefined) environment[name] = process.env[name];
+    const source = shellEnvironment();
+    for (const name of CHILD_PLATFORM_KEYS)
+      if (source[name] !== undefined) environment[name] = source[name];
     Object.assign(environment, this.env);
     const child = spawn(config.command, config.args, {
       cwd: config.cwd ?? undefined,

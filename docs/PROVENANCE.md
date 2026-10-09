@@ -23,6 +23,12 @@ or source-app state was copied. Reduced-motion handling uses Hello's settings.
 
 ## Terminal and CLI launch
 
+T063 (09 October 2026): Hello's new `main/shell-env.ts` captures the login
+shell's PATH, locale and proxy variables once for Finder/Dock launches and uses
+the existing authorized `terminal/env.ts` PATH augmentation as its fallback.
+Command tools, Pi and MCP launches consume this main-only snapshot. No code was
+read or copied from the old repository for this adaptation.
+
 The old repository's PTY manager, xterm renderer, environment, keyboard and CLI
 launch mechanisms informed the isolated modules under `src/main/terminal/` and
 `src/renderer/terminal/`. See the detailed adaptation notes in

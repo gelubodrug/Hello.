@@ -30,6 +30,7 @@ import {
 } from '../browser/agent-input';
 import type { ElementTarget, WaitCondition } from '../browser/agent-target';
 import { toolOutputText, type ToolImage, type ToolOutput } from './tool-output';
+import { shellEnvironment } from '../shell-env';
 
 export interface BrowserHooks {
   open?(conversationId: string, destination: string, signal?: AbortSignal): BrowserTab | Promise<BrowserTab>;
@@ -1640,6 +1641,7 @@ function runApprovedCommand(
     signal.throwIfAborted();
     const child = spawn('/bin/sh', ['-c', command], {
       cwd,
+      env: shellEnvironment(),
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
