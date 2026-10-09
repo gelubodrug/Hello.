@@ -92,3 +92,7 @@
 - [ ] T059 [!low] [#low] DECIZIE OWNER — verificare în aplicație: browser marks după repornire; smarbill.ro în bara de adrese, apoi Back
 - [ ] T060 [!low] [#low] DECIZIE OWNER — verificare în aplicație: meniul / și o descărcare reală de pe skills.sh
 - [ ] T061 [!low] [#medium] DECIZIE OWNER — verificare în aplicație (S209): ↑/↓ în composer; ⌘1–9, ⌘⇧] / ⌘⇧[ și ⌘J (și cu terminal sau pagină în focus); căutarea din Notebook; ⌘V cu captură și fișier din Finder, Attach files…; ⌘F în terminal, cu output care curge și în vim/less
+
+## Decizie owner 09.10 — DSH doar găzduit
+
+- [ ] T062 [!high] [#high] Redu DSH la lansare găzduită: păstrează gazda, butonul de lansare și upgrade la ultima versiune; scoate tema/layoutul Hello, shim-ul, puntea de unelte DSH în chaturile Hello, marketul DSH și orice integrare de pluginuri DSH; actualizează docs/ARCHITECTURE.md și docs/PROVENANCE.md
