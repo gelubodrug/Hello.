@@ -282,7 +282,12 @@ These are application-level safeguards, not isolation from a hostile concurrent
 local process. The secret-file exclusions are a limited filename filter, not
 content-based secret detection. Ordinary source files can still contain secrets.
 
-`command_run` starts `/bin/sh -c` with a timeout and bounded output. **Its working
+`command_run` starts `/bin/sh -c` with a per-call timeout (30 seconds by default,
+1–600 seconds) and a 16 KiB head / 48 KiB tail output buffer. High output alone
+does not stop it; omitted bytes are counted. An optional private output log is
+capped at 8 MiB and reports truncation; the active model key and known sensitive
+environment values are redacted before persistence. No log is saved by default.
+**Its working
 directory is not a sandbox:** an approved command can access other files, use the
 network, launch processes or expose environment values with the user's OS
 permissions. It inherits the main process environment. Review the entire command,

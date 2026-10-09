@@ -1947,6 +1947,7 @@ export class ChatService {
         if (!notedDomains) this.notedDomains.set(conversationId, (notedDomains = new Set<string>()));
         const output = await executeToolOutput(name, args, {
           store: this.store, conversationId, signal, browser: this.browser, workers: this.workers, web: run.web, notedDomains,
+          redactValues: [run.key],
           approve: () => this.approvalFor(name, run, part!, signal),
           skills: {
             // A skill turned on during this reply is not in the snapshot the

@@ -62,6 +62,9 @@ export function toolCode(part: Extract<MessagePart, { type: "tool" }>): JSX.Elem
       </div>
     );
   if (part.name === "command_run" && text(input.command))
-    return <div className="tool-code"><CodeBlock code={input.command} language="bash" /></div>;
+    return <div className="tool-code">
+      <p className="tool-code-note">Timeout: {typeof input.timeoutSeconds === 'number' ? input.timeoutSeconds : 30} seconds{input.saveLog === true && ' · Save output log'}</p>
+      <CodeBlock code={input.command} language="bash" />
+    </div>;
   return null;
 }

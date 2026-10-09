@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { mkdir, open, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -30,7 +29,7 @@ import {
 } from '../browser/agent-input';
 import type { ElementTarget, WaitCondition } from '../browser/agent-target';
 import { toolOutputText, type ToolImage, type ToolOutput } from './tool-output';
-import { shellEnvironment } from '../shell-env';
+import { commandTimeout, runApprovedCommand } from './command-run';
 import { CONTENT_SEARCH_LIMITS, WorkspaceFiles } from '../files/service';
 
 export interface BrowserHooks {
@@ -337,8 +336,10 @@ export function toolDefinitions(
       ),
       tool(
         'command_run',
-        'Request explicit human approval to execute a shell command with the chat folder as cwd. The shell is NOT filesystem-sandboxed. Use only for work the human requested. Timeout 30 seconds; bounded output.',
-        { command: property('Exact shell command to present for approval.') },
+        'Execute a shell command with the chat folder as cwd under the current approval setting. The shell is NOT filesystem-sandboxed. Use only for work the human requested. Timeout defaults to 30 seconds (maximum 600). Output retains the first 16 KiB and latest 48 KiB with an omitted-byte count; high output does not stop the command.',
+        { command: property('Exact shell command to present for approval.'),
+          timeoutSeconds: { type: 'integer', minimum: 1, maximum: 600, description: 'Time allowed for this call; default 30 seconds.' },
+          saveLog: { type: 'boolean', description: 'Also save output in private app data (up to 8 MiB, with known credentials redacted); default false.' } },
         ['command'],
       ),
     );
@@ -848,6 +849,8 @@ async function keepPrevious(dataDir: string, conversationId: string, shown: stri
   return kept;
 }
 export interface ToolContext {
+  /** Main-only credentials to remove from command results and optional logs. */
+  redactValues?: string[];
   store: DataStore;
   conversationId: string;
   signal: AbortSignal;
@@ -1368,6 +1371,8 @@ export async function executeToolOutput(
       }
       case 'command_run': {
         const command = text(input, 'command', 20_000);
+        const timeoutSeconds = commandTimeout(input.timeoutSeconds);
+        if (input.saveLog !== undefined && typeof input.saveLog !== 'boolean') throw new Error('saveLog must be boolean.');
         if (
           !conversation.folder ||
           !(await stat(conversation.folder)).isDirectory()
@@ -1382,7 +1387,9 @@ export async function executeToolOutput(
           throw new Error(
             'Chat folder changed while approval was pending. Ask again.',
           );
-        return await runApprovedCommand(command, conversation.folder, signal);
+        return await runApprovedCommand(command, conversation.folder, signal, {
+          timeoutSeconds, dataDir: store.dataDir, saveLog: input.saveLog === true, redactValues: context.redactValues,
+        });
       }
       case 'browser_show_html': {
         const more = input.more === true;
@@ -1655,105 +1662,12 @@ export async function executeToolOutput(
   // trip that follows, so an enormous one is not paid once. Cut it where a
   // person still gets the useful part, and say what to do instead of leaving
   // the model to guess that the rest exists.
-  if (output.length <= TOOL_OUTPUT_LIMIT) return output;
+  // The command's own byte ring preserves its tail; a second head-only cut
+  // would discard precisely the final error or completion it was kept for.
+  if (name === 'command_run' || output.length <= TOOL_OUTPUT_LIMIT) return output;
   const cut = output.length - TOOL_OUTPUT_LIMIT;
   return output.slice(0, TOOL_OUTPUT_LIMIT) +
     `\n[Cut here. ${cut.toLocaleString('en')} more characters were produced and are not in this result, ` +
     'and every round trip after this one carries what is above. Ask again for the part you need — a narrower ' +
     'path, a filter, a smaller range — rather than repeating this call.]';
-}
-
-/** The explicit approval grants a shell, not a pretend cwd-only sandbox. */
-function runApprovedCommand(
-  command: string,
-  cwd: string,
-  signal: AbortSignal,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    signal.throwIfAborted();
-    const child = spawn('/bin/sh', ['-c', command], {
-      cwd,
-      env: shellEnvironment(),
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '',
-      stderr = '',
-      reason = '',
-      bytes = 0;
-    let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    const kill = () => {
-      if (!child.pid) return;
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        /* Already exited. */
-      }
-      forceTimer ??= setTimeout(() => {
-        try {
-          process.kill(-child.pid!, 'SIGKILL');
-        } catch {
-          /* Already exited. */
-        }
-      }, 1000);
-    };
-    const abort = () => {
-      reason = 'Command stopped.';
-      kill();
-    };
-    const timeout = setTimeout(() => {
-      reason = 'Command timed out after 30 seconds.';
-      kill();
-    }, 30_000);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      if (forceTimer) clearTimeout(forceTimer);
-      signal.removeEventListener('abort', abort);
-    };
-    signal.addEventListener('abort', abort, { once: true });
-    for (const [stream, append] of [
-      [
-        child.stdout,
-        (text: string) => {
-          stdout += text;
-        },
-      ],
-      [
-        child.stderr,
-        (text: string) => {
-          stderr += text;
-        },
-      ],
-    ] as const) {
-      stream.setEncoding('utf8');
-      stream.on('data', (chunk: string) => {
-        bytes += Buffer.byteLength(chunk);
-        if (bytes <= 128_000) append(chunk);
-        else {
-          reason = 'Command exceeded the 128 KB output limit.';
-          kill();
-        }
-      });
-    }
-    child.once('error', (error) => {
-      cleanup();
-      reject(error);
-    });
-    child.once('close', (exitCode, exitSignal) => {
-      cleanup();
-      if (signal.aborted) {
-        reject(signal.reason);
-        return;
-      }
-      resolve(
-        JSON.stringify({
-          exitCode,
-          signal: exitSignal,
-          stdout,
-          stderr,
-          ...(reason ? { error: reason } : {}),
-        }),
-      );
-    });
-  });
 }
