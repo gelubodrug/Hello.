@@ -149,6 +149,7 @@ const NAMES: Record<string, Naming> = {
   notebook_task_status: named('Update task', 'Updated task', count => `Updated ${count} tasks`),
   notebook_paths: named('Find notebook files', 'Found notebook files', count => `Looked for notebook files ${count} times`),
   file_list: named('List files', 'Listed files', count => `Listed ${count} folders`),
+  file_search: named('Search files', 'Searched files', count => `Searched files ${count} times`),
   file_read: {
     one: part => { const name = leaf(field(part, 'path')); return name ? `Read ${name}` : 'Read file'; },
     many: count => `Read ${count} files`,
