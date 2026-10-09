@@ -95,4 +95,4 @@
 
 ## Decizie owner 09.10 — DSH doar găzduit
 
-- [ ] T062 [!high] [#high] Redu DSH la lansare găzduită: păstrează gazda, butonul de lansare și upgrade la ultima versiune; scoate tema/layoutul Hello, shim-ul, puntea de unelte DSH în chaturile Hello, marketul DSH și orice integrare de pluginuri DSH; actualizează docs/ARCHITECTURE.md și docs/PROVENANCE.md
+- [x] T062 [!high] [#high] Redu DSH la lansare găzduită: păstrează gazda, butonul de lansare și upgrade la ultima versiune; scoate tema/layoutul Hello, shim-ul, puntea de unelte DSH în chaturile Hello, marketul DSH și orice integrare de pluginuri DSH; actualizează docs/ARCHITECTURE.md și docs/PROVENANCE.md
