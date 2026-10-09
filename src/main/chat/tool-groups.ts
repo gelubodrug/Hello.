@@ -36,7 +36,9 @@ const CODING_TOOLS = new Set(['file_list', 'file_search', 'file_read', 'file_edi
 const CODING_MANUAL = [
   'Read relevant source before editing, complete the requested change, and check the result with the available tools when authorized.',
   'Change an existing file with file_edit — the exact text to replace and its replacement — never by rewriting the whole file with file_write, which is for new files or a deliberate full replacement; every replaced version is kept, and the result says where.',
-  'command_run asks the human for approval and runs in the attached folder; the shell is not sandboxed. Use it only for work the human asked for.',
+  'Before rm, mv, cp -R, git clean or git reset, verify the resolved source and destination paths, including symlinks, and the exact scope of deletion, overwrite or discarded work. For Git, check the repository, branch and working-tree changes first; never infer a safe target from cwd alone.',
+  'After a step is interrupted, stopped or times out, inspect its actual effect before retrying or continuing. A timeout does not mean nothing happened: files, processes or external state may already have changed.',
+  'command_run uses the current approval setting and runs in the attached folder; the shell is not sandboxed. Use it only for work the human asked for; these rules never bypass an approval.',
   'Report what changed and what was verified; never claim a check you did not run.',
 ].join('\n');
 
