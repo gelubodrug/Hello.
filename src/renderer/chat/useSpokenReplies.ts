@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { Message } from '../../shared/types';
 import { api } from '../api';
-import { SpeechPlayer, playClip, replyFinished } from './voice-playback';
+import { SpeechPlayer, playClip, replyFinished, spokenReply } from './voice-playback';
 
 /**
- * Replies of the chat on screen, read aloud as they finish while Voice is on.
- * Escape stops it, and so do switching chats and turning Voice off. A reply
- * that was already done when it arrived (a chat opened, a list loaded) is not
- * read: only one finishing now is.
+ * Replies of the chat on screen, confirmed aloud in a line as they finish
+ * while Voice is on — the reply itself is for the eye (user, 09.10). Escape
+ * stops it, and so do switching chats and turning Voice off. A reply that was
+ * already done when it arrived (a chat opened, a list loaded) is not spoken:
+ * only one finishing now is.
  */
 export function useSpokenReplies(options: { enabled: boolean; activeId: string | null; onError: (error: unknown) => void }): SpeechPlayer | null {
   const { enabled, activeId } = options;
@@ -26,7 +27,7 @@ export function useSpokenReplies(options: { enabled: boolean; activeId: string |
       const previous = seen.get(event.message.id);
       seen.set(event.message.id, event.message.status);
       const { enabled: on, activeId: shown } = live.current;
-      if (on && event.conversationId === shown && replyFinished(previous, event.message)) void player.say(event.message.content);
+      if (on && event.conversationId === shown && replyFinished(previous, event.message)) void player.say(spokenReply(event.message));
     });
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && player.speaking) player.stop(); };
     window.addEventListener('keydown', escape, true);

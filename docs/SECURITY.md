@@ -53,8 +53,31 @@ permission. On macOS the system asks the person once
 admits `media-src blob:` so a recorded or synthesized clip can play, and the
 audio goes only to a voice server on loopback, either the person's existing
 server or Hello's managed Whisper child.
-When Voice is on, a finished reply of the chat on screen is read aloud: its
-prose only (no code, tables or addresses), in sentence chunks, posted by main
+
+The microphone is held, not switched on: it records while the button — or
+Space, in the composer — is pressed and the turn ends when it is let go
+(user, 09.10). A Space held a quarter of a second, or repeated by the system,
+is a hold, its typed space taken back; a tapped one stays a space. Nothing
+listens longer than a hand on a key: a press too short to hold a word leaves
+nothing behind, a key held over silence closes the turn after eight seconds,
+every turn closes at a minute, and after letting go the microphone hears a
+quarter of a second more for the last syllable. What is said is transcribed by
+that loopback server in the language it was said in, never translated, and
+pinned to the first language a pass hears (or the one set in Settings ›
+Voice). While the person speaks, the turn so far is written out from its start
+after about four seconds and then every three, one pass at a time; the words
+two passes agree on are locked and never change (LocalAgreement, after
+whisper_streaming), so only the newest words can still be revised. Each clip
+keeps only 300 ms of the silence around the speech, and segments the model
+itself judged to be no speech are dropped, as is a lone caption sign-off over
+doubtful audio. The words land in the draft and go no further: nothing reaches
+the model until the person sends them, unless they switched Auto Send on, and
+then only once the last pass is back — never on a timer that could send words
+still being written out. Escape throws the turn away, in either case.
+When Voice is on, a finished reply of the chat on screen is confirmed aloud in
+one line — the first sentence of its closing paragraph, or its question, drawn
+from its prose only (no code, tables or addresses), and a reply that ended
+badly says so. The reply itself is never read out. That line is posted by main
 to `/v1/audio/speech` of a speech server on `localhost`/`127.0.0.1`/`::1`, or
 synthesized with Hello's managed Kokoro native child. An address off this Mac
 is refused. Escape, switching chats or turning Voice off stops playback,

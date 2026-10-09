@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { VoiceSpeaker, loopbackBase, speechBody, speechShape } from '../src/main/voice/speak';
-import { speechChunks, spokenProse } from '../src/shared/speech-text';
-import { SpeechPlayer, replyFinished } from '../src/renderer/chat/voice-playback';
+import { speechChunks, spokenConfirmation, spokenProse } from '../src/shared/speech-text';
+import { SpeechPlayer, replyFinished, spokenReply } from '../src/renderer/chat/voice-playback';
 import type { Message, VoiceSpeech } from '../src/shared/types';
 
 const wav = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]);
@@ -87,12 +87,56 @@ describe('the spoken reply', () => {
     expect(changes).toEqual([true, false]);
   });
 
-  it('reads a reply only when it finishes now, not one that was already done', () => {
+  it('speaks a reply only when it ends now, not one that was already done', () => {
     const reply = { role: 'assistant', status: 'complete' } as Message;
     expect(replyFinished('streaming', reply)).toBe(true);
     expect(replyFinished(undefined, reply)).toBe(false);
     expect(replyFinished('complete', reply)).toBe(false);
-    expect(replyFinished('streaming', { ...reply, status: 'error' })).toBe(false);
+    // One that ended badly is spoken too: it says it did not finish.
+    expect(replyFinished('streaming', { ...reply, status: 'error' })).toBe(true);
     expect(replyFinished('streaming', { ...reply, role: 'user' })).toBe(false);
+  });
+});
+
+// What the voice says of a finished reply (user, 09.10): one line, never the reply.
+describe('the line a reply is confirmed with', () => {
+  it('is the first sentence of the closing paragraph, not the whole answer', () => {
+    const reply = [
+      '## Marked', '', 'I opened the directory and went through the table.', '',
+      '| # | Skill |', '|---|---|', '| 1 | Find Skills |', '',
+      'All 14 S-RANK skills are marked on the page. The YouTube updates and the 2026 lineup are there for your reference.',
+    ].join('\n');
+    expect(spokenConfirmation(reply)).toBe('All 14 S-RANK skills are marked on the page.');
+  });
+
+  it('passes over a goodbye and a line that only introduces a list, and speaks a closing question', () => {
+    expect(spokenConfirmation('Here is the page you requested.\n\nLet me know if you need anything else.'))
+      .toBe('Here is the page you requested.');
+    expect(spokenConfirmation('The tests pass.\n\nStill to do:\n\n- [ ] package the app\n- [ ] check the icon'))
+      .toBe('The tests pass.');
+    expect(spokenConfirmation('I stopped before writing. Should I overwrite the file?'))
+      .toBe('Should I overwrite the file?');
+  });
+
+  it('says nothing for a reply with no prose, and keeps code and addresses out of what it says', () => {
+    expect(spokenConfirmation('```ts\nconst x = 1;\n\nconst y = 2;\n```')).toBe('');
+    expect(spokenConfirmation('- one\n- two')).toBe('');
+    expect(spokenConfirmation('')).toBe('');
+    expect(spokenConfirmation('The page is at [the directory](https://example.com/a) now.'))
+      .toBe('The page is at the directory now.');
+  });
+
+  it('cuts a very long closing sentence at a pause, and keeps a goodbye only when it is all there is', () => {
+    const long = `I marked every skill on the page${', one after another'.repeat(12)}, and the table is now complete.`;
+    const said = spokenConfirmation(long);
+    expect(said.length).toBeLessThanOrEqual(180);
+    expect(said.startsWith('I marked every skill on the page, one after another')).toBe(true);
+    expect(spokenConfirmation('Let me know if you need anything else.')).toBe('Let me know if you need anything else.');
+  });
+
+  it('a reply that ended badly says so, instead of going quiet', () => {
+    const reply = { role: 'assistant', status: 'complete', content: 'The file is written.' } as Message;
+    expect(spokenReply(reply)).toBe('The file is written.');
+    expect(spokenReply({ ...reply, status: 'error', error: 'HTTP 500 from the endpoint' })).toBe('That did not finish.');
   });
 });

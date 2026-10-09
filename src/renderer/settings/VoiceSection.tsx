@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, AlertCircle } from "lucide-react";
+import { Check, ChevronDown, Loader2, AlertCircle } from "lucide-react";
 import type { AppSettings, MicrophoneAccess, VoiceServer, VoiceSettings } from "../../shared/types";
-import type { VoiceSetupStatus } from '../../shared/voice-setup';
+import { DEFAULT_TTS_VOICE, KOKORO_VOICES, voiceName, type VoiceSetupStatus } from '../../shared/voice-setup';
 import { api } from "../api";
-import { ErrorNote, errorText } from "../ui/primitives";
+import { ErrorNote, MenuButton, errorText } from "../ui/primitives";
 import './VoiceSection.css';
 
 const MICROPHONE: Record<MicrophoneAccess, string> = {
@@ -55,7 +55,7 @@ export function VoiceSection({ settings, servers, onSaved }: {
   const speech = servers?.find(server => server.kind === "speech");
   const source = (url: string) => { void api.system.openExternal(url).catch(reason => setError(errorText(reason))); };
   const whisper = servers?.find(server => server.kind === "whisper.cpp");
-  const field = (key: Exclude<keyof VoiceSettings, "enabled">) => ({
+  const field = (key: Exclude<keyof VoiceSettings, "enabled" | "autoSend">) => ({
     value: draft[key] ?? "",
     onChange: (event: { target: { value: string } }) => { setSaved(false); setDraft(value => ({ ...value, [key]: event.target.value })); },
   });
@@ -70,6 +70,7 @@ export function VoiceSection({ settings, servers, onSaved }: {
     try {
       onSaved(await api.settings.save({ voice: {
         enabled: next.enabled,
+        autoSend: next.autoSend === true,
         sttEndpointUrl: next.sttEndpointUrl ?? "", sourceLanguage: next.sourceLanguage ?? "", ttsEndpointUrl: next.ttsEndpointUrl ?? "",
         ...(sttModel !== undefined ? { sttModel } : {}),
         ...(ttsVoice !== undefined ? { ttsVoice } : {}),
@@ -117,7 +118,13 @@ export function VoiceSection({ settings, servers, onSaved }: {
       <label className="dialog-check">
         <input type="checkbox" checked={draft.enabled} disabled={busy || preparing || !api.voice}
           onChange={event => { const enabled = event.currentTarget.checked; setDraft(value => ({ ...value, enabled })); void save({ ...draft, enabled }); }} />
-        Voice: use the microphone and read finished replies aloud in English.
+        Voice: use the microphone, and confirm a finished reply aloud in one line, in English.
+      </label>
+      {/* What happens when the words are written out (user, 09.10). */}
+      <label className="dialog-check">
+        <input type="checkbox" checked={draft.autoSend === true} disabled={busy || preparing || !api.voice || !draft.enabled}
+          onChange={event => { const autoSend = event.currentTarget.checked; setDraft(value => ({ ...value, autoSend })); void save({ ...draft, autoSend }); }} />
+        Auto Send
       </label>
       <p className="muted">
         {servers === null ? "Looking for voice servers…"
@@ -130,10 +137,19 @@ export function VoiceSection({ settings, servers, onSaved }: {
         Speech server
         <input {...field("ttsEndpointUrl")} placeholder={speech?.baseUrl ?? "http://localhost:8880"} spellCheck={false} />
       </label>
-      <label>
-        Voice
-        <input {...field("ttsVoice")} placeholder="af_heart" spellCheck={false} />
-      </label>
+      <div className="settings-field">
+        <span>Voice</span>
+        {/* Kokoro's voices by name; one set by hand for another server stays on the list. */}
+        <MenuButton label="Voice" className="settings-select" align="start" searchPlaceholder="Search voices"
+          items={[...new Set([...KOKORO_VOICES, draft.ttsVoice || DEFAULT_TTS_VOICE])].map(id => ({
+            id, label: voiceName(id).name, group: voiceName(id).kind,
+            checked: (draft.ttsVoice || DEFAULT_TTS_VOICE) === id,
+            action: () => { setSaved(false); setDraft(value => ({ ...value, ttsVoice: id })); },
+          }))}>
+          <span>{voiceName(draft.ttsVoice || DEFAULT_TTS_VOICE).name} · {voiceName(draft.ttsVoice || DEFAULT_TTS_VOICE).kind}</span>
+          <ChevronDown size={14} />
+        </MenuButton>
+      </div>
       <label>
         Speech-to-text server
         <input {...field("sttEndpointUrl")} placeholder={whisper?.baseUrl ?? "http://localhost:8080"} spellCheck={false} />

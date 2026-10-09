@@ -11,7 +11,8 @@ import type { VoiceSpeech } from '../../shared/types';
 
 type Fetch = typeof globalThis.fetch;
 
-export const DEFAULT_TTS_VOICE = 'af_heart';
+import { DEFAULT_TTS_VOICE } from '../../shared/voice-setup';
+export { DEFAULT_TTS_VOICE };
 /** Kokoro-FastAPI's model name, and what is asked when a server lists none. */
 const FASTAPI_MODEL = 'kokoro';
 /** One spoken sentence is a few hundred kilobytes of WAV; this is far past it. */

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -84,6 +85,10 @@ export function IconButton({
   "aria-expanded"?: boolean;
   "aria-pressed"?: boolean;
   onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  /** A button held rather than clicked — the microphone — hears the press itself. */
+  onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onPointerUp?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onPointerCancel?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <button
@@ -137,6 +142,8 @@ export interface MenuItem {
   group?: string;
   /** A toggle, not a destination: acting on it leaves the menu open. */
   stayOpen?: boolean;
+  /** An on/off setting, drawn as a switch at the row's end instead of a check mark. */
+  toggle?: boolean;
   separator?: boolean;
   action?: () => void;
   children?: MenuItem[];
@@ -559,7 +566,7 @@ export function MenuButton({
                 >
                   {item.leading ?? (item.icon ? (
                     <item.icon size={16} />
-                  ) : (
+                  ) : item.toggle ? null : (
                     <span className="menu-icon-space" />
                   ))}
                   <span className="menu-item-copy">
@@ -568,6 +575,8 @@ export function MenuButton({
                   </span>
                   {item.children ? (
                     <ChevronRight size={14} />
+                  ) : item.toggle ? (
+                    <span className="menu-switch" data-on={item.checked === true} aria-hidden />
                   ) : item.checked ? (
                     <Check size={14} />
                   ) : null}

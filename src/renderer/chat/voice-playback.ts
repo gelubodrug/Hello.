@@ -1,8 +1,8 @@
 import type { Message, VoiceSpeech } from '../../shared/types';
-import { speechChunks, spokenProse } from '../../shared/speech-text';
+import { speechChunks, spokenConfirmation, spokenProse } from '../../shared/speech-text';
 
 /**
- * A reply read aloud, sentence by sentence: the next chunk is made while the
+ * Words spoken sentence by sentence: the next chunk is made while the
  * one before it plays, and a stop drains everything — the chunk playing, the
  * one being made and the ones waiting. While it speaks the microphone stays
  * closed (half duplex): a voice turn listens only when Hello is silent, so it
@@ -40,7 +40,7 @@ export class SpeechPlayer {
     return () => { this.listeners.delete(listener); };
   }
 
-  /** Reads a reply's prose aloud, replacing whatever was being said. */
+  /** Says these words aloud, replacing whatever was being said. */
   async say(markdown: string): Promise<void> {
     this.stop();
     if (SpeechPlayer.microphones.size) return;
@@ -100,7 +100,16 @@ export function playClip(clip: VoiceSpeech): { done: Promise<void>; stop: () => 
   return { done, stop: () => { audio.pause(); audio.removeAttribute('src'); finish(); } };
 }
 
-/** Whether this change of a reply is it finishing well: streaming before, complete now. */
+/** Whether this change of a reply is it ending — well or badly: streaming before, over now. */
 export function replyFinished(previous: Message['status'] | undefined, message: Message): boolean {
-  return message.role === 'assistant' && previous === 'streaming' && message.status === 'complete';
+  return message.role === 'assistant' && previous === 'streaming' && message.status !== 'streaming';
+}
+
+/**
+ * What a reply that has just ended says aloud: a line confirming it, not the
+ * reply (user, 09.10). One that ended badly says so — a voice that goes quiet
+ * where an answer was expected tells the person nothing.
+ */
+export function spokenReply(message: Message): string {
+  return message.status === 'error' ? 'That did not finish.' : spokenConfirmation(message.content);
 }

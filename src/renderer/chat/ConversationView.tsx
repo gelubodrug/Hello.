@@ -17,6 +17,7 @@ import {
   Loader2,
   MessageCircle,
   Mic,
+  MicOff,
   Paperclip,
   X,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import type {
   Message,
   MessagePart,
   QueuedMessage,
+  VoiceTranscript,
   WorkerId,
   WorkerInfo,
 } from "../../shared/types";
@@ -63,9 +65,14 @@ import { ExtensionsPicker } from './ExtensionsPicker';
 import { useSkillCommands } from './SkillCommands';
 import { useExtensionUi } from './ExtensionPanel';
 import { recordVoice } from './voice-input';
+import { Dictation } from './dictation';
 import { SpeechPlayer } from './voice-playback';
 
 const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
+/** Shorter than this, a press on the microphone is a slip, not a turn. */
+const HOLD_MIN_MS = 300;
+/** How long Space is held before it is the microphone rather than a space. */
+const SPACE_HOLD_MS = 250;
 /** The longest message main accepts (ChatService refuses a longer one). */
 const MESSAGE_LIMIT = 200_000;
 /** A send main refused, kept whole: its words still paired with its attachments. */
@@ -693,6 +700,10 @@ export function ConversationView({
   // message straight back) from one holding newer work (stash it instead).
   // State and DOM lag the event that changed them; this ref never does.
   const composerDirty = useRef(false);
+  // The draft as it is now, for callbacks that run between renders (a voice
+  // turn writing the words it hears).
+  const draftNow = useRef(draft);
+  draftNow.current = draft;
   const setDraft: typeof setDraftState = value => { composerDirty.current = true; setDraftState(value); };
   const setAttachments: typeof setAttachmentsState = value => { composerDirty.current = true; setAttachmentsState(value); };
   // What a refused send was carrying. By the time main says no, the composer
@@ -736,6 +747,17 @@ export function ConversationView({
   const busy = sending || generation;
   const [voicePhase, setVoicePhase] = useState<'idle' | 'listening' | 'working'>('idle');
   const voiceTurn = useRef<AbortController | null>(null);
+  /** Ends the recording and keeps what was said, where `voiceTurn` throws it away. */
+  const voiceStop = useRef<AbortController | null>(null);
+  /** When the microphone was pressed: a tap too short to hold a word is no turn at all. */
+  const heldSince = useRef(0);
+  // The words heard so far go into the composer as they are written out (user,
+  // 09.10), under whatever was typed before the turn: `base` is that, `written`
+  // what this turn last put there. Typing while speaking wins — a draft that is
+  // no longer what the turn wrote becomes the base the next words are added to.
+  const heard = useRef<{ base: string; written: string } | null>(null);
+  /** Whether a pass over the words so far is still being written out. */
+  const writingOut = useRef(false);
   useEffect(() => {
     if (!active || !settings.voice?.enabled) voiceTurn.current?.abort();
     return () => { voiceTurn.current?.abort(); };
@@ -929,23 +951,24 @@ export function ConversationView({
     if (fresh.length) setAttachments(kept => [...fresh, ...kept.filter(value => !fresh.some(file => file.id === value.id))]);
     field.current?.focus();
   };
-  const send = async (voiceText?: string) => {
-    const fromVoice = voiceText !== undefined;
-    const text = (voiceText ?? draft).trim();
-    if (importLock.current && !fromVoice) return;
+  /** Sends the composer. `words` is the draft the state has not caught up with
+   *  yet — a voice turn's, written and sent in the same tick. */
+  const send = async (words?: string) => {
+    const text = (words ?? draft).trim();
+    if (importLock.current) return;
     // Typing while the model works is a correction, not a second question: it
     // goes to the turn already running. Nothing is lost if it arrives late —
     // the pill above the composer shows it, and its landing can still change.
     if (busy) {
       if (!text) return;
-      if (!fromVoice) { setDraft(""); composerDirty.current = false; }
+      setDraft(""); composerDirty.current = false;
       try { setQueued(await api.chat.queue(conversation.id, text, 'steer')); }
-      catch (reason) { setError(errorText(reason)); if (fromVoice) setUnsent(current => [...current, { id: crypto.randomUUID(), text, attachments: [] }]); else keepRefused(text, []); }
+      catch (reason) { setError(errorText(reason)); keepRefused(text, []); }
       return;
     }
-    if (!text && (fromVoice || !attachments.length)) return;
-    const sentAttachments = fromVoice ? [] : attachments;
-    if (!fromVoice) { setDraft(""); setAttachments([]); composerDirty.current = false; }
+    if (!text && !attachments.length) return;
+    const sentAttachments = attachments;
+    setDraft(""); setAttachments([]); composerDirty.current = false;
     setSending(true);
     setError(null);
     sticky.current = true;
@@ -953,31 +976,137 @@ export function ConversationView({
       await api.chat.send(conversation.id, text, sentAttachments.map(item => item.id));
     } catch (reason) {
       setError(errorText(reason));
-      if (fromVoice) setUnsent(current => [...current, { id: crypto.randomUUID(), text, attachments: [] }]);
-      else keepRefused(text, sentAttachments);
+      keepRefused(text, sentAttachments);
     } finally {
       setSending(false);
     }
   };
+  /** The words heard so far in the composer, replacing the ones this turn put
+   *  there. Returns the whole draft they now make. */
+  const showHeard = (words: string): string => {
+    const turn = heard.current;
+    if (!turn) return draftNow.current;
+    const base = draftNow.current === turn.written ? turn.base : draftNow.current;
+    const written = base.trim() ? `${base.replace(/\s+$/, '')} ${words}` : words;
+    heard.current = { base, written };
+    draftNow.current = written;
+    setDraft(written);
+    return written;
+  };
+  /**
+   * The microphone let go: what was said is kept and written out. A press too
+   * short to hold a word is a slip, and leaves nothing behind.
+   */
+  const endHold = () => {
+    if (!voiceTurn.current) return;
+    if (Date.now() - heldSince.current < HOLD_MIN_MS) voiceTurn.current.abort();
+    else voiceStop.current?.abort();
+  };
   const startVoice = async () => {
-    if (voiceTurn.current) { voiceTurn.current.abort(); return; }
-    if (!active || busy || importing || !settings.voice?.enabled || !api.voice?.translate) return;
+    if (voiceTurn.current) return;
+    const transcribe = api.voice?.transcribe;
+    if (!active || busy || importing || !settings.voice?.enabled || !transcribe) return;
     const turn = new AbortController(); voiceTurn.current = turn;
+    const stop = new AbortController(); voiceStop.current = stop;
+    heldSince.current = Date.now();
     const release = SpeechPlayer.listen();
     setError(null); setVoicePhase('working');
+    heard.current = { base: draftNow.current, written: draftNow.current };
+    // The turn's words: what two passes agreed on stays put (see dictation.ts).
+    const words = new Dictation();
+    // The language this turn is spoken in, once a pass has heard it: a few
+    // English names in a Romanian sentence must not turn the rest English.
+    let language = settings.voice?.sourceLanguage || undefined;
+    const heardIn = (said: VoiceTranscript) => { language ??= said.language; return said.text; };
+    // Main writes out one clip at a time: the last live pass ends before the whole turn is asked for.
+    let pass: Promise<unknown> = Promise.resolve();
     try {
-      const audio = await recordVoice(turn.signal, () => setVoicePhase('listening'));
+      const audio = await recordVoice(turn.signal, () => setVoicePhase('listening'), {
+        // The button being let go is what ends the turn (user, 09.10).
+        until: stop.signal,
+        partial: clip => {
+          if (writingOut.current || turn.signal.aborted) return;
+          writingOut.current = true;
+          pass = transcribe(clip(), language)
+            .then(said => { if (!turn.signal.aborted) showHeard(words.pass(heardIn(said))); })
+            // A pass that fails says nothing: the next one, or the whole turn, has the words.
+            .catch(() => {})
+            .finally(() => { writingOut.current = false; });
+        },
+      });
       if (turn.signal.aborted) return;
       if (!audio) { setError('No speech was heard. Try again.'); return; }
       setVoicePhase('working');
-      const text = await api.voice.translate(audio);
+      await pass;
+      const said = heardIn(await transcribe(audio, language));
       if (turn.signal.aborted) return;
-      if (!text.trim()) { setError('No speech was heard. Try again.'); return; }
+      const text = words.finish(said);
+      if (!text) { setError('No speech was heard. Try again.'); return; }
+      const whole = showHeard(text);
+      // The words wait in the composer unless the person asked for them to go
+      // at once (user, 09.10): what was heard is read before it is sent.
+      if (settings.voice?.autoSend !== true) { field.current?.focus(); return; }
       release();
-      await send(text);
+      await send(whole);
     } catch (reason) { if (!turn.signal.aborted) setError(errorText(reason)); }
-    finally { release(); voiceTurn.current = null; if (mounted.current) setVoicePhase('idle'); }
+    finally { release(); heard.current = null; writingOut.current = false; voiceTurn.current = null; voiceStop.current = null; if (mounted.current) setVoicePhase('idle'); }
   };
+  // Holding Space is holding the microphone (user, 09.10), in the composer or
+  // with nothing focused. A typed space is down for a tenth of a second; one
+  // held a quarter of a second — or repeated by the system, which only happens
+  // to a held key — is a hold: the spaces it typed are taken back and the turn
+  // starts, and letting go of Space ends it, sent or waiting as Auto Send says.
+  // The decision is quick because every moment of it is speech that is not
+  // being recorded. The latest render's view is read through a ref: the
+  // listeners outlive it.
+  const spaceHold = useRef<{ before: string; timer?: ReturnType<typeof setTimeout>; speaking: boolean } | null>(null);
+  const holdKeys = useRef<{ canSpeak: () => boolean; startVoice: () => Promise<void>; endHold: () => void }>({ canSpeak: () => false, startVoice, endHold });
+  holdKeys.current = {
+    canSpeak: () => voicePhase === 'idle' && !busy && !importing && settings.voice?.enabled === true && !!api.voice?.transcribe,
+    startVoice, endHold,
+  };
+  useEffect(() => {
+    if (!active) return;
+    const space = (event: globalThis.KeyboardEvent) => event.code === 'Space' || event.key === ' ';
+    const begin = () => {
+      const hold = spaceHold.current;
+      if (!hold || hold.speaking) return;
+      clearTimeout(hold.timer);
+      hold.speaking = true;
+      // The spaces the key typed before it was a hold are not words.
+      if (draftNow.current !== hold.before) { draftNow.current = hold.before; setDraft(hold.before); }
+      void holdKeys.current.startVoice();
+    };
+    const down = (event: globalThis.KeyboardEvent) => {
+      if (!space(event) || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
+      const where = document.activeElement;
+      if (where !== field.current && where !== document.body) return;
+      if (!event.repeat) {
+        clearTimeout(spaceHold.current?.timer);
+        spaceHold.current = holdKeys.current.canSpeak() ? { before: draftNow.current, speaking: false, timer: setTimeout(begin, SPACE_HOLD_MS) } : null;
+        return;
+      }
+      if (!spaceHold.current) return;
+      // A repeat is the system saying the key is held; held, it types nothing more.
+      event.preventDefault();
+      begin();
+    };
+    const up = (event: globalThis.KeyboardEvent) => {
+      if (!space(event)) return;
+      const hold = spaceHold.current;
+      spaceHold.current = null;
+      if (!hold) return;
+      clearTimeout(hold.timer);
+      if (hold.speaking) { event.preventDefault(); holdKeys.current.endHold(); }
+    };
+    window.addEventListener('keydown', down, true);
+    window.addEventListener('keyup', up, true);
+    return () => {
+      clearTimeout(spaceHold.current?.timer);
+      window.removeEventListener('keydown', down, true);
+      window.removeEventListener('keyup', up, true);
+    };
+  }, [active]);
   /** Every way in — a drop, a paste, the picker — lands the same: one at a
    *  time, at most 8, a folder becoming the chat's folder (S209 F4). */
   const importWith = async (bring: () => Promise<ChatDropResult | null>) => {
@@ -1088,6 +1217,15 @@ export function ConversationView({
     ? settings
     : { ...settings, model: chosen.id, contextWindow: catalog.find(connection => endpointIdentity(connection.endpointUrl) === endpointIdentity(chosen.endpointUrl))
         ?.models.find(model => model.id === chosen.id)?.contextWindow ?? settings.contextWindow };
+  // The microphone's two switches, in its own menu (user, 09.10): Voice, and
+  // Auto Send, which means nothing while Voice is off.
+  const voiceOn = settings.voice?.enabled === true;
+  const voiceItems: MenuItem[] = [
+    { id: 'voice', label: 'Voice', toggle: true, stayOpen: true, checked: voiceOn,
+      action: () => void api.settings.save({ voice: { enabled: !voiceOn } }).then(onSettingsChange).catch(reportError) },
+    { id: 'auto-send', label: 'Auto Send', toggle: true, stayOpen: true, checked: settings.voice?.autoSend === true, disabled: !voiceOn,
+      action: () => void api.settings.save({ voice: { enabled: true, autoSend: settings.voice?.autoSend !== true } }).then(onSettingsChange).catch(reportError) },
+  ];
   const modelItems: MenuItem[] = catalog.flatMap((connection): MenuItem[] => {
     const name = connection.name || suggestedName(connection.endpointUrl) || connection.endpointUrl;
     const group = several ? name : undefined;
@@ -1429,13 +1567,37 @@ export function ConversationView({
                 {modelLoading ? <Loader2 size={13} className="browser-spinner"/> : <ChevronDown size={13} />}
               </MenuButton>
             </div>
-            <IconButton
-              label={!settings.voice?.enabled ? "Voice input — turn Voice on in the sidebar" : voicePhase === 'listening' ? 'Listening — pause to send, click to cancel' : voicePhase === 'working' ? 'Preparing voice turn — click to cancel' : 'Speak to Hello.'}
-              disabled={!settings.voice?.enabled || !api.voice?.translate || (voicePhase === 'idle' && (busy || importing))}
-              onClick={() => void startVoice()}
-            >
-              {voicePhase === 'working' ? <Loader2 size={18} className="spin" /> : voicePhase === 'listening' ? <Square size={16} /> : <Mic size={18} />}
-            </IconButton>
+            {voiceOn || !api.voice?.transcribe ? (
+              <IconButton
+                className="icon-button voice-mic"
+                label={!api.voice?.transcribe ? 'Voice is not available in this window'
+                  : voicePhase === 'listening' ? 'Listening — let go when you are done, Esc to cancel'
+                  : voicePhase === 'working' ? 'Writing out what you said — click to cancel'
+                  : 'Hold to speak, or hold Space'}
+                disabled={!voiceOn || !api.voice?.transcribe || (voicePhase === 'idle' && (busy || importing))}
+                onPointerDown={event => {
+                  // Writing out is the only thing a press can still stop.
+                  if (voicePhase !== 'idle') { voiceTurn.current?.abort(); return; }
+                  // The press is followed wherever it goes, so letting go off the button still ends the turn.
+                  event.currentTarget.setPointerCapture?.(event.pointerId);
+                  void startVoice();
+                }}
+                onPointerUp={endHold}
+                onPointerCancel={endHold}
+              >
+                {voicePhase === 'working' ? <Loader2 size={18} className="spin" /> : voicePhase === 'listening' ? <Square size={16} /> : <Mic size={18} />}
+              </IconButton>
+            ) : (
+              // Voice off, the microphone cannot listen: pressing it offers the switch instead (user, 09.10).
+              <MenuButton label="Voice off" className="icon-button voice-mic" menuLabel="Voice" items={voiceItems}>
+                <MicOff size={18} />
+              </MenuButton>
+            )}
+            {api.voice?.transcribe && (
+              <MenuButton label="Voice options" className="icon-button voice-options" menuLabel="Voice" items={voiceItems}>
+                <ChevronDown size={13} />
+              </MenuButton>
+            )}
             {busy ? (
               <IconButton
                 className="send-button"

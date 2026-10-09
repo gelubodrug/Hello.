@@ -63,12 +63,33 @@ function voiceSettings(value: Partial<VoiceSettings>): VoiceSettings {
   if (ttsVoice && !/^[\w.+-]+$/.test(ttsVoice)) throw new Error('A voice is a name like af_heart.');
   return {
     enabled: value.enabled === true,
+    ...(value.autoSend === true ? { autoSend: true } : {}),
     ...(sttEndpointUrl ? { sttEndpointUrl } : {}),
     ...(sttModel ? { sttModel } : {}),
     ...(sourceLanguage ? { sourceLanguage } : {}),
     ...(ttsEndpointUrl ? { ttsEndpointUrl } : {}),
     ...(ttsVoice ? { ttsVoice } : {}),
   };
+}
+
+/**
+ * What the window asked Voice to become, checked: switches are booleans and
+ * fields short strings, and only what was given is passed on — the rest stays
+ * as stored. A switch turned off is passed on as false, never left out: left
+ * out, the merge below would keep the old on (user, 09.10: Auto Send stuck).
+ */
+export function voicePatch(value: unknown, current: VoiceSettings | undefined): VoiceSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid request.');
+  const voice = value as Record<string, unknown>;
+  for (const key of ['enabled', 'autoSend'] as const)
+    if (voice[key] !== undefined && typeof voice[key] !== 'boolean') throw new Error('Invalid voice setting.');
+  const fields = ['sttEndpointUrl', 'sttModel', 'sourceLanguage', 'ttsEndpointUrl', 'ttsVoice'] as const;
+  for (const key of fields)
+    if (voice[key] !== undefined && (typeof voice[key] !== 'string' || (voice[key] as string).length > 500)) throw new Error('Invalid voice setting.');
+  const patch: VoiceSettings = { enabled: voice.enabled === undefined ? current?.enabled === true : voice.enabled === true };
+  if (voice.autoSend !== undefined) patch.autoSend = voice.autoSend === true;
+  for (const key of fields) if (voice[key] !== undefined) patch[key] = voice[key] as string;
+  return patch;
 }
 
 /** A model and a voice belong to the server that offered them: pointing at another drops them, unless given anew. */

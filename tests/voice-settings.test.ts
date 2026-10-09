@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createDataStore, type DataStore } from '../src/main/data/store';
+import { createDataStore, voicePatch, type DataStore } from '../src/main/data/store';
 
 const codec = { encrypt: (text: string) => Buffer.from(text), decrypt: (bytes: Buffer) => bytes.toString() };
 let directory = '';
@@ -29,6 +29,29 @@ describe('the one Voice switch', () => {
       .toEqual({ enabled: true, sttEndpointUrl: 'http://localhost:8178', ttsEndpointUrl: 'http://localhost:8000' });
     expect(data.saveSettings({ voice: { enabled: true, ttsEndpointUrl: 'http://localhost:8880', ttsVoice: 'af_heart' } }).voice)
       .toMatchObject({ ttsEndpointUrl: 'http://localhost:8880', ttsVoice: 'af_heart' });
+  });
+
+  it('sends what was said only when asked to, and remembers that (user, 09.10)', () => {
+    directory = mkdtempSync(join(tmpdir(), 'hello-voice-'));
+    expect(open().saveSettings({ voice: { enabled: true } }).voice).toEqual({ enabled: true });
+    expect(open().saveSettings({ voice: { enabled: true, autoSend: true } }).voice).toEqual({ enabled: true, autoSend: true });
+    // Turning Voice off and on again does not start sending by itself.
+    expect(open().saveSettings({ voice: { enabled: true, autoSend: false } }).voice).toEqual({ enabled: true });
+  });
+
+  it('turns Auto Send off as surely as on, the way the window asks for it', () => {
+    // The window's patch passes through voicePatch, then the store — as Settings.save does.
+    directory = mkdtempSync(join(tmpdir(), 'hello-voice-'));
+    const data = open();
+    const save = (raw: unknown) => data.saveSettings({ voice: voicePatch(raw, data.getSettings().voice) }).voice;
+    expect(save({ enabled: true, sttEndpointUrl: 'http://localhost:8080' })).toEqual({ enabled: true, sttEndpointUrl: 'http://localhost:8080' });
+    expect(save({ enabled: true, autoSend: true })).toEqual({ enabled: true, autoSend: true, sttEndpointUrl: 'http://localhost:8080' });
+    // Off was once dropped on the way, and the old on stayed (user, 09.10).
+    expect(save({ enabled: true, autoSend: false })).toEqual({ enabled: true, sttEndpointUrl: 'http://localhost:8080' });
+    // A save that does not mention it leaves it as it is.
+    save({ enabled: true, autoSend: true });
+    expect(save({ enabled: true, ttsVoice: 'af_heart' })).toMatchObject({ autoSend: true, ttsVoice: 'af_heart' });
+    expect(() => voicePatch({ autoSend: 'yes' }, undefined)).toThrow(/Invalid voice setting/);
   });
 
   it('refuses a voice server off this Mac', () => {

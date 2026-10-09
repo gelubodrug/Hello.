@@ -4,14 +4,14 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { DataStore } from './data/store';
+import { voicePatch, type DataStore } from './data/store';
 import type { ChatService } from './chat/service';
 import type { MainTerminalService } from './terminal/service';
 import type { BrowserManager } from './browser/manager';
 import type { PageModeController } from './browser/page-mode';
 import { WorkspaceFiles } from './files/service';
 import { DEFAULT_TTS_VOICE, SPEECH_TEXT_LIMIT, VoiceSpeaker } from './voice/speak';
-import { translateVoice, voiceAudio } from './voice/translate';
+import { transcribeVoice, voiceAudio } from './voice/transcribe';
 import type { ManagedVoice } from './voice/managed';
 import { resolveDropPaths } from './files/drop-paths';
 import { discoverMcpServers, discoverPiExtensions, discoverSkills, withoutSecrets } from './extensions/discovery';
@@ -132,15 +132,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.approvals!==undefined)clean.approvals=patch.approvals as SettingsPatch['approvals'];
     if(patch.appearance!==undefined){if(!['system','light','dark'].includes(patch.appearance as string))throw new Error('Appearance is System, Light or Dark.');clean.appearance=patch.appearance as SettingsPatch['appearance'];}
     if(patch.subagentModel!==undefined){if(typeof patch.subagentModel!=='string'||patch.subagentModel.length>500)throw new Error('Invalid subagent model.');clean.subagentModel=patch.subagentModel;}
-    if(patch.voice!==undefined){
-      const voice=record(patch.voice);
-      if(voice.enabled!==undefined&&typeof voice.enabled!=='boolean')throw new Error('Invalid voice setting.');
-      const fields=['sttEndpointUrl','sttModel','sourceLanguage','ttsEndpointUrl','ttsVoice'] as const;
-      for(const key of fields)if(voice[key]!==undefined&&(typeof voice[key]!=='string'||(voice[key] as string).length>500))throw new Error('Invalid voice setting.');
-      const current=store.getSettings().voice;
-      clean.voice={enabled:voice.enabled===undefined?current?.enabled===true:voice.enabled===true};
-      for(const key of fields)if(voice[key]!==undefined)clean.voice[key]=voice[key] as string;
-    }
+    if(patch.voice!==undefined)clean.voice=voicePatch(patch.voice,store.getSettings().voice);
     const saved=store.saveSettings(clean);
     // The app's look follows at once: native menus, and what pages read as prefers-color-scheme.
     if(clean.appearance!==undefined)applyAppearance(window,saved.appearance);
@@ -173,18 +165,20 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   });
   handle('voice.cancel',()=>managedVoice?.cancel());
   handle('voice.stopSpeech',()=>managedVoice?.cancelSpeech());
-  let translating=false;
-  handle('voice.translate',async(audio)=>{
+  let transcribing=false;
+  handle('voice.transcribe',async(audio,language)=>{
     const bytes=voiceAudio(audio);
+    if(language!==undefined&&(typeof language!=='string'||!/^[a-z]{2,3}$/.test(language)))throw new Error('A language is a short code, like ro or en.');
     const voice=store.getSettings().voice;
     if(!voice?.enabled)throw new Error('Turn Voice on before speaking.');
-    if(translating)throw new Error('A voice turn is already being translated.');
-    translating=true;
+    if(transcribing)throw new Error('A voice turn is already being written out.');
+    transcribing=true;
     try{
       const server=managedVoice?await managedVoice.translationEndpoint():voice.sttEndpointUrl||(await chat.voiceServers()).find(found=>found.kind==='whisper.cpp')?.baseUrl;
       if(!server)throw new Error('No speech-to-text server is running on this Mac.');
-      return await translateVoice(server,bytes,{model:voice.sttModel,language:voice.sourceLanguage});
-    }finally{translating=false;}
+      // The language set in Settings › Voice outranks the one a turn heard.
+      return await transcribeVoice(server,bytes,{model:voice.sttModel,language:voice.sourceLanguage||language});
+    }finally{transcribing=false;}
   });
   handle('voice.speak',async(text)=>{
     const words=str(text,'text',SPEECH_TEXT_LIMIT);

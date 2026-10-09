@@ -13,6 +13,7 @@ const GROUPS: Group[] = [
   { title: 'Composer', items: [
     { keys: 'Enter', label: 'Send message' },
     { keys: 'Shift + Enter', label: 'New line' },
+    { keys: 'Hold Space', label: 'Speak (Voice on)' },
     { keys: '↑ / ↓', label: 'Reuse a previous message (empty composer; Esc clears it)' },
     { keys: 'Enter', label: 'Preview the focused image attachment' },
   ]},

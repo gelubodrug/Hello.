@@ -1,16 +1,22 @@
 /**
- * What of a reply is read aloud: its prose. Code, tables, links' addresses and
- * markup are for the eye; a voice reading `const x = 1` or a URL letter by
- * letter is noise. Then the prose is cut into sentences, so the first one
- * plays while the next is being made, and a stop has little left to waste.
+ * What of a reply is spoken: one line that says whether it did what was asked
+ * (user, 09.10) — never the whole reply. The answer is on the screen to be
+ * read; the voice is there to say "here is the page you asked for" and stop.
+ * The prose it is drawn from leaves out code, tables, links' addresses and
+ * markup: a voice reading `const x = 1` or a URL letter by letter is noise.
  */
 
 /** A spoken chunk is a sentence or a few short ones; a long sentence is cut at a pause. */
 export const SPEECH_CHUNK_CHARS = 280;
+/** A confirmation is one sentence, and a long one is cut at a pause. */
+export const CONFIRMATION_CHARS = 180;
+
+/** A fenced code block, closed or still open at the end of the reply. */
+const FENCED = /^(```|~~~)[^\n]*\n[\s\S]*?(?:^\1[^\n]*$|(?![\s\S]))/gm;
 
 export function spokenProse(markdown: string): string {
   return markdown
-    .replace(/^(```|~~~)[^\n]*\n[\s\S]*?(?:^\1[^\n]*$|(?![\s\S]))/gm, ' ')
+    .replace(FENCED, ' ')
     .replace(/^\s*\|.*\|\s*$/gm, ' ')
     .replace(/<\/?[a-z][^>]*>/gi, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -29,6 +35,43 @@ export function spokenProse(markdown: string): string {
     .replace(/(\s*\.){2,}/g, '.')
     .replace(/^[\s.]+/, '')
     .trim();
+}
+
+/** Words that only introduce what follows, or close politely: they confirm nothing. */
+const PLEASANTRY = /^(let me know|just let me know|tell me (if|when|what)|hope (this|that|it)\b|i hope\b|happy to help|feel free|anything else|you'?re welcome|enjoy\b)/i;
+/** A line that is not prose: a fence, a table, a list item, a heading, a quote, a rule. */
+const NOT_PROSE = /^\s{0,3}(?:```|~~~|\||[-*+]\s|\d+[.)]\s|#{1,6}\s|>|(?:[-*_]\s*){3,}$)/;
+/** A line above a paragraph rather than part of it: its heading, a quote, a rule. */
+const ORNAMENT = /^\s{0,3}(?:#{1,6}\s|>|(?:[-*_]\s*){3,}$)/;
+
+/**
+ * The one line a finished reply says aloud: the first sentence of its closing
+ * paragraph — or that paragraph's question, when it ends with one, because a
+ * question is what the person has to answer. A paragraph that only introduces
+ * a list, or only says goodbye, is passed over for an earlier one, and stands
+ * in only when there is nothing else. Empty when the reply has no prose at
+ * all: silence is better than reading out a code block.
+ */
+export function spokenConfirmation(markdown: string, limit = CONFIRMATION_CHARS): string {
+  // Code goes first: a blank line inside a fence is not a paragraph break.
+  const blocks = markdown.replace(FENCED, '\n\n').split(/\n\s*\n+/);
+  let weak = '';
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    // A paragraph starts under its heading and ends where its list or table begins.
+    const lines = blocks[index].split('\n');
+    let from = 0;
+    while (from < lines.length && ORNAMENT.test(lines[from])) from++;
+    const rest = lines.slice(from);
+    const listed = rest.findIndex(line => NOT_PROSE.test(line));
+    const prose = spokenProse((listed < 0 ? rest : rest.slice(0, listed)).join('\n'));
+    const sentences = prose.split(/(?<=[.!?…])\s+/).map(sentence => sentence.trim()).filter(Boolean);
+    const last = sentences.at(-1);
+    const chosen = last?.endsWith('?') ? last : sentences[0];
+    if (!chosen) continue;
+    if (chosen.endsWith(':') || PLEASANTRY.test(chosen)) { weak ||= chosen; continue; }
+    return speechChunks(chosen, limit)[0] ?? '';
+  }
+  return weak ? speechChunks(weak, limit)[0] ?? '' : '';
 }
 
 /** The prose in chunks of at most `limit` characters, each ending where a speaker would pause. */
