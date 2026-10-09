@@ -54,7 +54,7 @@
 
 ## Din tasks/todo.md (09.10) — Tehnic
 
-- [ ] T030 [!medium] [#high] Împachetarea pnpm package:mac neverificată: extraResources dsh/, pnpm și esbuild despachetate din asar (ESBUILD_BINARY_PATH); electron-builder nu găsea @mariozechner/clipboard — probabil pnpm install curat după urcările Pi
+- [x] T030 [!medium] [#high] Împachetarea pnpm package:mac neverificată: extraResources dsh/, pnpm și esbuild despachetate din asar (ESBUILD_BINARY_PATH); electron-builder nu găsea @mariozechner/clipboard — probabil pnpm install curat după urcările Pi
 - [ ] T031 [!low] [#high] PI_VERSION din src/main/market/pi-install.ts e 0.87.1, deși Hello rulează Pi 1.0.x — aliniază-l
 - [ ] T032 [!high] [#medium] Hook-urile de sesiune dsh peste Pi: recall și captură dsh-memory-plugin în chaturile Hello, cu opțiunea per chat „nu captura acest chat”
 - [ ] T033 [!medium] [#low] Marketul DSH: căutare pe mai multe categorii deodată, reordonarea surselor, scanarea completă dshfind
