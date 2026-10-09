@@ -311,18 +311,39 @@ the chat's private Pi folder as a second model of the same provider and as
 pi-subagents' `subagents.defaultModel`.
 
 What that UI cannot carry is Pi's own, not Hello's: Pi's RPC extension-UI
-context (`createExtensionUIContext` in `pi-coding-agent`'s bundle) emits an
+context (`createExtensionUIContext`, `dist/modes/rpc/rpc-mode.js`) emits an
 `extension_ui_request` for `select`, `confirm`, `input`, `editor`, `notify`,
 `setStatus`, `setWidget`, `setTitle` and `set_editor_text`, and discards
 everything that would draw a component: `custom()` is `async custom(){}` — it
 resolves `undefined` without sending anything — and so are `setFooter`,
 `setHeader`, `setEditorComponent`, `onTerminalInput`, `setWorkingMessage` and
-`setHiddenThinkingLabel`. This is why a pi-subagents question whose answer leads
-to another screen (Change model, thinking) closes and goes no further: the
-plugin's next call is `ui.custom()`, Pi sends nothing over RPC, the plugin's
-await resolves with nothing and it drops the flow. Hello never receives a
-request it could answer or report, so there is nothing here to repair; it needs
-Pi to send those screens (or the plugin to fall back to `select`).
+`setHiddenThinkingLabel`. The wire protocol says the same: `RpcExtensionUIRequest`
+is a nine-variant union with no component variant, and Pi's own
+`docs/rpc-extension-ui.md` states that `custom()` returns `undefined`. Checked
+again on **Pi 1.1.0**: `rpc-mode.js`, `rpc-types.d.ts` and that document are
+byte-identical to 1.0.4's, so there is no request shape for Hello to answer and
+nothing on Hello's side to build.
+
+It is worth being exact about why that closes a question, because the plugin is
+not actually missing a fallback. `pi-subagents` 0.73.1 ships one
+(`src/slash/subagents-admin.js`, `selectFromList`): when a component screen is
+unavailable it flattens the choice into `ui.select`, which Hello already
+answers. The test it guards that with is `typeof ctx.ui.custom === 'function'`
+— and Pi's RPC context *does* define `custom`, as a no-op. So the component
+branch is taken, `custom()` resolves `undefined`, `result?.confirmed` is
+`undefined`, `chooseModel`/`chooseThinking` return nothing and the admin screen
+returns silently. The same test defeats `/subagents-fleet` (`src/tui/fleet.js`)
+and `/subagents-stop` (`src/slash/slash-commands.js`), which have no fallback at
+all; `slash-commands.js` guards its text fallback on `!ctx.hasUI`, and `hasUI`
+is `true` in RPC mode.
+
+Either side fixes it in one line, and both are upstream: Pi can leave `custom`
+off the RPC context instead of stubbing it, which makes every extension's
+capability test tell the truth; or the plugin can gate on `ctx.mode === 'tui'`,
+which is what Pi's document tells extension authors to do. Hello cannot carry a
+local patch for it either: `pi-subagents` is not a Hello dependency but a
+plugin the person installs into their own library folder, so there is no
+lockfile entry to patch and the folder is rewritten on the next install.
 
 Stopping a chat's Pi aborts the reply in progress, ends its input and waits up
 to 1.5 s: that is Pi's own shutdown, which runs extensions' `session_shutdown`
