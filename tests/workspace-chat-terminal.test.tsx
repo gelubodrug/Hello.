@@ -33,7 +33,7 @@ vi.mock('../src/renderer/api', () => ({
 
 import { Workspace, defaultWorkspacePrefs, type WorkspacePrefs, type WorkspaceUpdate } from '../src/renderer/workspace/Workspace';
 
-const conversation = { id: 'c1', title: 'Chat', folder: null } as Conversation;
+let conversation = { id: 'c1', title: 'Chat', folder: null } as Conversation;
 const terminal = (id: string, title: string, kind: TerminalSession['kind']): TerminalSession =>
   ({ id, conversationId: 'c1', title, kind, cwd: '/tmp', status: 'running', ...(kind === 'worker' ? { workerId: 'kimi' as const } : {}) });
 const terminals = [terminal('kimi', 'Kimi Code', 'worker'), terminal('shell', 'Terminal', 'terminal')];
@@ -119,5 +119,27 @@ describe('a CLI as a chat tab', () => {
     await rightClick(pill.parentElement!);
     await click(menuItem('Close tab')!);
     expect(onCloseTool).toHaveBeenCalledWith(terminals[1]);
+  });
+});
+
+// A chat is a chat until it needs more (user, 17.11): the Workbook pill is there only while the chat has it on.
+describe('the Workbook page of a chat', () => {
+  const tabs = () => [...host.querySelectorAll('.chat-page-tab')].map(tab => tab.getAttribute('aria-label'));
+  afterEach(() => { conversation = { id: 'c1', title: 'Chat', folder: null } as Conversation; });
+
+  it('is not among the chat’s pages while it is off, and a saved place in it shows the chat', async () => {
+    expect(tabs()).not.toContain('Workbook');
+    expect(host.querySelector('#c1-notebook')).toBeNull();
+    conversation = { ...conversation, notebook: true };
+    await act(async () => { root.render(createElement(Harness, { key: 'on' })); });
+    expect(tabs()).toEqual(expect.arrayContaining(['Chat', 'Workbook']));
+    await click(host.querySelector('.chat-page-tab[aria-label="Workbook"]')!);
+    expect(ui.chatTab).toBe('notebook');
+    expect(host.querySelector('.tab-pill[data-active="true"] .chat-page-tab')?.getAttribute('aria-label')).toBe('Workbook');
+    // Switched off while it was in front: the chat is in front, and the page is gone.
+    conversation = { ...conversation, notebook: false };
+    await act(async () => { root.render(createElement(Harness, { key: 'on' })); });
+    expect(tabs()).not.toContain('Workbook');
+    expect(host.querySelector('.tab-pill[data-active="true"] .chat-page-tab')?.getAttribute('aria-label')).toBe('Chat');
   });
 });

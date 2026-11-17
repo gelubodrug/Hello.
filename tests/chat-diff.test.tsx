@@ -67,10 +67,10 @@ describe('a code step, readably', () => {
     open(step('file_write', { path: 'notes.md', content: '# Title', replace: true }, 'complete'));
     expect(host.querySelector('.tool-code-path')?.textContent).toBe('notes.md · replaces the whole file');
     expect(host.querySelector('.tool-code .code-block')?.textContent).toContain('# Title');
-    open(step('command_run', { command: 'pnpm test' }));
+    open(step('bash', { command: 'pnpm test' }));
     expect(host.querySelector('.tool-code .code-block')?.textContent).toContain('pnpm test');
     expect(host.querySelector('.tool-code-note')?.textContent).toBe('Timeout: 30 seconds');
-    open(step('command_run', { command: 'long command', timeoutSeconds: 600, saveLog: true }));
+    open(step('bash', { command: 'long command', timeoutSeconds: 600, saveLog: true }));
     expect(host.querySelector('.tool-code-note')?.textContent).toBe('Timeout: 600 seconds · Save output log');
     open(step('file_edit', '{"path": broken', 'complete'));
     expect(host.querySelector('.tool-code')).toBeNull();

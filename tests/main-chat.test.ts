@@ -200,26 +200,27 @@ function tab(id: string, control: BrowserTab['control'], owner = conversationId)
 }
 
 describe('Pi-backed chat lifecycle with in-memory transport', () => {
-  it('loads root instructions only in Coder and refreshes a warm session when they change', async () => {
+  it('loads the folder’s root instructions in every chat — there is no mode — and refreshes a warm session when they change', async () => {
     const folder = path.join(directory, 'project'); mkdirSync(folder);
     writeFileSync(path.join(folder, 'AGENTS.md'), 'PROJECT_RULE_ONE');
     store.updateConversation(conversationId, { folder });
     const chat = create();
     const promptPath = path.join(piConversationDir(directory, conversationId), 'system-prompt.md');
-    const turn = async (mode: 'chat' | 'coder', index: number) => {
-      store.updateConversation(conversationId, { chatMode: mode });
+    const turn = async (index: number) => {
       const pending = chat.send(conversationId, 'Continue');
       const current = await runtime(index);
       expect(current.rpc.options.args).toContain('-nc');
+      // Hello's own prompt, whole: never appended to Pi's.
+      expect(current.rpc.options.args).toContain('--system-prompt');
+      expect(current.rpc.options.args).not.toContain('--append-system-prompt');
       const prompt = readFileSync(promptPath, 'utf8');
       settle(current.rpc, 'Done.'); await pending;
       return prompt;
     };
-    expect(await turn('chat', 0)).not.toContain('PROJECT_RULE_ONE');
-    expect(await turn('coder', 1)).toContain('PROJECT_RULE_ONE');
+    const first = await turn(0);
+    expect(first).toContain('PROJECT_RULE_ONE');
     writeFileSync(path.join(folder, 'AGENTS.md'), 'PROJECT_RULE_TWO');
-    expect(await turn('coder', 2)).toContain('PROJECT_RULE_TWO');
-    expect(await turn('chat', 3)).not.toContain('PROJECT_RULE_TWO');
+    expect(await turn(1)).toContain('PROJECT_RULE_TWO');
   });
   it('counts only running replies for close, not queued messages or warm runtimes', async () => {
     const chat = create();
@@ -327,7 +328,7 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
   });
 
   it('runs notebook tools in Hello and records one result card', async () => {
-    store.updateConversation(conversationId, { runbook: true });
+    store.updateConversation(conversationId, { notebook: true, runbook: true });
     store.saveNotebook({ conversationId, kind: 'runbook', title: 'Decision', body: 'Use SQLite.' });
     const running = create().send(conversationId, 'Read the runbook');
     const current = await runtime();
@@ -363,9 +364,9 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
 
   it.each([
     { approvals: 'all', tool: 'file_write', asks: false },
-    { approvals: 'all', tool: 'command_run', asks: false },
+    { approvals: 'all', tool: 'bash', asks: false },
     { approvals: 'writes', tool: 'file_write', asks: false },
-    { approvals: 'writes', tool: 'command_run', asks: true },
+    { approvals: 'writes', tool: 'bash', asks: true },
     { approvals: 'ask', tool: 'file_write', asks: true },
   ] as const)('approval mode $approvals asks before $tool: $asks', async ({ approvals, tool: name, asks }) => {
     store.updateConversation(conversationId, { folder: directory });
@@ -378,7 +379,7 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     const call = tool(current, name, input, `${approvals}-${name}`);
     // This fixture refuses to spawn: a command reaching that refusal proves it
     // was never held for a human, which is what these modes are about.
-    const spawns = name === 'command_run';
+    const spawns = name === 'bash';
     if (asks) {
       await vi.waitFor(() => expect(approval()).toBeDefined());
       service!.approve(approval()!.approvalId!, false);
@@ -447,6 +448,32 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(assistant()).toMatchObject({ status: 'error', error: expect.stringContaining('Stopped') });
     expect(() => chat.approve(id, true)).toThrow(/no longer/);
     expect(existsSync(path.join(directory, 'cancelled.txt'))).toBe(false);
+  });
+
+  /**
+   * The Mac's own python3 need not have openpyxl, and only the sheets manual said Hello keeps one that does.
+   * Without that manual a model spent three minutes finding out, then built a 16 MB venv beside the person's
+   * data for a library Hello already had (a run, 17.11).
+   */
+  it('names the Python it keeps with openpyxl, once there is one, and says nothing before', async () => {
+    const interpreter = path.join(directory, 'sheets', 'python', 'venv', 'bin', 'python');
+    const first = create().send(conversationId, 'Read the workbook');
+    const before = await runtime();
+    expect(await before.bridge.options.getContext!()).not.toMatch(/openpyxl/);
+    settle(before.rpc, 'Done.');
+    await first;
+
+    mkdirSync(path.dirname(interpreter), { recursive: true });
+    writeFileSync(interpreter, '');
+    const second = create().send(conversationId, 'Read it again');
+    const current = await runtime(1);
+    const context = await current.bridge.options.getContext!();
+    expect(context).toContain('A Python with openpyxl is ready');
+    expect(context).toContain(JSON.stringify(interpreter));
+    expect(context).toMatch(/rather than python3, which may not have openpyxl/);
+    expect(context).toMatch(/Never pip install it or build a venv for it/);
+    settle(current.rpc, 'Done.');
+    await second;
   });
 
   it('keeps per-tab browser permissions even when another tab grants Full control', async () => {
@@ -1090,6 +1117,37 @@ describe('servers running on this Mac', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  // kapitsa lists its whole catalogue and serves one model of it (user, 12.11).
+  it('lists only the models a server marks as served, and every model of a server that marks none', async () => {
+    store.saveSettings({ endpointUrl: 'http://localhost:8000/v1', model: '' });
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [
+      { id: 'qwen3.8-flash-next', context_length: 65536, active: true, downloaded: true },
+      { id: 'qwen3.5-4b:4bit', active: false, downloaded: false },
+      { id: 'qwen3.6-35b-a3b:4bit', active: false, downloaded: true },
+      { id: 'gemma4:12b' },
+    ] })));
+    expect((await create({ fetch: fetcher }).models()).map(model => model.id))
+      .toEqual(['gemma4:12b', 'qwen3.8-flash-next']);
+    // Released from the GPU while idle, its one model is still the one it serves.
+    const idle = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [
+      { id: 'qwen3.8-flash-next', active: false, downloaded: true },
+      { id: 'qwen3.5-4b:4bit', active: false, downloaded: false },
+    ] })));
+    expect((await create({ fetch: idle }).models()).map(model => model.id)).toEqual(['qwen3.8-flash-next']);
+  });
+
+  // kapitsa took port 8000 from oMLX, and the kept name went on saying oMLX (user, 12.11).
+  it('names a kept connection on this Mac by the server running at its port, or by its address while none is', async () => {
+    store.saveSettings({ endpointUrl: 'http://localhost:8000/v1', model: 'qwen3.8-flash-next' });
+    store.rememberConnection('oMLX · Qwen3-Coder-Next-6bit');
+    const kapitsa = { name: 'kapitsa · 8000', endpointUrl: 'http://localhost:8000/v1', models: [{ id: 'qwen3.8-flash-next' }] };
+    const down = vi.fn<typeof fetch>(async () => { throw new TypeError('fetch failed'); });
+    expect((await create({ fetch: down, localServers: async () => [kapitsa] }).catalog()).map(row => row.name))
+      .toEqual(['kapitsa · 8000']);
+    expect((await create({ fetch: down, localServers: async () => [] }).catalog()).map(row => row.name))
+      .toEqual(['localhost:8000']);
+  });
+
   // Free first (user, 01.10): the picker opens on the models that cost nothing.
   it('marks what costs nothing: a model priced at zero or named :free, and every model of a server of the person\'s own', async () => {
     store.saveSettings({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'm', apiKey: 'key' });
@@ -1322,7 +1380,7 @@ describe('a reply that repeats itself', () => {
     for (let index = 0; index < 3; index += 1) {
       current.rpc.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: index * 2, delta: step } });
       current.rpc.emit({ type: 'message_update', assistantMessageEvent: {
-        type: 'toolcall_start', contentIndex: index * 2 + 1, id: `call-${index}`, name: 'command_run' } });
+        type: 'toolcall_start', contentIndex: index * 2 + 1, id: `call-${index}`, name: 'bash' } });
     }
     await vi.waitFor(() => expect(aborts(current)).toBe(1));
     abortedTurn(current, 'text', step);

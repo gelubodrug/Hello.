@@ -55,24 +55,27 @@ afterEach(() => {
 async function started() {
   await helloTools(pi.api);
   await pi.handlers.get('session_start')!({ type: 'session_start' });
-  expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths']);
+  // In a chat the shell answers from the first step, folder or not: Hello's refusal, never Pi's "not found".
+  expect(pi.registered.has('bash')).toBe(true);
+  expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths', 'bash']);
 }
 
 describe('Hello tools inside a running Pi reply', () => {
   it('brings a folder attached mid-reply to the next step, without dropping plugin tools', async () => {
     await started();
     // A steer attached a folder: the reply keeps running, no agent start follows.
-    offered = [...offered, tool('file_read'), tool('command_run')];
+    offered = [...offered, tool('file_read'), tool('bash')];
     await pi.handlers.get('turn_end')!({ type: 'turn_end' });
-    expect(pi.registered.has('command_run')).toBe(true);
-    expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths', 'file_read', 'command_run']);
+    expect(pi.registered.has('bash')).toBe(true);
+    // The shell was callable before the folder came; now it is Hello's real one.
+    expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths', 'bash', 'file_read']);
   });
 
   it('keeps the current tools when a refresh fails, rather than ending the reply', async () => {
     await started();
     toolsFail = true;
     await expect(pi.handlers.get('turn_end')!({ type: 'turn_end' })).resolves.toBeUndefined();
-    expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths']);
+    expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths', 'bash']);
   });
 
   it('tells the model that tools enabled after this step was fixed arrive with the next step', async () => {
@@ -83,10 +86,10 @@ describe('Hello tools inside a running Pi reply', () => {
       return result.messages.at(-1)!.content;
     };
     expect(await text()).not.toMatch(/just enabled/);
-    offered = [...offered, tool('command_run')];
-    expect(await text()).toMatch(/just enabled and can be called from your next step, not in this one: command_run\./);
+    offered = [...offered, tool('file_read')];
+    expect(await text()).toMatch(/just enabled and can be called from your next step, not in this one: file_read\./);
     // Activated now, so the step after this one really has it.
-    expect(pi.active).toContain('command_run');
+    expect(pi.active).toContain('file_read');
     expect(await text()).not.toMatch(/just enabled/);
   });
 });
@@ -242,7 +245,9 @@ describe('in a Pi CLI opened from Hello', () => {
     const stub = globalThis.fetch;
     await helloTools(pi.api);
     await pi.handlers.get('session_start')!({ type: 'session_start' });
+    // No shell of Hello's here: a Pi the person runs keeps its own bash.
     expect(pi.active).toEqual(['plugin_tool', 'web_search', 'notebook_paths']);
+    expect(pi.registered.has('bash')).toBe(false);
     // Its fetch keeps following redirects, its folder stays, its context gets no snapshot.
     expect(globalThis.fetch).toBe(stub);
     expect(process.cwd()).toBe(folder);

@@ -1,5 +1,6 @@
 import type { PendingRequest } from "../../shared/types";
 import { Dialog } from "./primitives";
+import { toolWords } from "../attention";
 
 /** "just now", "4 min ago", "2 h ago". */
 function age(at: number, now: number): string {
@@ -41,7 +42,7 @@ export function AttentionDialog({ open, requests, titles, onOpenRequest, onClose
                 <span className="attention-row-text">
                   <span className="attention-row-kind">{request.kind === "approval" ? "Approval" : "Plugin question"}</span>
                   <span className="attention-row-label truncate">
-                    {request.kind === "approval" ? request.label.replace(/_/g, " ") : request.label}
+                    {request.kind === "approval" ? toolWords(request.label) : request.label}
                   </span>
                 </span>
                 <span className="attention-row-age">{age(request.createdAt, now)}</span>

@@ -30,6 +30,38 @@ by its path, as a drop is. "Attach files…" asks main for a native open dialog
 over this window, for files only, never a folder; its paths take the same
 attach path as a drop. Neither is offered to the model as a tool.
 
+`pdf_read`, `pdf_inspect` and `pdf_compress` read a PDF only inside the chat's folder and
+write only there, through the same path checks as `file_read` and `file_write`,
+and never over the file they read. The one thing they read outside it is a PDF
+the person dropped on the chat from elsewhere, which Hello keeps as a copy in
+the chat's own `Chat files` folder: it is asked for by its bare name — no
+separator, no leading dot, no symlink followed — so nothing else of the app's
+data is reached that way. The program they run is Hello's own and
+fixed; the model supplies a path, a target size and a level, as data. Its
+Python packages are downloaded once into the app's data, after the person is
+asked. The shell runner hides from a command's output the values of
+environment variables named like secrets. `pdf_read` runs three fixed poppler
+commands with the path quoted, keeps what they make in a folder of the app's
+data that is removed when the call ends, and sends a scan's pages to the model
+as pictures — to the model the chat already runs on, nowhere else. Values
+shorter than eight characters
+are not treated as secrets, because a switch such as `…_AUTH_REFRESH=1` made it
+hide every `1` a command printed.
+
+A chat's own folder (`chat-files/…/Chat files`) holds copies of what the
+person dropped and what the tools made of them; the originals are never
+written. `files.deliver` takes a path inside the chat's folder, checked by the
+same resolver the Files tab uses, and writes only where the person chose in the
+save dialog. The renderer recognises such a folder by its path to decide what a
+click does; main compares the exact path before it treats one as its own.
+
+An `.xlsx` among dropped or chosen files is not attached: main opens it as a
+workbook of the chat through the Sheets store's own checks (a regular `.xlsx`
+file, 20 MB at most). One that lies in the chat's folder is opened where it is
+and changed only by a save; any other is copied into the app's data and the
+original is never written. The renderer supplies nothing but the paths the
+drop itself carried, as for any attachment.
+
 Remote pages run in `<webview>` guests of the app window, with web security
 enabled, no Node integration and no app preload. The window may ask for a page,
 but it decides nothing about it: `browser.attach` mints a one-time nonce for one
@@ -169,7 +201,7 @@ Chromium vulnerabilities.
 | Click/type/scroll through agent tools | That tab's Agent control **Full** grant |
 | Load a skill's instructions or reference file | Skill activated for that conversation; real-path containment inside the imported copy; text only, bounded size |
 | Find a skill and turn it on (`skills_find`, `skill_load` by id, the composer's `/` menu) | Only ids the catalog handed out: a library row that still verifies, a folder discovery reports, or a skills.sh `owner/repo/skill` that skills.sh itself listed (from a search in the last hour, else asked again) — no segment may be `.`, `..` or hidden. The skill is copied into the library like a manual import and activated for that one conversation; an existing same-name library skill is used instead, never replaced. **No per-call approval**: a skill is text, and it grants no permission |
-| Call a tool from an MCP server | Server activated for that conversation, re-checked at call time; Hello's own stdio client; **no per-call approval gate** |
+| Call a tool from an MCP server | Server activated for that conversation, re-checked at call time; Hello's own client, over stdio or streamable HTTP; **no per-call approval gate** |
 | Run a tool registered by an activated plugin extension | Explicit activation of that plugin; the extension is Node code inside the Pi child and is **not** gated per call |
 | Interactive terminal/CLI client | Explicit user launch; subsequent commands follow that process/client's authority |
 
@@ -201,13 +233,26 @@ files, skills, templates and themes stay disabled; the explicit Hello extension
 registers the existing main-process tools. Startup verifies that extension
 before sending a model request.
 
-**Coder trusts root project instructions (T141).** Only in Coder mode, Hello
-reads `AGENTS.md` from the attached folder's root, or `CLAUDE.md` if AGENTS.md
+**One way of working, the same gates (T180, 17.11).** A chat has no Chat or
+Coder mode, and a reply always has a folder: the person's, or the `Chat files`
+folder Hello keeps for the chat. `bash` and the file tools are therefore in
+view in every chat. Nothing that asks was removed: the approval setting decides
+each shell command and write as before, file tools stay inside the chat's
+folder through `scopedPath`, and the shell is, as it always was, not a sandbox
+— the folder it starts in is where it starts, not a limit. Hello loading the
+browser tools by itself (a request that names a page, a tab the person handed
+over, a search stopped by bot protection) makes them callable and nothing more:
+reading and acting in a tab the person opened still need that tab's Agent
+control, decided in main.
+
+**A chat trusts its folder's root project instructions (T141).** In every
+chat — there is no mode since 17.11 — Hello
+reads `AGENTS.md` from the chat folder's root, or `CLAUDE.md` if AGENTS.md
 is absent. It imports at most 32 KiB of valid UTF-8 (a clipped final character
 is omitted) and labels a truncated excerpt. Links, hard links, non-regular,
 binary and unreadable files are not loaded. It never searches parent, home or
-nested directories. Chat mode does not load these files; Chat/Coder is the
-switch, with no separate permission setting. Changed instructions restart a
+nested directories. Attaching a folder is the decision to trust its root
+instructions; there is no separate permission setting. Changed instructions restart a
 warm Pi session on its next turn, keeping its conversation history.
 
 The contents of an unfamiliar repository become **instructions to the model**,
@@ -254,12 +299,31 @@ tool results and the prompt tell the model to follow a found skill for the
 task only, and that it never overrides the person or Hello's rules. The chat
 transcript shows each skill the model looked for and loaded.
 
-MCP servers are separate child processes started by Hello's own stdio client,
-never by Pi. They receive only platform variables plus the values configured for
-that server, never the model key or the bridge token. Their tools are offered
-through the same tool host as Hello's own, are re-checked against the
-conversation's activation at call time, and are removed with the server. A
-server's tool descriptions and results are untrusted data.
+MCP servers are connected by Hello's main process, never by Pi. A local server
+is a child process Hello starts over stdio; it receives only platform variables
+plus the values configured for that server, never the model key or the bridge
+token. Their tools are offered through the same tool host as Hello's own, are
+re-checked against the conversation's activation at call time, and are removed
+with the server. A server's tool descriptions and results are untrusted data.
+
+A remote server is reached over streamable HTTP through `@earendil-works/pi-mcp`
+(Pi's MIT client library, used as a library in main; Pi's own MCP extension
+stays off with `-ne`). **A tool call to it sends the tool's arguments off this
+Mac**, to the address the person added: https only, plain http only on
+loopback, and no credentials in the URL; legacy SSE servers are refused. Its
+headers live in the encrypted store like stdio environment values and reach only
+that server. A server that answers 401 is marked "needs sign-in" and nothing
+more: a background connection refreshes a grant the person already gave and
+never registers, authorizes or opens a browser. Sign in is the person's click in
+Settings: the authorization server is discovered from the server, Hello
+registers itself as `Hello.` with PKCE (S256), the system browser opens the
+server's own https sign-in page, and the answer returns to a one-time callback
+on 127.0.0.1 that closes after five minutes. The registration, tokens and PKCE
+state are stored with the model key's encryption under `mcpAuth:<id>`, never in
+the resource row, the renderer or a log, are redacted from error messages, and
+are deleted with the server or when its address changes. Tokens another tool
+holds (Claude Code's keychain) are never read: such a server signs in again
+inside Hello.
 
 One MCP process is shared by the chats that activate that server; activation is
 an access gate, not isolation of the server's internal state. Stop cancels the
@@ -324,7 +388,7 @@ These are application-level safeguards, not isolation from a hostile concurrent
 local process. The secret-file exclusions are a limited filename filter, not
 content-based secret detection. Ordinary source files can still contain secrets.
 
-`command_run` starts `/bin/sh -c` with a per-call timeout (30 seconds by default,
+`bash` starts `/bin/sh -c` with a per-call timeout (30 seconds by default,
 1–600 seconds) and a 16 KiB head / 48 KiB tail output buffer. High output alone
 does not stop it; omitted bytes are counted. An optional private output log is
 capped at 8 MiB and reports truncation; the active model key and known sensitive
@@ -339,7 +403,7 @@ back file writes or external side effects already completed.
 **Tool approvals are a setting, and the default is permissive.** Settings ›
 Connection › Tool approvals has three modes:
 
-| Mode | File writes in the chat folder | `command_run` |
+| Mode | File writes in the chat folder | `bash` |
 | --- | --- | --- |
 | Work without asking (**default**) | run | run |
 | Ask before commands | run | wait for the human |
@@ -349,7 +413,7 @@ The default was chosen by the app's owner so that agent work is not interrupted.
 It means a model turn can write inside the attached folder and run shell commands
 with the user's own OS access without any per-call confirmation — the containment
 described above (paths confined to the attached folder) still applies to writes,
-but **not** to `command_run`, which is confined to nothing but its working
+but **not** to `bash`, which is confined to nothing but its working
 directory. Choosing "Ask every time" restores the per-call gate for both. The
 mode is read at the moment each call is judged, so changing it takes effect on
 the next tool call rather than the next chat.
@@ -360,6 +424,78 @@ workers receive the selected endpoint and credential when required. Hello. does
 not intercept every command an independently running CLI decides to execute, and
 does not add bypass-permission flags. The client and the person launching it
 remain responsible for its own approval and sandbox settings.
+
+### Workbooks
+
+Workbooks (`src/main/sheets/`) are held and computed in the main process. A
+workbook a chat holds is shared with that chat's model the way its notebook
+and folder are: the model may read and change it. What is gated is what
+reaches the person's files:
+
+- `sheet_open` reads an `.xlsx` only inside the chat's folder, through the same
+  `scopedPath` check as `file_read` (realpath containment, secret-file
+  exclusion). It never changes the file.
+- Changes to a folder file are held in the app's data until `sheet_save`.
+  `sheet_save` — over the file, or to a new path — is a write to the folder:
+  the same `scopedPath(…, writing)` check and the same approval as
+  `file_write`, re-checked after the approval wait. The version replaced is
+  kept in the app's data.
+- A file whose package holds charts, pivot tables, macros, slicers or external
+  links is never saved over, because the save would silently remove them.
+- The renderer never supplies a path. The pane's Open and Export use native
+  dialogs in main; a file picked outside the folder is copied in and the
+  original left alone. Deleting a workbook asks in a native dialog.
+- Ids are UUIDs checked against a pattern before they touch a path; a chat
+  reaches only its own `sheets/<key>/` folder.
+
+- `sheet_read toFile` writes a sheet as CSV into the chat's own
+  `sheets/<key>/exchange/` folder in the app's data (mode 0600) so a script
+  run with `bash` can read it. That places a copy of the sheet where
+  the unsandboxed shell — already gated by its own approval — can reach it.
+  `sheet_write fromFile` reads a `.csv` only from that folder (realpath
+  containment) or from the chat's folder through `scopedPath`; up to 5 MB.
+- The shell and the file tools are in view in every chat. No approval
+  changes: `bash` and file writes ask exactly as they always did.
+
+- `sheet_script` runs model-written Python as the person, unsandboxed: the
+  same class as `bash`, with the same approval (`approvalFor` lists it
+  beside `bash`) and through the same runner, time limit and redaction.
+  Unlike `bash` it needs no attached folder; its working directory is
+  the chat's `sheets/<key>/exchange/` folder. The first script builds a private
+  virtual environment under `sheets/python/` and downloads openpyxl (and
+  pandas where a wheel exists) from PyPI with pip — the only network access of
+  the Sheets module, made after that approval and never again once built.
+  Nothing is installed into the system's Python. A script is handed the
+  working copy in the app's data, never the path of a file in the person's
+  folder; that file still changes only through `sheet_save`.
+
+- The pane's selection goes to the model with the person's message as an
+  address only: a workbook id, a sheet name and a range, each validated in
+  main (UUID pattern, sheet-name rule, A1 range). The renderer cannot put free
+  text into the model's context through it, and no cell contents travel.
+
+Workbook contents are untrusted data for the model, as the manual states.
+Formulas are evaluated by IronCalc, a spreadsheet engine with no file, network
+or shell functions; no macro is ever run. Parsing an `.xlsx` (a zip of XML) is
+done by ExcelJS in the main process: a malformed file is a parser risk in the
+process that holds the app's authority, bounded by the 20 MB limit and by only
+opening files the person or the model named. Univer runs in the app renderer
+with the existing CSP; it loads nothing from the network and its telemetry
+package makes no requests. Workbooks in the app's data are not encrypted.
+
+### The shell's name
+
+Hello's shell tool is named `bash` (it was `command_run` until 16.11.2026; a
+call or a saved step under the old name is the same tool). Pi has a built-in
+tool of that name which runs commands with no approval. It is kept out two
+ways: Pi is launched with `--no-builtin-tools`, and Hello's extension always
+registers a tool named `bash` — an extension tool replaces a built-in of the
+same name in Pi's registry (`agent-session.js`, `_refreshToolRegistry`). With
+a folder attached that tool is Hello's approved shell, executed in main; with
+none it is a tool that refuses. `bash` is therefore no longer in
+`--exclude-tools`, which removes a name for extension tools as well and made
+the tool unreachable. The other built-ins (`read`, `edit`, `write`, `grep`,
+`find`, `ls`, `powershell`) stay excluded by name.
 
 ### Browser grants
 
@@ -484,6 +620,17 @@ native-focus notification only dismisses app menus when focus enters the browser
 
 ## Credentials and outbound model data
 
+**Subagents on another connection.** The model a plugin's subagents run on
+(`subagentModel`) may sit on a connection other than the chat's
+(`subagentEndpointUrl`): a local chat model with its subagents on a provider.
+Only a connection the person kept can be named, because its stored key is the
+one sent. Pi is given it as a second provider (`hello-subagents`) whose key is
+an environment reference (`$HELLO_PI_SUBAGENT_API_KEY`), never written to
+`models.json`; the variable is set only for a launch that uses it. With this
+set, what the chat hands a subagent leaves for that provider even when the
+chat itself runs on this Mac: Settings says so under the field, and the
+model's runtime note says where its subagents run.
+
 Model keys are encrypted by Electron `safeStorage` through a main-only codec and
 stored as encrypted SQLite blobs. The app refuses key operations if encryption is
 unavailable; it has no application-level plaintext fallback. The exact OS
@@ -542,8 +689,9 @@ by hand.
 
 Environment values found in those files stay in the main process. The renderer
 receives variable names only, and importing an entry stores its values with the
-same encryption as the model key. Entries that are not stdio are listed but
-cannot be added. `HELLO_HOME_DIR` overrides the directory scanned; it exists for
+same encryption as the model key; an HTTP entry's headers are handled the same
+way. Entries Hello cannot reach — legacy SSE, plain http off this Mac, no
+command or URL — are listed with the reason and cannot be added. `HELLO_HOME_DIR` overrides the directory scanned; it exists for
 the acceptance script and, like `HELLO_DATA_DIR`, is trusted to the same degree
 as the user's own environment.
 

@@ -6,6 +6,9 @@ import type { Message, PendingRequest, QueuedMessage } from '../shared/types';
  * that failed, a reply that is ready. A chat keeps its most pressing one until
  * the person looks at it.
  */
+/** A tool as a person reads it. The shell is `bash` to a model and a shell command to the one who approves it. */
+export const toolWords = (name: string) => name === 'bash' || name === 'command_run' ? 'shell command' : name.replace(/_/g, ' ');
+
 export type AttentionKind = 'approval' | 'plugin' | 'question' | 'error' | 'done';
 const rank: Record<AttentionKind, number> = { approval: 5, plugin: 4, question: 3, error: 2, done: 1 };
 
@@ -45,7 +48,7 @@ export function notice(kind: AttentionKind, message: Pick<Message, 'content' | '
   const firstLine = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 140);
   if (kind === 'approval') {
     const tool = (message?.parts ?? []).find(part => part.type === 'tool' && part.status === 'approval');
-    return `Needs your approval${tool && tool.type === 'tool' ? `: ${tool.name.replace(/_/g, ' ')}` : ''}.`;
+    return `Needs your approval${tool && tool.type === 'tool' ? `: ${toolWords(tool.name)}` : ''}.`;
   }
   if (kind === 'question') return firstLine(question?.replace(/^\[Worker question\]\s*/, '') ?? 'A worker is waiting for an answer.');
   if (kind === 'error') return `The reply failed${message?.error ? `: ${firstLine(message.error)}` : '.'}`;
@@ -62,7 +65,7 @@ export const requestKind = (request: Pick<PendingRequest, 'kind'>): AttentionKin
 /** The words of the one notification an open request gets. */
 export function requestNotice(request: Pick<PendingRequest, 'kind' | 'label'>): string {
   const words = request.label.replace(/\s+/g, ' ').trim().slice(0, 140);
-  return request.kind === 'approval' ? `Needs your approval: ${words.replace(/_/g, ' ')}.` : `A plugin asks: ${words}`;
+  return request.kind === 'approval' ? `Needs your approval: ${toolWords(words)}.` : `A plugin asks: ${words}`;
 }
 
 export const attentionLabel: Record<AttentionKind, string> = {

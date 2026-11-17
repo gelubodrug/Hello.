@@ -25,6 +25,48 @@ export function activityLayout(parts: readonly MessagePart[], streaming: boolean
   };
 }
 
+/** A stretch of a reply: words, which stay as written, or steps, which fold under one line. */
+export type ReplySegment =
+  | { kind: 'prose'; index: number }
+  | { kind: 'activity'; start: number; end: number; grouped: boolean; last: boolean };
+
+/**
+ * A reply in the order it was made, by one rule a reader can see: what the
+ * model SAYS is always on the page, where it said it; what the model DOES —
+ * thinking, tool calls — folds. No length decides it and nothing said is
+ * ever moved into the fold (user, 16.11: an answer read on screen vanished
+ * into the activity list when a tool call followed; then a rule by length
+ * kept some lines and folded others, and nobody could tell which).
+ *
+ * Steps between two things said are one list; a single step is simply its own
+ * row, since a list of one would be a wrapper around nothing.
+ */
+export function replySegments(parts: readonly MessagePart[]): ReplySegment[] {
+  const segments: ReplySegment[] = [];
+  let start = -1, steps = 0;
+  const close = (end: number) => {
+    if (start >= 0 && steps) segments.push({ kind: 'activity', start, end, grouped: steps > 1, last: false });
+    start = -1;
+    steps = 0;
+  };
+  parts.forEach((part, index) => {
+    if (part.type === 'text') {
+      if (!meaningful(part)) return;
+      close(index);
+      segments.push({ kind: 'prose', index });
+    } else {
+      if (start < 0) start = index;
+      steps++;
+    }
+  });
+  close(parts.length);
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index];
+    if (segment.kind === 'activity') { segment.last = true; break; }
+  }
+  return segments;
+}
+
 /**
  * Where the live tail of the activity starts. While a reply is still arriving,
  * the whole list is noise — what matters is the work happening now. So the last
@@ -144,10 +186,11 @@ const NAMES: Record<string, Naming> = {
     many: count => `Read ${count} pages`,
   },
   plan_write: named('Write the plan', 'Wrote the plan', count => `Updated the plan ${count} times`),
-  notebook_list: named('Open notebook', 'Read notebook', count => `Read notebook ${count} times`),
+  // The chat's Workbook page; a sheet tool's "workbook" is an Excel file.
+  notebook_list: named('Open Workbook page', 'Read Workbook page', count => `Read the Workbook page ${count} times`),
   notebook_save: named('Save note', 'Saved note', count => `Saved ${count} notes`),
   notebook_task_status: named('Update task', 'Updated task', count => `Updated ${count} tasks`),
-  notebook_paths: named('Find notebook files', 'Found notebook files', count => `Looked for notebook files ${count} times`),
+  notebook_paths: named('Find Workbook files', 'Found Workbook files', count => `Looked for Workbook files ${count} times`),
   file_list: named('List files', 'Listed files', count => `Listed ${count} folders`),
   file_search: named('Search files', 'Searched files', count => `Searched files ${count} times`),
   file_read: {
@@ -162,7 +205,33 @@ const NAMES: Record<string, Naming> = {
     one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Wrote ${name}` : `Write ${name}`) : past(part) ? 'Wrote file' : 'Write file'; },
     many: count => `Wrote ${count} files`,
   },
+  bash: named('Run command', 'Ran command', count => `Ran ${count} commands`),
+  // Steps saved before the shell took its usual name.
   command_run: named('Run command', 'Ran command', count => `Ran ${count} commands`),
+  sheet_list: named('Check workbooks', 'Checked workbooks', count => `Checked workbooks ${count} times`),
+  sheet_new: named('Make workbook', 'Made workbook', count => `Made ${count} workbooks`),
+  sheet_open: {
+    one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Opened ${name}` : `Open ${name}`) : past(part) ? 'Opened workbook' : 'Open workbook'; },
+    many: count => `Opened ${count} workbooks`,
+  },
+  sheet_read: named('Read workbook', 'Read workbook', count => `Read the workbook ${count} times`),
+  sheet_write: named('Write to workbook', 'Wrote to workbook', count => `Wrote to the workbook ${count} times`),
+  sheet_save: {
+    one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Saved ${name}` : `Save ${name}`) : past(part) ? 'Saved workbook' : 'Save workbook'; },
+    many: count => `Saved ${count} workbooks`,
+  },
+  pdf_read: {
+    one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Read ${name}` : `Read ${name}`) : 'Read PDF'; },
+    many: count => `Read PDFs ${count} times`,
+  },
+  pdf_inspect: {
+    one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Looked at ${name}` : `Look at ${name}`) : past(part) ? 'Looked at PDF' : 'Look at PDF'; },
+    many: count => `Looked at ${count} PDFs`,
+  },
+  pdf_compress: {
+    one: part => { const name = leaf(field(part, 'path')); return name ? (past(part) ? `Compressed ${name}` : `Compress ${name}`) : past(part) ? 'Compressed PDF' : 'Compress PDF'; },
+    many: count => `Compressed ${count} PDFs`,
+  },
   browser_show_html: {
     // Parts of one document are not several documents: a run of them is the
     // writing of a single page, and saying otherwise would count wrong.
@@ -220,6 +289,7 @@ const NAMES: Record<string, Naming> = {
     one: part => { const said = field(part, 'text'); return said ? (past(part) ? `Said “${said.slice(0, 40)}” to a worker` : 'Talk to worker') : past(part) ? 'Talked to worker' : 'Talk to worker'; },
     many: count => `Talked to workers ${count} times`,
   },
+  runtime_status: named('Check model and speed', 'Checked model and speed', count => `Checked model and speed ${count} times`),
   skills_find: {
     one: part => { const need = field(part, 'need'); return need ? (past(part) ? `Looked for a skill for “${need.slice(0, 40)}”` : 'Look for a skill') : past(part) ? 'Looked for a skill' : 'Look for a skill'; },
     many: count => `Looked for skills ${count} times`,

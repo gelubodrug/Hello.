@@ -362,7 +362,7 @@ describe('Hello’s browser over the CLI connection', () => {
     expect(instructions).toContain('browser read \'{"tabId":"TAB_ID"}\'');
     const run = (...args: string[]) => new Promise<{ stdout: string; stderr: string; code: number }>(resolve => {
       execFile(process.execPath, [f.context.env.HELLO_NOTEBOOK_CLIENT, ...args], {
-        env: { PATH: process.env.PATH, HELLO_NOTEBOOK_BRIDGE_URL: f.context.env.HELLO_NOTEBOOK_BRIDGE_URL, HELLO_NOTEBOOK_BRIDGE_TOKEN: f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN },
+        env: { PATH: process.env.PATH, ELECTRON_RUN_AS_NODE: '1', HELLO_NOTEBOOK_BRIDGE_URL: f.context.env.HELLO_NOTEBOOK_BRIDGE_URL, HELLO_NOTEBOOK_BRIDGE_TOKEN: f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN },
       }, (error, stdout, stderr) => resolve({ stdout, stderr, code: error ? Number((error as { code?: number }).code ?? 1) : 0 }));
     });
     const tabs = await run('browser', 'tabs');
@@ -451,7 +451,7 @@ describe('Hello’s browser over the CLI connection', () => {
       HELLO_PI_BRIDGE_TOKEN: f.context.env.HELLO_NOTEBOOK_BRIDGE_TOKEN,
       HELLO_PI_EXTENSION_ROLE: 'cli',
     } });
-    expect(readFileSync(f.context.instructionsPath, 'utf8')).toContain('a Pi opened from Hello has them');
+    expect(readFileSync(f.context.instructionsPath, 'utf8')).toContain('A Pi opened from Hello starts with only tools_find of it');
   });
 
   it('without a browser, stays the notebook connection it was', async () => {

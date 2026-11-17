@@ -39,8 +39,10 @@ export function runApprovedCommand(command: string, cwd: string, signal: AbortSi
 }): Promise<string> {
   const timeoutSeconds = commandTimeout(options.timeoutSeconds);
   const env = shellEnvironment();
+  // A variable named like a secret that holds "1" or "true" is a switch, not a secret: hiding its value hid every
+  // 1 in a command's output — a file size came back as "[redacted]7079594" (a run, 16.11). A real token is long.
   const secrets = [...(options.redactValues ?? []), ...Object.entries(env)
-    .filter(([name]) => /(?:TOKEN|KEY|PASSWORD|SECRET|AUTH|PROXY)/i.test(name)).map(([, value]) => value ?? '')]
+    .filter(([name]) => /(?:TOKEN|KEY|PASSWORD|SECRET|AUTH|PROXY)/i.test(name)).map(([, value]) => value ?? '').filter(value => value.length >= 8)]
     .filter(Boolean).sort((a, b) => b.length - a.length);
   const redact = (text: string) => secrets.reduce((value, secret) => value.split(secret).join('[redacted]'), text);
   return new Promise((resolve, reject) => {

@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeftToLine, Bot, FolderOpen, Globe, Terminal, X } from 'lucide-react';
+import { ArrowLeftToLine, Bot, FolderOpen, Globe, Sheet, Terminal, X } from 'lucide-react';
 import type { BrowserTab, TerminalSession } from '../../shared/types';
 import type { FilesTab } from '../../shared/files';
+import type { SheetsTab } from '../../shared/sheets';
 import { ContextMenu, Truncated } from '../ui/primitives';
 
-type Tool = BrowserTab | TerminalSession | FilesTab;
+type Tool = BrowserTab | TerminalSession | FilesTab | SheetsTab;
 
 /** Tabs share the available width, down to one icon each. Only once the icon
  * budget is exhausted does the strip scroll; pane actions never shrink. */
@@ -27,7 +28,7 @@ export function ToolTabStrip({ tools, selectedId, onSelect, onClose, onDock, onR
   };
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const menuTool = tools.find(tool => tool.id === menu?.id);
-  const menuTerminal = menuTool && !('url' in menuTool) && menuTool.kind !== 'files' ? menuTool : undefined;
+  const menuTerminal = menuTool && !('url' in menuTool) && menuTool.kind !== 'files' && menuTool.kind !== 'sheets' ? menuTool : undefined;
   useEffect(() => { if (menu && !menuTool) setMenu(null); }, [menu, menuTool]);
   useLayoutEffect(() => {
     const node = strip.current;
@@ -100,7 +101,7 @@ export function ToolTabStrip({ tools, selectedId, onSelect, onClose, onDock, onR
                 setMenu({ id: tool.id, x: rect.left, y: rect.bottom });
               }
             }}>
-            {'url' in tool ? <Globe size={14} /> : tool.kind === 'files' ? <FolderOpen size={14} /> : tool.kind === 'worker' ? <Bot size={14} /> : <Terminal size={14} />}
+            {'url' in tool ? <Globe size={14} /> : tool.kind === 'files' ? <FolderOpen size={14} /> : tool.kind === 'sheets' ? <Sheet size={14} /> : tool.kind === 'worker' ? <Bot size={14} /> : <Terminal size={14} />}
             <Truncated className="tool-tab-label">{title}</Truncated>
             {ended && <span className="session-ended" aria-label="Session ended" />}
           </button>

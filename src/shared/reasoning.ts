@@ -74,3 +74,17 @@ export function reasoningNote(reach: ReasoningReach): string {
   if (reach === 'switch') return 'This connection takes thinking on or off, not which level.';
   return 'This server is sent no reasoning setting at all: it thinks at its own level. Set Model compatibility to OpenAI-compatible to send the level.';
 }
+
+/** The levels the composer and Settings offer. Above High, Pi clamps a model Hello declares to it: none is offered. */
+export const EFFORT_LEVELS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+] as const;
+export type Effort = 'off' | typeof EFFORT_LEVELS[number]['value'];
+
+/** Beside the composer's Thinking switch, in a few words: what choosing a level does on this connection. Nothing where the level itself is sent. */
+export function effortHint(reach: ReasoningReach): string | undefined {
+  return reach === 'switch' ? 'This model takes on or off, not which level'
+    : reach === 'nothing' ? 'This server is sent no reasoning setting: see Settings › Model compatibility' : undefined;
+}

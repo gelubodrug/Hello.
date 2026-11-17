@@ -106,7 +106,6 @@ export interface PiLaunchConfiguration {
   history: ImportedChatMessage[];
   bridgeEnv: Record<string, string>;
   requestTimeoutMs: number;
-  chatMode: 'chat' | 'coder';
   /** Verified skill folders activated for this conversation. */
   skillPaths?: string[];
   /** Verified Pi extension entry files from activated plugins. */
@@ -120,7 +119,12 @@ export interface PiLaunchConfiguration {
   vision?: boolean;
   /** What the provider publishes for settings.subagentModel, when it is listed. */
   subagentLimits?: { contextWindow?: number; maxOutputTokens?: number; vision?: boolean };
+  /** The key of settings.subagentEndpointUrl, when subagents run on a connection of their own. */
+  subagentKey?: string;
 }
+
+/** Pi's name for the connection subagents run on when it is not the chat's. */
+export const SUBAGENT_PROVIDER = 'hello-subagents';
 
 /** Isolated resources and credentials; no global Pi config or project discovery. */
 export async function preparePiLaunch(options: PiLaunchConfiguration) {
@@ -159,40 +163,54 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
       maxTokens < 512 || contextWindow - reserveTokens < 4096)
     throw new Error('This context/output combination leaves too little room for Pi and the Hello tools. Increase the server context and match it in Settings, or lower the output budget.');
   const baseUrl = normalizeEndpoint(settings.endpointUrl).replace(/\/chat\/completions$/, '');
-  const hostname = new URL(baseUrl).hostname;
   const compatibility = settings.modelCompatibility ?? 'auto';
-  const openai = hostname === 'api.openai.com';
-  const openrouter = compatibility === 'auto' && hostname === 'openrouter.ai';
-  const deepseek = compatibility === 'auto' && hostname === 'api.deepseek.com';
-  // Auto, for a Qwen model on a server of the person's own: Qwen's thinking
-  // switch, so Reasoning Off reaches the server (qwen-thinking.ts).
-  const qwenFor = (id: string) => usesQwenThinkingSwitch(baseUrl, id, compatibility);
   const effort = settings.reasoningEffort ?? 'off';
-  const compatFor = (id: string) => {
-    const qwen = qwenFor(id);
-    return {
-      supportsStore: false,
-      supportsDeveloperRole: openai,
-      supportsReasoningEffort: !qwen && !deepseek && !openrouter && (openai || compatibility === 'openai'),
-      maxTokensField: openai ? 'max_completion_tokens' : 'max_tokens',
-      ...(openrouter ? { thinkingFormat: 'openrouter' } : {}),
-      ...(deepseek ? { thinkingFormat: 'deepseek' } : {}),
-      ...(qwen ? { thinkingFormat: 'qwen-chat-template' } : {}),
+  /**
+   * How a model is declared to Pi, for the server it is on. Each server has
+   * its own dialect (where the output budget goes, how thinking is switched),
+   * so a subagent model on another connection is described by that
+   * connection's, not the chat's.
+   */
+  const describeOn = (base: string) => {
+    const hostname = new URL(base).hostname;
+    const openai = hostname === 'api.openai.com';
+    const openrouter = compatibility === 'auto' && hostname === 'openrouter.ai';
+    const deepseek = compatibility === 'auto' && hostname === 'api.deepseek.com';
+    // Auto, for a Qwen model on a server of the person's own: Qwen's thinking
+    // switch, so Reasoning Off reaches the server (qwen-thinking.ts).
+    const qwenFor = (id: string) => usesQwenThinkingSwitch(base, id, compatibility);
+    const compatFor = (id: string) => {
+      const qwen = qwenFor(id);
+      return {
+        supportsStore: false,
+        supportsDeveloperRole: openai,
+        supportsReasoningEffort: !qwen && !deepseek && !openrouter && (openai || compatibility === 'openai'),
+        maxTokensField: openai ? 'max_completion_tokens' : 'max_tokens',
+        ...(openrouter ? { thinkingFormat: 'openrouter' } : {}),
+        ...(deepseek ? { thinkingFormat: 'deepseek' } : {}),
+        ...(qwen ? { thinkingFormat: 'qwen-chat-template' } : {}),
+      };
     };
+    // Unpublished capability keeps the previous behavior; explicit text-only
+    // metadata must not advertise images to Pi or a plugin's subagent.
+    return (id: string, limits: { contextWindow: number; maxTokens: number }, vision?: boolean) => ({ id, name: id, input: vision === false ? ['text'] : ['text', 'image'],
+      reasoning: effort !== 'off' || qwenFor(id) || deepseek, ...limits, compat: compatFor(id),
+      // Keep the configured temperature except families that reject it.
+      ...(/^(?:o[134](?:-|$)|gpt-5)/i.test(id) ? {} : {
+        samplingParams: { temperature: settings.temperature },
+      }),
+    });
   };
-  // Unpublished capability keeps the previous behavior; explicit text-only
-  // metadata must not advertise images to Pi or a plugin's subagent.
-  const describe = (id: string, limits: { contextWindow: number; maxTokens: number }, vision?: boolean) => ({ id, name: id, input: vision === false ? ['text'] : ['text', 'image'],
-    reasoning: effort !== 'off' || qwenFor(id) || deepseek, ...limits, compat: compatFor(id),
-    // Keep the configured temperature except families that reject it.
-    ...(/^(?:o[134](?:-|$)|gpt-5)/i.test(id) ? {} : {
-      samplingParams: { temperature: settings.temperature },
-    }),
-  });
+  const describe = describeOn(baseUrl);
   // The model plugins' subagents run on (user, 29.09), on this same
   // connection: a second model of the same provider, which pi-subagents takes
   // as its default. Its children read this folder too.
-  const subagentModel = settings.subagentModel?.trim() && settings.subagentModel.trim() !== settings.model ? settings.subagentModel.trim() : undefined;
+  // Or on a kept connection of its own (user, 16.11): the chat on a local
+  // model, its subagents on a provider. That is a second provider for Pi, with
+  // that connection's address, dialect and key.
+  const subagentBase = settings.subagentEndpointUrl?.trim() ? normalizeEndpoint(settings.subagentEndpointUrl).replace(/\/chat\/completions$/, '') : baseUrl;
+  const elsewhere = subagentBase !== baseUrl;
+  const subagentModel = settings.subagentModel?.trim() && (elsewhere || settings.subagentModel.trim() !== settings.model) ? settings.subagentModel.trim() : undefined;
   // A second model is declared on its own numbers, never the chat's: the scale
   // main learned is the chat model's, and a subagent declared at the chat's
   // 512k window on a 32k model dies at the provider instead of compacting
@@ -205,8 +223,11 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
     options.subagentLimits?.maxOutputTokens ?? settings.maxOutputTokens ?? 4096, subagentWindow - 8192)) };
   const models = { providers: { hello: {
     baseUrl, api: 'openai-completions', apiKey: '$HELLO_PI_API_KEY',
-    models: [describe(settings.model, { contextWindow, maxTokens }, options.vision), ...(subagentModel ? [describe(subagentModel, subagentLimits, options.subagentLimits?.vision)] : [])],
-  } } };
+    models: [describe(settings.model, { contextWindow, maxTokens }, options.vision), ...(subagentModel && !elsewhere ? [describe(subagentModel, subagentLimits, options.subagentLimits?.vision)] : [])],
+  }, ...(subagentModel && elsewhere ? { [SUBAGENT_PROVIDER]: {
+    baseUrl: subagentBase, api: 'openai-completions', apiKey: '$HELLO_PI_SUBAGENT_API_KEY',
+    models: [describeOn(subagentBase)(subagentModel, subagentLimits, options.subagentLimits?.vision)],
+  } } : {}) } };
   const piSettings = {
     defaultProvider: 'hello', defaultModel: settings.model, defaultThinkingLevel: effort,
     quietStartup: true, enableInstallTelemetry: false, enableAnalytics: false,
@@ -220,7 +241,7 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
       provider: { maxRetries: 0, timeoutMs: options.requestTimeoutMs, maxRetryDelayMs: 60000 } },
     httpIdleTimeoutMs: options.requestTimeoutMs,
     // pi-subagents: provider/model, which wins exactly.
-    ...(subagentModel ? { subagents: { defaultModel: `hello/${subagentModel}` } } : {}),
+    ...(subagentModel ? { subagents: { defaultModel: `${elsewhere ? SUBAGENT_PROVIDER : 'hello'}/${subagentModel}` } } : {}),
   };
   const promptFile = join(root, 'system-prompt.md');
   await Promise.all([
@@ -237,6 +258,8 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   Object.assign(env, options.bridgeEnv, {
     ELECTRON_RUN_AS_NODE: '1', PI_CODING_AGENT_DIR: agentDir,
     PI_SKIP_VERSION_CHECK: '1', PI_OFFLINE: '1', HELLO_PI_API_KEY: options.key || 'hello-local',
+    // The other connection's key, only when subagents run there.
+    ...(subagentModel && elsewhere ? { HELLO_PI_SUBAGENT_API_KEY: options.subagentKey || 'hello-local' } : {}),
     // Pi itself starts in the private directory above, where it reads its
     // settings and keeps the session: a folder's own .pi files never load.
     // Hello's extension, loaded first, moves the process into the folder, so
@@ -249,7 +272,10 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
     args: [
       options.piEntry ?? piRpcEntry(),
       '--offline', '-nc', '-ne', '-ns', '-np', '--no-themes', '--no-builtin-tools',
-      '--exclude-tools', 'read,bash,edit,write,grep,find,ls,powershell',
+      // Pi's own bash is not excluded by name any more: an extension tool of the
+      // same name replaces a built-in in Pi's registry, and Hello's extension
+      // always registers one (pi-extension.ts) — its approved shell, or a refusal.
+      '--exclude-tools', 'read,edit,write,grep,find,ls,powershell',
       '-e', helloPiExtensionPath(),
       // Activated plugin extensions load beside Hello's own, never instead of it.
       ...(options.extensionPaths ?? []).flatMap(file => ['-e', file]),
@@ -258,7 +284,8 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
       ...(options.promptPaths ?? []).flatMap(file => ['--prompt-template', file]),
       '--session', sessionFile, '--provider', 'hello', '--model', `hello/${settings.model}`,
       '--session-dir', root,
-      '--thinking', effort, options.chatMode === 'coder' ? '--append-system-prompt' : '--system-prompt', promptFile,
+      // One prompt, Hello's own, for every chat (user, 17.11): Pi's is written for tools Hello does not offer.
+      '--thinking', effort, '--system-prompt', promptFile,
     ],
   };
 }

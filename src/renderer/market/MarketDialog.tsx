@@ -332,6 +332,7 @@ export function MarketDialog({ kind = 'pi', open, onClose, initialView = 'instal
                 : <span>No source selected</span>}</Pill>
             </div>
             <main className="dshMarketMain">
+              {view === 'discover' && <div>{toolbar}{grid(page?.items ?? [])}</div>}
               {view === 'installable' && (
                 <div className="dshMarketContent">
                   <div className="dshMarketSectionHead">
@@ -339,6 +340,7 @@ export function MarketDialog({ kind = 'pi', open, onClose, initialView = 'instal
                     <Button size="sm" disabled={loading} icon={<RefreshCw size={14} />} onClick={() => void load('installable', { reload: true })}>Check again</Button>
                   </div>
                   {page?.generatedAt && <div className="dshMarketIndexMeta" role="status"><span>Catalog updated: {new Date(page.generatedAt).toLocaleString()}</span></div>}
+                  {toolbar}{grid(page?.items ?? [], 'Install')}
                 </div>
               )}
               {view === 'installed' && (

@@ -1098,14 +1098,14 @@ function NotebookSession({
     updateView({ expanded: unfolded.has(kind) ? [...unfolded].filter(item => item !== kind) : [...unfolded, kind] });
 
   return (
-    <section className="notebook" aria-label="Notebook" ref={root}>
-      <aside className="notebook-list notebook-tree" aria-label="Notebook sections">
+    <section className="notebook" aria-label="Workbook" ref={root}>
+      <aside className="notebook-list notebook-tree" aria-label="Workbook sections">
         <div className="notebook-search">
           <Search size={14} aria-hidden />
           <input
             ref={searchField}
-            aria-label="Search notebook"
-            placeholder="Search notebook"
+            aria-label="Search workbook"
+            placeholder="Search workbook"
             value={query}
             spellCheck={false}
             onChange={event => setQuery(event.target.value)}
@@ -1145,7 +1145,7 @@ function NotebookSession({
               ))}
             </ul>
           ) : (
-            <p className="notebook-section-empty" role="status">Nothing in the notebook matches.</p>
+            <p className="notebook-section-empty" role="status">Nothing in the workbook matches.</p>
           )
         )}
         {!searching && SECTIONS.map((section) => {
@@ -1272,7 +1272,7 @@ function NotebookSession({
           </>
         ) : (
           <div className="notebook-empty">
-            <h2>Notebook</h2>
+            <h2>Workbook</h2>
             <p>
               {loading
                 ? "Loading entries…"

@@ -21,7 +21,7 @@ const text = (value: unknown): value is string => typeof value === "string";
 /**
  * What a code step asks to do, readably (audit B1): a file_edit as its lines
  * taken out and put in, marked − and + in words as well as colour; a
- * file_write as the file it writes; a command_run as the shell line. Anything
+ * file_write as the file it writes; a bash as the shell line. Anything
  * else, or input that does not parse, is null: the caller shows the JSON as
  * before. All of it is text — nothing the model sent becomes markup. A plain
  * function, not a component, so a null can fall back to the JSON.
@@ -61,7 +61,7 @@ export function toolCode(part: Extract<MessagePart, { type: "tool" }>): JSX.Elem
         <CodeBlock code={input.content} language={languageOf(input.path)} />
       </div>
     );
-  if (part.name === "command_run" && text(input.command))
+  if (part.name === "bash" && text(input.command))
     return <div className="tool-code">
       <p className="tool-code-note">Timeout: {typeof input.timeoutSeconds === 'number' ? input.timeoutSeconds : 30} seconds{input.saveLog === true && ' · Save output log'}</p>
       <CodeBlock code={input.command} language="bash" />

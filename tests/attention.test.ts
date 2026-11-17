@@ -5,7 +5,7 @@ import { attentionFor, newWorkerQuestions, notice, requestKind, requestNotice, s
 const reply = (status: Message['status'], extra: Partial<Message> = {}): Message =>
   ({ id: 'r1', conversationId: 'c', role: 'assistant', content: 'Saved all four invoices.', status, createdAt: 1, ...extra });
 const asking = (status: Message['status']) => reply(status, {
-  parts: [{ type: 'tool', id: 't', name: 'command_run', input: '{}', status: 'approval' }],
+  parts: [{ type: 'tool', id: 't', name: 'bash', input: '{}', status: 'approval' }],
 });
 
 // What a chat is waiting for from the person (user, 28.09 plan: "Attention
@@ -38,7 +38,7 @@ describe('what needs the person', () => {
     const before = [item('a', '[Worker question] Kimi asks: which folder?')];
     const after = [...before, item('b', 'and then X'), item('c', '[Worker question] Codex asks: may I delete build/?')];
     expect(newWorkerQuestions(before, after).map(entry => entry.id)).toEqual(['c']);
-    expect(notice('approval', asking('streaming'))).toBe('Needs your approval: command run.');
+    expect(notice('approval', asking('streaming'))).toBe('Needs your approval: shell command.');
     expect(notice('question', null, '[Worker question] Codex asks: may I delete build/?')).toBe('Codex asks: may I delete build/?');
     expect(notice('error', reply('error', { error: 'The provider\nwent away' }))).toBe('The reply failed: The provider went away');
     expect(notice('done', reply('complete'))).toBe('Saved all four invoices.');

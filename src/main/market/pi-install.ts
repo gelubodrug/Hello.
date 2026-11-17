@@ -27,7 +27,7 @@ import { INSTALLED_LIMITS } from '../extensions/library';
  * `@earendil-works/pi-coding-agent` dependency, and market-pi.test.ts reads
  * package.json to refuse any drift from it.
  */
-export const PI_VERSION = '1.0.4';
+export const PI_VERSION = '1.4.0';
 const TYPEBOX_VERSION = '1.3.27';
 export const PI_PROVIDED: Readonly<Record<string, string>> = Object.fromEntries([
   ...['pi-coding-agent', 'pi-agent-core', 'pi-ai', 'pi-tui'].flatMap(name => [[`@earendil-works/${name}`, PI_VERSION], [`@mariozechner/${name}`, PI_VERSION]]),

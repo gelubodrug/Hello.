@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions, PiRpcPromptOptions } from '../src/main/chat/pi-rpc';
+import { keptFile } from '../src/main/chat/chat-folder';
 
 // These regression fixtures never launch a CLI or call a model endpoint.
 const runtime = vi.hoisted(() => {
@@ -41,7 +42,12 @@ vi.mock('../src/main/chat/pi-session', async importOriginal => {
 vi.mock('node:child_process', () => ({ spawn: () => { throw new Error('Real process execution is forbidden in this fixture.'); } }));
 
 import { ATTACHMENT_LIMITS, ChatAttachments } from '../src/main/chat/attachments';
+import ExcelJS from 'exceljs';
 import { ChatService } from '../src/main/chat/service';
+import { chatFiles, chatFolderOf, removeChatFolder } from '../src/main/chat/chat-folder';
+import { isChatFolderPath } from '../src/shared/chat-folder';
+import { Workbooks } from '../src/main/sheets/workbooks';
+import type { SheetChange } from '../src/shared/sheets';
 import { createDataStore, type DataStore } from '../src/main/data/store';
 
 let directory: string;
@@ -125,7 +131,7 @@ describe('explicit chat attachment snapshots', () => {
   });
 
   it('rejects unsupported PDFs, binary content, fake images and size/count overflows with actionable errors', async () => {
-    await expect(files.import(conversationId, [file('report.pdf', '%PDF-1.4 fixture')])).rejects.toThrow('PDF attachments');
+    await expect(files.import(conversationId, [file('report.pdf', '%PDF-1.4 fixture')])).rejects.toThrow('Hello reads a PDF in the folder');
     await expect(files.import(conversationId, [file('archive.bin', Buffer.from([1, 0, 2]))])).rejects.toThrow('binary document');
     await expect(files.import(conversationId, [file('fake.png', 'plain text')])).rejects.toThrow('signature');
     await expect(files.import(conversationId, [file('huge.md', Buffer.alloc(ATTACHMENT_LIMITS.textFile + 1, 97))])).rejects.toThrow('128 KiB');
@@ -183,6 +189,92 @@ async function prompted(index = 0) {
   return runtime.instances[index];
 }
 
+describe('a workbook or a PDF dropped on the chat', () => {
+  /** Workbooks as the app wires them: a file of the chat is one of the chat's folder. */
+  const wired = (fixture: ReturnType<typeof service>, events: SheetChange[] = []) => new Workbooks({ dataDir: appData, changed: event => events.push(event),
+    resolveFile: async (id, path) => {
+      const folder = fixture.store.getConversation(id).folder;
+      if (!folder) throw new Error('The path is outside this chat’s folder.');
+      const absolute = resolve(folder, path);
+      if (relative(realpathSync(folder), existsSync(absolute) ? realpathSync(absolute) : absolute).startsWith('..')) throw new Error('The path is outside this chat’s folder.');
+      return { absolute, relative: relative(folder, absolute) };
+    } });
+  const book = async (name: string) => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet('Date').getCell('A1').value = 5;
+    await workbook.xlsx.writeFile(join(directory, name));
+    return realpathSync(join(directory, name));
+  };
+
+  it('in a chat with no folder, lands in a folder Hello keeps for the chat, which becomes its folder', async () => {
+    const fixture = service();
+    const events: SheetChange[] = [];
+    const sheets = wired(fixture, events);
+    await fixture.chat.dispose();
+    chat = new ChatService({ store: fixture.store, sheets, emit() {} });
+    const path = await book('vanzari.xlsx');
+    const before = statSync(path).mtimeMs;
+    const dropped = await chat.attach(fixture.id, [path, file('plan.pdf', '%PDF-1.4 fixture'), file('note.txt', 'ține cont de TVA')]);
+    const own = chatFolderOf(appData, fixture.id);
+    expect(isChatFolderPath(own)).toBe(true);
+    expect(dropped).toMatchObject({ folder: own, workbooks: ['vanzari.xlsx'], documents: ['vanzari.xlsx', 'plan.pdf'] });
+    // What is text is still attached as text; the two documents are files of the chat's folder now.
+    expect(dropped.attachments.map(item => item.name)).toEqual(['note.txt']);
+    expect(fixture.store.getConversation(fixture.id).folder).toBe(own);
+    expect(await chatFiles(own)).toEqual([{ name: 'plan.pdf', bytes: 16 }, { name: 'vanzari.xlsx', bytes: statSync(path).size }]);
+    // The workbook is the copy, opened as a file of that folder and shown; the original is left as it was.
+    expect(await sheets.list(fixture.id)).toMatchObject([{ title: 'vanzari.xlsx', source: 'file', path: 'vanzari.xlsx', sheets: ['Date'] }]);
+    expect(events.at(-1)).toMatchObject({ conversationId: fixture.id, list: true, show: true, by: 'person' });
+    expect(statSync(path).mtimeMs).toBe(before);
+    // A second file of the same name does not write over the first, and a later drop goes to the same folder.
+    const again = await chat.attach(fixture.id, [file('plan.pdf', '%PDF-1.4 another one')]);
+    expect(again).toEqual({ attachments: [], documents: ['plan (2).pdf'] });
+    expect((await chatFiles(own)).map(item => item.name)).toEqual(['plan (2).pdf', 'plan.pdf', 'vanzari.xlsx']);
+    // What Sheets cannot open says so in its own words, not as "a binary document".
+    await expect(chat.attach(fixture.id, [file('vechi.xls', Buffer.from([0xd0, 0xcf, 0x11, 0xe0]))])).rejects.toThrow(/vechi\.xls is not an \.xlsx workbook.*Save it as \.xlsx/);
+    // Gone with the chat.
+    await removeChatFolder(appData, fixture.id);
+    expect(existsSync(join(appData, 'chat-files', createHash('sha256').update(fixture.id).digest('hex')))).toBe(false);
+  });
+
+  it('in a chat with a folder of the person’s, is worked on where it lies and never copied into that folder', async () => {
+    const fixture = service();
+    const sheets = wired(fixture);
+    await fixture.chat.dispose();
+    chat = new ChatService({ store: fixture.store, sheets, emit() {} });
+    const work = join(directory, 'proiect');
+    mkdirSync(join(work, 'planuri'), { recursive: true });
+    writeFileSync(join(work, 'planuri', 'etaj.pdf'), '%PDF-1.4 fixture');
+    fixture.store.updateConversation(fixture.id, { folder: work });
+    // A PDF of the folder is named to the composer by its path there; nothing is copied.
+    expect(await chat.attach(fixture.id, [realpathSync(join(work, 'planuri', 'etaj.pdf'))])).toEqual({ attachments: [], documents: ['planuri/etaj.pdf'] });
+    // One from elsewhere is kept by Hello for the chat, as a workbook from elsewhere is: the person's folder gets
+    // nothing, and the PDF tools find the copy by its name alone.
+    const kept = join(appData, 'chat-files', createHash('sha256').update(fixture.id).digest('hex'), 'Chat files');
+    expect(await chat.attach(fixture.id, [file('altul.pdf', '%PDF-1.4 fixture')])).toEqual({ attachments: [], documents: ['altul.pdf'] });
+    expect(readdirSync(work)).toEqual(['planuri']);
+    expect(readdirSync(kept)).toEqual(['altul.pdf']);
+    expect(fixture.store.getConversation(fixture.id).folder).toBe(work);
+    expect(await keptFile(appData, fixture.id, 'altul.pdf')).toBe(join(kept, 'altul.pdf'));
+    expect(await keptFile(appData, fixture.id, './altul.pdf')).toBe(join(kept, 'altul.pdf'));
+    // A name and nothing more: no path, no hidden file, no link.
+    symlinkSync(join(work, 'planuri', 'etaj.pdf'), join(kept, 'legat.pdf'));
+    for (const path of ['../altul.pdf', 'x/../altul.pdf', join(kept, 'altul.pdf'), '.altul.pdf', 'legat.pdf', 'lipsa.pdf', ''])
+      expect([path, await keptFile(appData, fixture.id, path)]).toEqual([path, undefined]);
+    rmSync(join(kept, 'legat.pdf'));
+    // A name a file at the top of the folder already has would be read as that file: the copy takes another.
+    writeFileSync(join(work, 'oferta.pdf'), '%PDF-1.4 the folder’s own');
+    expect(await chat.attach(fixture.id, [file('oferta.pdf', '%PDF-1.4 from elsewhere')])).toEqual({ attachments: [], documents: ['oferta (2).pdf'] });
+    expect(readdirSync(kept).sort()).toEqual(['altul.pdf', 'oferta (2).pdf']);
+    rmSync(join(work, 'oferta.pdf'));
+    // A workbook from elsewhere is copied into Hello, as before, and the folder stays the person's.
+    const dropped = await chat.attach(fixture.id, [await book('vanzari.xlsx')]);
+    expect(dropped).toEqual({ attachments: [], workbooks: ['vanzari'] });
+    expect(await sheets.list(fixture.id)).toMatchObject([{ title: 'vanzari', source: 'hello' }]);
+    expect(fixture.store.getConversation(fixture.id).folder).toBe(work);
+  });
+});
+
 describe('chat send/retry attachment delivery', () => {
   it('sends an image-only message to Pi as an image payload while keeping SQLite bubbles small', async () => {
     const { chat, store, id } = service();
@@ -196,7 +288,8 @@ describe('chat send/retry attachment delivery', () => {
     expect(user.content).toContain('visual.png');
     expect(user.content).not.toContain('the actual file contents');
     expect(JSON.stringify(user)).not.toContain(png.toString('base64'));
-    expect(store.getConversation(id).folder).toBeNull();
+    // A reply always has a folder to work in: with none chosen, the one Hello keeps for the chat (user, 17.11).
+    expect(store.getConversation(id).folder).toBe(join(appData, 'chat-files', createHash('sha256').update(id).digest('hex'), 'Chat files'));
     pi.finish('I can read the files.'); await running;
   });
 

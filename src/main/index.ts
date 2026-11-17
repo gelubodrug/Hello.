@@ -1,3 +1,4 @@
+import { removeChatFolder } from './chat/chat-folder';
 import { app, BrowserWindow, Menu, clipboard, dialog, safeStorage, protocol, net, nativeImage, systemPreferences } from 'electron';
 import { dirname, join, resolve, sep, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +18,11 @@ import { appearanceGround } from './appearance';
 import { allowsAppMicrophone } from './media-permission';
 import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
+import { Workbooks } from './sheets/workbooks';
+import { registerSheetsIPC } from './sheets/ipc';
+import { scopedPath } from './chat/tools';
+import { relative as relativePath } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { PageModeController } from './browser/page-mode';
 import { registerIPC } from './ipc';
 import { ManagedVoice } from './voice/managed';
@@ -195,6 +201,12 @@ else {
     const previews=new LocalPreviewServer();
     const artifactPreviews=new LocalPreviewServer();
     const artifacts=new HtmlArtifacts(dataDir);
+    // A chat's workbooks: main holds them, computes them and decides what reaches a file.
+    const sheets=new Workbooks({dataDir,changed:event=>emit('hello:sheets-changed',event),resolveFile:async(conversationId,path,writing)=>{
+      const folder=store.getConversation(conversationId).folder;
+      const absolute=await scopedPath(folder,path,writing);
+      return{absolute,relative:relativePath(await realpath(folder!),absolute).split(sep).join('/')};
+    }});
     const serveArtifact=async(conversationId:string,id:string,signal?:AbortSignal)=>{
       signal?.throwIfAborted();
       store.getConversation(conversationId);
@@ -266,7 +278,7 @@ else {
       search:(query:string,options:{online?:boolean;signal?:AbortSignal})=>skillCatalog.search(query,options),
       use:async(id:string,conversationId:string,signal?:AbortSignal)=>{const used=await skillCatalog.use(id,conversationId,signal);emit('hello:extensions-changed',{});return used;},
     };
-    const chat=chatService=new ChatService({store,mcp,library,skillCatalog:skills,piEntry:()=>piEngine.entry(),emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),emitFileChange:event=>emit('hello:files-changed',event),emitExtensionUi:state=>emit('hello:chat-extension-ui',state),emitPending:state=>emit('hello:chat-pending',state),browser:browserHooks,workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
+    const chat=chatService=new ChatService({store,mcp,library,skillCatalog:skills,piEntry:()=>piEngine.entry(),emit:event=>emit('hello:chat-event',event),emitQueue:event=>emit('hello:chat-queue',event),emitFileChange:event=>emit('hello:files-changed',event),emitExtensionUi:state=>emit('hello:chat-extension-ui',state),emitPending:state=>emit('hello:chat-pending',state),browser:browserHooks,sheets,workers:workerPanes(()=>terminalService,session=>emit('hello:terminal-created',session))});
     // Settle the selected model's published limits once at startup, so a
     // profile stored before this app knew how to ask still launches on the
     // model's real context window rather than the shipped default.
@@ -276,9 +288,12 @@ else {
     const unregister=registerIPC(window,store,chat,terminal,browser,id=>previews.closeConversation(id),async id=>{
       artifactPreviews.closeConversation(id);
       await artifacts.removeConversation(id);
+      await sheets.removeConversation(id).catch(()=>{});
+      await removeChatFolder(dataDir,id).catch(()=>{});
       await pageModes.removeConversation(id).catch(()=>{});
     },()=>emit('hello:extensions-changed',{}),pageModes,voice);
     const unregisterPiEngine=registerPiEngineIPC(window,piEngine);
+    const unregisterSheets=registerSheetsIPC(window,sheets,id=>store.getConversation(id).folder);
     // Newer Pi and dsh releases, asked of npm a moment after start and every few hours.
     const lookForUpdates=()=>{void piEngine.checkLatest().catch(()=>{});void dsh.checkLatest().catch(()=>{});};
     const firstUpdateLook=setTimeout(lookForUpdates,5_000);
@@ -297,7 +312,7 @@ else {
         {name:'IPC',dispose:unregister},
         {name:'Voice',dispose:()=>{voice.dispose();voiceService=null;}},
         {name:'DSH IPC',dispose:unregisterDsh},
-        {name:'Pi engine IPC',dispose:()=>{clearTimeout(firstUpdateLook);clearInterval(updateLooks);unregisterPiEngine();}},
+        {name:'Pi engine IPC',dispose:()=>{clearTimeout(firstUpdateLook);clearInterval(updateLooks);unregisterPiEngine();unregisterSheets();}},
         {name:'Pi market IPC',dispose:unregisterPiMarket},
         {name:'skills IPC',dispose:unregisterSkills},
         {name:'DSH surface',dispose:async()=>{dshSurface.dispose();await dsh.dispose();}},

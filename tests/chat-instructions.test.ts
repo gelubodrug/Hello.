@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { browserManual, helloSystemPrompt, notebookManual, workersManual } from '../src/main/chat/pi-instructions';
+import { browserManual, helloSystemPrompt, notebookManual, runtimeGuidance, workersManual } from '../src/main/chat/pi-instructions';
 import type { AppSettings } from '../src/shared/types';
 
 const settings = {
@@ -14,8 +14,8 @@ describe('what every turn is told before the user says anything', () => {
     // opencode reached the end of a long build because its harness decomposed
     // first. Making the person write "break this into steps" in every prompt is
     // a bandage; the instruction belongs here, once, in both modes.
-    for (const chatMode of ['chat', 'coder'] as const) {
-      const prompt = helloSystemPrompt(settings, chatMode, extensions, true);
+    {
+      const prompt = helloSystemPrompt(settings, extensions, true);
       expect(prompt).toContain('break it down BEFORE starting');
       // Saving the plan is the notebook group's rule, loaded with it.
       expect(notebookManual({ runbook: true, tasks: true }, true)).toContain('notebook_save');
@@ -26,8 +26,8 @@ describe('what every turn is told before the user says anything', () => {
   });
 
   it('asks for no plan at all when Plan is off, which is the default', () => {
-    for (const chatMode of ['chat', 'coder'] as const) {
-      const prompt = helloSystemPrompt(settings, chatMode);
+    {
+      const prompt = helloSystemPrompt(settings);
       expect(prompt).not.toContain('plan_write');
       expect(prompt).not.toContain('break it down BEFORE starting');
       expect(prompt).toContain('This chat has Plan off');
@@ -83,7 +83,7 @@ describe('what a chat is told about the panes beside it', () => {
 describe('what a chat is told about pages that are gone', () => {
   // The prompt says the pages exist; the notebook group carries their rules.
   const pages = (runbook: boolean, tasks: boolean, planning = true) =>
-    `${helloSystemPrompt(settings, 'coder', extensions, planning, { runbook, tasks })}\n${notebookManual({ runbook, tasks }, planning)}`;
+    `${helloSystemPrompt(settings, extensions, planning, { runbook, tasks })}\n${notebookManual({ runbook, tasks }, planning)}`;
 
   it('describes every section while it is there', () => {
     const prompt = pages(true, true);
@@ -119,7 +119,7 @@ describe('what a chat is told about pages that are gone', () => {
     expect(neither).not.toContain('Tasks');
     expect(neither).not.toContain('notebook_list');
     // What the chat itself does is untouched.
-    expect(neither).toContain('Coder mode');
+    expect(neither).toContain('This chat always has a folder to work in');
   });
 });
 
@@ -127,7 +127,7 @@ describe('what a chat is told about pages that are gone', () => {
 // that has no session (user, 23.09). The prompt says where a file goes.
 describe('what a chat is told about saving a file from a page', () => {
   it('names browser_download and forbids the shell for a file behind a login', () => {
-    for (const chatMode of ['chat', 'coder'] as const) {
+    {
       const prompt = browserManual();
       expect(prompt).toContain('use browser_download on that tab');
       expect(prompt).toContain('never curl or wget a file behind a login');
@@ -170,29 +170,60 @@ describe('what a chat is told about clicking in a page', () => {
 // and the core; each area's manual arrives with its tool group.
 describe('what a chat is told about its tools', () => {
   it('says tools are loaded by area with tools_find, and names the areas', () => {
-    for (const chatMode of ['chat', 'coder'] as const) {
-      const prompt = helloSystemPrompt(settings, chatMode);
+    {
+      const prompt = helloSystemPrompt(settings);
       expect(prompt).toContain('Tools are prompt-context driven');
       expect(prompt).toContain('call tools_find with that group first');
       for (const group of ['loads browser', 'load workers', 'Runbook and Tasks load notebook']) expect(prompt).toContain(group);
       expect(prompt).toContain('web_search and fetch_url');
     }
-    // Coder mode has the coding tools from the start; chat mode loads them.
-    expect(helloSystemPrompt(settings, 'chat')).toContain('loads coding');
-    expect(helloSystemPrompt(settings, 'coder')).toContain('already loaded in Coder mode');
-    expect(helloSystemPrompt(settings, 'coder')).not.toContain('loads coding');
+    // One way of working (user, 17.11): the shell and the file tools are in view, in a folder the chat always
+    // has; no mode is named, and the browser is said to load by itself when the request is that work.
+    const one = helloSystemPrompt(settings);
+    // Three measured wastes, each with its line (user, 17.11): a 12,618-character script re-sent to mend one
+    // line, six checking scripts each re-reading 29,425 rows, and a script named inspect.py that Python loaded
+    // in place of the module openpyxl imports — the same name chosen in two separate runs.
+    expect(one).toContain('mended with file_edit after that');
+    expect(one).toContain('never re-sent whole through the shell');
+    expect(one).toContain('Never name a script after a module');
+    expect(one).toContain('inspect.py, json.py, csv.py, time.py, types.py');
+    expect(one).toContain('ONE pass at the end, in one script');
+    expect(one).toContain('bash, the file tools for the chat\u2019s folder');
+    expect(one).toContain('This chat always has a folder to work in');
+    expect(one).toContain('Hello loads it by itself when a request names a page, a site, a link or a tab');
+    expect(one).not.toMatch(/Coder mode|Chat mode|loads coding/);
     // Planning keeps the trigger to read the human's plan first.
-    expect(helloSystemPrompt(settings, 'chat', extensions, true)).toContain('Before planning repository work, load notebook and read Tasks.');
-    expect(helloSystemPrompt(settings, 'chat', extensions, false)).not.toContain('Before planning repository work');
+    expect(helloSystemPrompt(settings, extensions, true)).toContain('Before planning repository work, load notebook and read Tasks.');
+    expect(helloSystemPrompt(settings, extensions, false)).not.toContain('Before planning repository work');
   });
 
   it('keeps each area’s manual out of the prompt', () => {
-    const prompt = helloSystemPrompt(settings, 'chat');
+    const prompt = helloSystemPrompt(settings);
     expect(prompt).not.toContain('NEVER read a pane in a loop');
     expect(prompt).not.toContain('browser_click ref: "e12"');
     expect(prompt).not.toContain('Use notebook_save with kind tasks');
-    expect(prompt.length).toBeLessThan(helloSystemPrompt(settings, 'chat').length + 1);
+    expect(prompt.length).toBeLessThan(helloSystemPrompt(settings).length + 1);
     expect(prompt.length + workersManual().length + browserManual().length).toBeGreaterThan(prompt.length * 2);
   });
 });
 
+
+// Qwen in kapitsa on this Mac said it ran "in the cloud" (user, 12.11).
+describe('what a chat is told about where it runs', () => {
+  it('names the model and the server, and says a server on this Mac is not a cloud', () => {
+    const local = runtimeGuidance({ endpointUrl: 'http://localhost:8000/v1', model: 'qwen3.8-flash-next' }, 'kapitsa · 8000');
+    expect(local).toContain('You are the model qwen3.8-flash-next, served by kapitsa · 8000 at http://localhost:8000/v1');
+    expect(local).toContain('generated on this computer, not by a cloud provider');
+    expect(local).toContain('never invent a figure');
+    // With no server found at the port, the address names it.
+    expect(runtimeGuidance({ endpointUrl: 'http://127.0.0.1:8000/v1', model: 'm' })).toContain('served by 127.0.0.1:8000');
+    const remote = runtimeGuidance({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-coder:free', subagentModel: 'small' }, 'OpenRouter');
+    expect(remote).toContain('served by OpenRouter at https://openrouter.ai/api/v1, a provider reached over the internet');
+    expect(remote).toContain('Subagents a plugin starts run on small, through the same server.');
+    // A local chat with its subagents on a provider is told so: what it hands them leaves this computer.
+    const split = runtimeGuidance({ endpointUrl: 'http://127.0.0.1:8000/v1', model: 'local', subagentModel: 'google/gemini-3-flash', subagentEndpointUrl: 'https://openrouter.ai/api/v1' });
+    expect(split).toContain('Subagents a plugin starts run on google/gemini-3-flash, on another server: openrouter.ai, a provider reached over the internet. What you hand a subagent is sent there.');
+    // No model chosen yet: nothing to claim.
+    expect(runtimeGuidance({ endpointUrl: 'http://localhost:8000/v1', model: '' })).toBe('');
+  });
+});

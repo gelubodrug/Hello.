@@ -46,9 +46,9 @@ describe('automatic file search', () => {
     ctx.signal = AbortSignal.abort(new Error('Stopped'));
     await expect(executeTool('file_search', { query: 'needle' }, ctx)).rejects.toThrow(/Stopped/);
   });
-  it('belongs to coding and is only offered with an attached folder', () => {
+  it('belongs to the file tools, which every chat has in view', () => {
     expect(toolDefinitions(false, false).some(tool => tool.function.name === 'file_search')).toBe(false);
-    const group = helloToolGroups(toolDefinitions(true, false), { chatMode: 'coder', notebooks: { runbook: false, tasks: false }, planning: false, mcp: [] })
+    const group = helloToolGroups(toolDefinitions(true, false), { notebooks: { runbook: false, tasks: false }, planning: false, mcp: [] })
       .find(group => group.id === 'coding');
     expect(group?.tools).toContain('file_search');
     expect(group?.core).toBe(true);

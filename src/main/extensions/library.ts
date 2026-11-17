@@ -65,7 +65,27 @@ export interface PluginConfig {
 export function pluginRoot(directory: string, config: PluginConfig): string {
   return config.installed ? join(directory, ...config.installed.root.split('/')) : directory;
 }
-export interface McpConfig { command: string; args: string[]; cwd: string | null; envNames: string[]; }
+/**
+ * A server Hello starts on this Mac (stdio: command, args, cwd), or one it
+ * reaches over streamable HTTP (url). `envNames` names the values kept in the
+ * encrypted store: the process's environment, or the HTTP server's headers.
+ */
+export interface McpConfig { command: string; args: string[]; cwd: string | null; envNames: string[]; transport?: 'stdio' | 'http'; url?: string; }
+
+/**
+ * Where an HTTP MCP server may be: https anywhere, plain http only on this Mac
+ * — the request carries the tool's arguments and any token. Throws the reason.
+ */
+export function mcpServerUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { throw new Error('Enter the server URL, like https://mcp.example.com/mcp.'); }
+  const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+    throw new Error('An MCP server URL must use https, or http on this Mac (localhost).');
+  if (url.username || url.password) throw new Error('Put credentials in a header, not in the URL.');
+  if (url.href.length > 2048) throw new Error('The server URL is too long.');
+  return url.href;
+}
 
 export function libraryRoot(dataDir: string): string {
   return join(dataDir, 'library');
@@ -315,6 +335,7 @@ function detailFor(row: ResourceRow): string {
     ].filter(Boolean).join(' · ') || 'no resources';
   }
   const mcp = config as McpConfig;
+  if (mcp.transport === 'http' && mcp.url) return `http · ${mcp.url.replace(/^https?:\/\//, '')}`.slice(0, 120);
   // The full command line lives in the details; the row stays readable.
   const command = basename(mcp.command) || mcp.command;
   const first = mcp.args[0] ? ` ${basename(mcp.args[0])}` : '';
@@ -338,7 +359,7 @@ function entriesFor(row: ResourceRow): string[] {
     ].slice(0, 50);
   }
   const mcp = config as McpConfig;
-  return mcp.envNames.map(name => `env: ${name}`);
+  return mcp.envNames.map(name => `${mcp.transport === 'http' ? 'header' : 'env'}: ${name}`);
 }
 
 export function parseConfig(row: ResourceRow): SkillConfig | PluginConfig | McpConfig {
@@ -514,6 +535,7 @@ export class ResourceLibrary {
   }
 
   addMcp(input: McpServerInput, existingId?: string): LibraryResource {
+    if (input.url?.trim()) return this.addHttpMcp(input, existingId);
     const name = slug(input.name);
     if (!name) throw new Error('Give this server a name.');
     const command = input.command.trim();
@@ -540,6 +562,37 @@ export class ResourceLibrary {
     });
     // Values live in the encrypted secret store, never in the resources table.
     if (!keepExisting) this.store.saveResourceSecret(id, env);
+    return {
+      id: row.id, kind: 'mcp', name: row.name, description: row.description, source: row.source,
+      version: '', fingerprint: '', state: 'ready', detail: detailFor(row), entries: entriesFor(row),
+      createdAt: row.createdAt, updatedAt: row.updatedAt,
+      mcp: config,
+    };
+  }
+
+  /** A server reached over streamable HTTP: its address in the row, its headers encrypted beside it. */
+  private addHttpMcp(input: McpServerInput, existingId?: string): LibraryResource {
+    const name = slug(input.name);
+    if (!name) throw new Error('Give this server a name.');
+    const url = mcpServerUrl(input.url ?? '');
+    const headers = Object.fromEntries(Object.entries(input.env ?? {})
+      .filter(([key]) => /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(key))
+      .map(([key, value]) => [key, String(value).replace(/[\r\n\0]/g, '').slice(0, 8192)]));
+    if (existingId && this.store.getResourceRow(existingId).kind !== 'mcp') throw new Error('That resource is not an MCP server.');
+    if (!existingId && this.store.findResourceRow('mcp', name)) throw new Error('An MCP server with this name already exists. Use Edit to change it.');
+    const id = existingId ?? randomUUID();
+    const keepExisting = Boolean(input.keepEnv) && Boolean(existingId);
+    const stored = keepExisting ? this.store.resourceSecret(id) : headers;
+    const config: McpConfig = { command: '', args: [], cwd: null, envNames: Object.keys(stored).sort(), transport: 'http', url };
+    const before = existingId ? parseConfig(this.store.getResourceRow(existingId)) as McpConfig : null;
+    const row = this.store.saveResourceRow({
+      id, kind: 'mcp', name, description: 'Remote MCP server (streamable HTTP).',
+      source: url, version: '', fingerprint: '',
+      config: JSON.stringify(config),
+    });
+    if (!keepExisting) this.store.saveResourceSecret(id, headers);
+    // A sign-in belongs to the address it was made for.
+    if (before?.url && before.url !== url) this.store.saveResourceAuth(id, null);
     return {
       id: row.id, kind: 'mcp', name: row.name, description: row.description, source: row.source,
       version: '', fingerprint: '', state: 'ready', detail: detailFor(row), entries: entriesFor(row),

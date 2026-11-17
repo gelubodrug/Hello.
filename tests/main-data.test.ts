@@ -163,7 +163,7 @@ describe('new application persistence', () => {
   });
   it('materializes separate empty exports, updates immediately and never writes to a repo', () => {
     const id = store.createConversation().id;
-    store.updateConversation(id, { folder: '/not/an/existing/repository', runbook: true, tasks: true });
+    store.updateConversation(id, { notebook: true, folder: '/not/an/existing/repository', runbook: true, tasks: true });
     const paths = store.notebookPaths(id);
     expect(paths.runbook.startsWith(directory + path.sep)).toBe(true);
     expect(readFileSync(paths.tasks, 'utf8')).toBe('');
@@ -379,14 +379,14 @@ describe('the Plan switch of a chat', () => {
     expect(chat.planning).toBe(false);
     expect(store.getConversation(chat.id).planning).toBe(false);
 
-    expect(store.updateConversation(chat.id, { planning: true }).planning).toBe(true);
+    expect(store.updateConversation(chat.id, { notebook: true, planning: true }).planning).toBe(true);
     expect(store.getConversation(chat.id).planning).toBe(true);
     expect(store.listConversations().find(row => row.id === chat.id)?.planning).toBe(true);
     // A title change is not a planning change.
     expect(store.updateConversation(chat.id, { title: 'Still planned' }).planning).toBe(true);
 
     expect(store.updateConversation(chat.id, { planning: false }).planning).toBe(false);
-    store.updateConversation(chat.id, { planning: true });
+    store.updateConversation(chat.id, { notebook: true, planning: true });
     store.deleteConversation(chat.id);
     expect(store.createConversation('Fresh').planning).toBe(false);
   });
@@ -447,13 +447,13 @@ describe('the shared pages of a chat', () => {
     expect(chat).toMatchObject({ runbook: false, tasks: false });
     expect(store.getConversation(chat.id)).toMatchObject({ runbook: false, tasks: false });
 
-    expect(store.updateConversation(chat.id, { tasks: true })).toMatchObject({ runbook: false, tasks: true });
+    expect(store.updateConversation(chat.id, { notebook: true, tasks: true })).toMatchObject({ runbook: false, tasks: true });
     expect(store.getConversation(chat.id).tasks).toBe(true);
     expect(store.listConversations().find(row => row.id === chat.id)?.tasks).toBe(true);
     // Another change does not disturb it.
     expect(store.updateConversation(chat.id, { title: 'Still on' }).tasks).toBe(true);
 
-    expect(store.updateConversation(chat.id, { runbook: true, tasks: false }))
+    expect(store.updateConversation(chat.id, { notebook: true, runbook: true, tasks: false }))
       .toMatchObject({ runbook: true, tasks: false });
     store.deleteConversation(chat.id);
     expect(store.createConversation('Fresh')).toMatchObject({ runbook: false, tasks: false });
@@ -474,6 +474,44 @@ describe('the shared pages of a chat', () => {
     expect(store.getConversation(kept)).toMatchObject({ runbook: true, tasks: true });
     expect(store.getConversation(without)).toMatchObject({ runbook: true, tasks: false });
     expect(store.createConversation('New')).toMatchObject({ runbook: false, tasks: false });
+  });
+});
+
+// A chat is a chat until it needs more (user, 17.11): the Workbook — its page
+// of Runbooks, Tasks and Plans — is a switch of the chat, off by default.
+describe('the Workbook switch of a chat', () => {
+  it('is off for a new chat, and while it is off no section reads as on, whatever was switched', () => {
+    const chat = store.createConversation('Plain');
+    expect(chat).toMatchObject({ notebook: false, planning: false, runbook: false, tasks: false });
+    // A section switched while the Workbook is off is kept, and not in effect.
+    expect(store.updateConversation(chat.id, { tasks: true, planning: true })).toMatchObject({ notebook: false, tasks: false, planning: false });
+    expect(store.updateConversation(chat.id, { notebook: true })).toMatchObject({ notebook: true, tasks: true, planning: true, runbook: false });
+    expect(store.listConversations().find(row => row.id === chat.id)).toMatchObject({ notebook: true, tasks: true });
+    // Off again: the page and its sections are gone for the model; on again, they are as they were.
+    expect(store.updateConversation(chat.id, { notebook: false })).toMatchObject({ notebook: false, tasks: false, planning: false });
+    expect(store.updateConversation(chat.id, { title: 'Renamed' })).toMatchObject({ notebook: false, tasks: false });
+    expect(store.updateConversation(chat.id, { notebook: true })).toMatchObject({ notebook: true, tasks: true, planning: true });
+    expect(() => store.updateConversation(chat.id, { notebook: 'yes' as never })).toThrow(/Workbook is on or off/);
+    store.deleteConversation(chat.id);
+    expect(store.createConversation('Fresh').notebook).toBe(false);
+  });
+
+  it('stays on for a chat that used the page before the switch existed, and off for one that never did', () => {
+    const sections = store.createConversation('With a section').id;
+    const written = store.createConversation('With a chapter').id;
+    const plain = store.createConversation('Never used').id;
+    store.updateConversation(sections, { notebook: true, tasks: true });
+    store.updateConversation(written, { notebook: true });
+    store.saveNotebook({ conversationId: written, kind: 'runbook', title: 'Logins', body: 'Use SSO' });
+    store.close();
+    // As version 16 left them: sections and chapters, and no Workbook switch at all.
+    const raw = new Database(store.databasePath);
+    raw.exec("DELETE FROM settings WHERE key LIKE 'chat-notebook:%'; PRAGMA user_version = 16;");
+    raw.close();
+    store = createDataStore(directory, codec);
+    expect(store.getConversation(sections)).toMatchObject({ notebook: true, tasks: true });
+    expect(store.getConversation(written)).toMatchObject({ notebook: true, runbook: false });
+    expect(store.getConversation(plain)).toMatchObject({ notebook: false, tasks: false });
   });
 });
 
@@ -572,7 +610,7 @@ describe('what a chat’s earlier visits learned about a site', () => {
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'read' }]);
     expect(store.getDomainNote(chat, 'shared.example')).toBeUndefined();
     const check = new Database(store.databasePath, { readonly: true });
-    expect(check.pragma('user_version', { simple: true }) as number).toBe(15);
+    expect(check.pragma('user_version', { simple: true }) as number).toBe(17);
     expect((check.prepare('SELECT COUNT(*) AS rows FROM browser_domain_notes').get() as { rows: number }).rows).toBe(0);
     check.close();
     // And the new shape works on that same file.
@@ -628,7 +666,7 @@ describe('a chat restarted', () => {
 describe('a chat reset', () => {
   it('deletes messages, queue, restart mark and — with notes — Runbook and Tasks; keeps tabs, downloads, switches, folder and title', () => {
     const chat = store.createConversation('Invoices');
-    store.updateConversation(chat.id, { chatMode: 'coder', planning: true, runbook: false });
+    store.updateConversation(chat.id, { notebook: true, planning: true, runbook: false });
     const notes = vi.fn();
     store.subscribeNotebooks(notes);
     store.saveMessage({ id: 'm1', conversationId: chat.id, role: 'user', content: 'download them', status: 'complete', createdAt: 1 });
@@ -641,7 +679,7 @@ describe('a chat reset', () => {
     store.restartConversation(chat.id, 5);
     // Without notes first: the notebooks stay.
     const kept = store.resetConversation(chat.id, { notes: false });
-    expect(kept).toMatchObject({ id: chat.id, title: 'Invoices', chatMode: 'coder', planning: true, runbook: false });
+    expect(kept).toMatchObject({ id: chat.id, title: 'Invoices', planning: true, runbook: false });
     expect(kept.freshFrom).toBeUndefined();
     expect(store.listMessages(chat.id)).toEqual([]);
     expect(store.listQueued(chat.id)).toEqual([]);
@@ -733,12 +771,12 @@ describe('the notebook’s sections and chapter switches', () => {
   it('empties a section’s export while it is off, and forgets every export with the chat', () => {
     const chat = store.createConversation('Chat').id;
     store.saveNotebook({ conversationId: chat, kind: 'tasks', title: 'Sprint', body: '- [ ] Ship' });
-    store.updateConversation(chat, { planning: true });
+    store.updateConversation(chat, { notebook: true, planning: true });
     store.saveNotebook({ conversationId: chat, kind: 'plan', title: 'Plan', body: '- [ ] Step' });
     const paths = store.notebookPaths(chat);
     store.updateConversation(chat, { tasks: false });
     expect(readFileSync(paths.tasks, 'utf8')).toBe('');
-    store.updateConversation(chat, { tasks: true });
+    store.updateConversation(chat, { notebook: true, tasks: true });
     expect(readFileSync(paths.tasks, 'utf8')).toBe('# Sprint\n\n- [ ] Ship\n');
     const heard: string[] = [];
     store.subscribeNotebooks(change => heard.push(change.kind));
@@ -751,9 +789,9 @@ describe('the notebook’s sections and chapter switches', () => {
 
   it('exports for workers only the chapters that are on, the plan included', () => {
     const chat = store.createConversation('Chat').id;
-    store.updateConversation(chat, { runbook: true });
+    store.updateConversation(chat, { notebook: true, runbook: true });
     store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Shared', body: 'Visible.' });
-    store.updateConversation(chat, { planning: true });
+    store.updateConversation(chat, { notebook: true, planning: true });
     const hidden = store.saveNotebook({ conversationId: chat, kind: 'runbook', title: 'Private', body: 'Not for workers.' });
     store.saveNotebook({ conversationId: chat, kind: 'plan', title: 'Plan', body: '- [ ] Step' });
     store.shareNotebook(hidden.id, false);
@@ -771,6 +809,28 @@ describe('the model for subagents, in Settings', () => {
     expect(store.saveSettings({ subagentModel: '' }).subagentModel).toBeUndefined();
     store.saveSettings({ subagentModel: 'google/gemini-3-flash:free' });
     expect(store.saveSettings({ endpointUrl: 'http://127.0.0.1:18090/v1' }).subagentModel).toBeUndefined();
+  });
+
+  it('can sit on another kept connection, and stays there when the chat’s connection changes', () => {
+    store.saveSettings({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-27b' });
+    store.rememberConnection('OpenRouter');
+    store.saveSettings({ endpointUrl: 'http://127.0.0.1:18090/v1', model: 'local-model' });
+    const placed = store.saveSettings({ subagentModel: 'google/gemini-3-flash', subagentEndpointUrl: 'https://openrouter.ai/api/v1' });
+    expect(placed).toMatchObject({ subagentModel: 'google/gemini-3-flash', subagentEndpointUrl: expect.stringContaining('openrouter.ai') });
+    // The chat moves to another local server; the subagents stay where they were put.
+    expect(store.saveSettings({ endpointUrl: 'http://127.0.0.1:18091/v1', model: 'other-local' })).toMatchObject({ subagentModel: 'google/gemini-3-flash', subagentEndpointUrl: placed.subagentEndpointUrl });
+    // The chat's own connection is not "another": back on OpenRouter it is simply a second model there.
+    const back = store.saveSettings({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-27b' });
+    expect(back.subagentModel).toBe('google/gemini-3-flash');
+    expect(back.subagentEndpointUrl).toBeUndefined();
+    // Only a connection that was kept, because its key is what the subagents are sent with.
+    expect(() => store.saveSettings({ subagentModel: 'x', subagentEndpointUrl: 'https://api.example.test/v1' })).toThrow(/Keep that connection first/);
+    // Clearing the model clears where it was.
+    store.saveSettings({ endpointUrl: 'http://127.0.0.1:18090/v1', model: 'local-model' });
+    store.saveSettings({ subagentModel: 'google/gemini-3-flash', subagentEndpointUrl: 'https://openrouter.ai/api/v1' });
+    const cleared = store.saveSettings({ subagentModel: '' });
+    expect(cleared.subagentModel).toBeUndefined();
+    expect(cleared.subagentEndpointUrl).toBeUndefined();
   });
 });
 

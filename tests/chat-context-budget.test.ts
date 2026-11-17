@@ -19,7 +19,7 @@ async function launch(contextWindow: number, maxOutputTokens: number, contextSca
   } as AppSettings;
   await preparePiLaunch({
     settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '',
-    bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat',
+    bridgeEnv: {}, requestTimeoutMs: 1000,
   });
   const path = join(dataDir, 'pi-chat');
   const dir = join(path, (await import('node:fs')).readdirSync(path)[0], 'agent');
@@ -81,7 +81,7 @@ describe('the chat’s folder, as the extensions see it', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hello-folder-'));
     dirs.push(dataDir);
     const settings = { endpointUrl: 'https://example.test/v1', model: 'm', apiKeySet: false, systemPrompt: 'x', temperature: 0.7, connections: [], contextWindow: 32768, maxOutputTokens: 1024 } as AppSettings;
-    return preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat', folder });
+    return preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000, folder });
   }
 
   it('is handed to the extensions, while Pi itself starts in its private directory', async () => {
@@ -102,7 +102,7 @@ describe('the model for subagents', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hello-subagents-'));
     dirs.push(dataDir);
     const settings = { endpointUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen3-27b', apiKeySet: false, systemPrompt: 'x', temperature: 0.7, connections: [], contextWindow: 32768, maxOutputTokens: 1024, ...(subagentModel === undefined ? {} : { subagentModel }) } as AppSettings;
-    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat' });
+    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000 });
     const root = join(dataDir, 'pi-chat');
     const dir = join(root, (await import('node:fs')).readdirSync(root)[0], 'agent');
     return {
@@ -115,6 +115,34 @@ describe('the model for subagents', () => {
     const launch = await written('google/gemini-3-flash:free');
     expect(launch.models).toEqual(['qwen/qwen3-27b', 'google/gemini-3-flash:free']);
     expect(launch.settings.subagents).toEqual({ defaultModel: 'hello/google/gemini-3-flash:free' });
+  });
+
+  // A local chat model with its subagents on a provider (user, 16.11).
+  it('can be on another kept connection: a second provider for Pi, with that connection’s address, dialect and key', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hello-subagents-'));
+    dirs.push(dataDir);
+    const settings = { endpointUrl: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-flash-next', apiKeySet: false, systemPrompt: 'x', temperature: 0.7, connections: [],
+      contextWindow: 262144, maxOutputTokens: 4096, subagentModel: 'google/gemini-3-flash', subagentEndpointUrl: 'https://openrouter.ai/api/v1' } as AppSettings;
+    const launch = await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', subagentKey: 'sk-or-secret', bridgeEnv: {}, requestTimeoutMs: 1000,
+      subagentLimits: { contextWindow: 1_000_000, maxOutputTokens: 8192 } });
+    const root = join(dataDir, 'pi-chat');
+    const dir = join(root, (await import('node:fs')).readdirSync(root)[0], 'agent');
+    const models = JSON.parse(await readFile(join(dir, 'models.json'), 'utf8')) as { providers: Record<string, { baseUrl: string; apiKey: string; models: Array<{ id: string; contextWindow: number; compat: Record<string, unknown> }> }> };
+    expect(Object.keys(models.providers)).toEqual(['hello', 'hello-subagents']);
+    // The chat's provider holds only the chat's model; the key is named, never written.
+    expect(models.providers.hello.models.map(model => model.id)).toEqual(['qwen3.8-flash-next']);
+    expect(models.providers['hello-subagents']).toMatchObject({ baseUrl: 'https://openrouter.ai/api/v1', apiKey: '$HELLO_PI_SUBAGENT_API_KEY' });
+    expect(models.providers['hello-subagents'].models).toMatchObject([{ id: 'google/gemini-3-flash', contextWindow: 1_000_000, compat: { thinkingFormat: 'openrouter' } }]);
+    expect(models.providers.hello.models[0].compat).not.toHaveProperty('thinkingFormat', 'openrouter');
+    expect(JSON.stringify(models)).not.toContain('sk-or-secret');
+    expect((JSON.parse(await readFile(join(dir, 'settings.json'), 'utf8')) as { subagents: unknown }).subagents).toEqual({ defaultModel: 'hello-subagents/google/gemini-3-flash' });
+    expect(launch.env.HELLO_PI_SUBAGENT_API_KEY).toBe('sk-or-secret');
+    // The same model id as the chat's is still a different model when it is on another server.
+    const same = await preparePiLaunch({ settings: { ...settings, subagentModel: 'qwen3.8-flash-next' }, dataDir, conversationId: 'chat-2', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000 });
+    expect(same.env.HELLO_PI_SUBAGENT_API_KEY).toBe('hello-local');
+    // On the chat's own connection nothing of this appears.
+    const here = await written('google/gemini-3-flash:free');
+    expect(here.settings.subagents).toEqual({ defaultModel: 'hello/google/gemini-3-flash:free' });
   });
 
   it('leaves the chat’s own model to them when it is unset or the same', async () => {
@@ -133,7 +161,7 @@ describe('how thinking is switched for the model', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hello-thinking-'));
     dirs.push(dataDir);
     const settings = { endpointUrl, model, apiKeySet: false, systemPrompt: 'x', temperature: 0.7, connections: [], contextWindow: 32768, maxOutputTokens: 1024, reasoningEffort: 'off', ...(modelCompatibility ? { modelCompatibility } : {}) } as AppSettings;
-    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat' });
+    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000 });
     const root = join(dataDir, 'pi-chat');
     const dir = join(root, (await import('node:fs')).readdirSync(root)[0], 'agent');
     const [described] = (JSON.parse(await readFile(join(dir, 'models.json'), 'utf8')) as { providers: { hello: { models: Array<{ reasoning: boolean; compat: { thinkingFormat?: string } }> } } }).providers.hello.models;
@@ -167,7 +195,7 @@ describe('how far Low/Medium/High reaches', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hello-effort-'));
     dirs.push(dataDir);
     const settings = { endpointUrl, model, apiKeySet: false, systemPrompt: 'x', temperature: 0.7, connections: [], contextWindow: 32768, maxOutputTokens: 1024, reasoningEffort: 'high', ...(modelCompatibility ? { modelCompatibility } : {}) } as AppSettings;
-    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat' });
+    await preparePiLaunch({ settings, dataDir, conversationId: 'chat', history: [], systemPrompt: 'x', key: '', bridgeEnv: {}, requestTimeoutMs: 1000 });
     const root = join(dataDir, 'pi-chat');
     const dir = join(root, (await import('node:fs')).readdirSync(root)[0], 'agent');
     const [described] = (JSON.parse(await readFile(join(dir, 'models.json'), 'utf8')) as {

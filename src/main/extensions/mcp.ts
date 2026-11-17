@@ -4,13 +4,18 @@ import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import type { McpServerStatus } from '../../shared/types';
 import type { DataStore, ResourceRow } from '../data/store';
-import { parseConfig, type McpConfig } from './library';
+import { mcpServerUrl, parseConfig, type McpConfig } from './library';
+import { McpAuthRequiredError, McpClient, McpSessionExpiredError, StreamableHttpTransport, type AuthProvider } from '@earendil-works/pi-mcp';
+import { McpOAuthAuthorizationRequiredError, McpOAuthProvider, OAuthCallbackServer, adaptOAuthProvider, authorizeMcp, type McpOAuthState, type McpOAuthStateStore } from '@earendil-works/pi-mcp/oauth';
 
-// A first-party MCP client for local stdio servers. Pi 0.85.1 has no built-in
-// MCP, so Hello connects, lists and calls tools itself, then offers them to the
-// model through the existing tool bridge — the same approval-capable host path
-// as every other Hello tool. Servers get a minimal environment, never the
-// renderer, the browser session or Hello's own credentials.
+// Hello connects to MCP servers itself, lists and calls their tools, then
+// offers them to the model through the existing tool bridge — the same
+// approval-capable host path as every other Hello tool. A local server is a
+// process Hello starts over stdio, with a minimal environment, never the
+// renderer, the browser session or Hello's own credentials. A remote one is
+// reached over streamable HTTP through @earendil-works/pi-mcp (Pi's own MCP
+// client, MIT): https, or http on this Mac, its headers and its sign-in kept
+// encrypted in Hello's store (user, 03.11: Neon was "Not supported").
 
 const PROTOCOL_VERSION = '2025-06-18';
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -20,6 +25,18 @@ const MAX_TOOLS = 200;
 const MAX_RESULT_CHARS = 60_000;
 /** A server connected only by a Settings probe is stopped once it goes idle. */
 const IDLE_TIMEOUT_MS = 5 * 60_000;
+/** How long the browser sign-in waits for the person. */
+const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
+/** Who Hello says it is when it registers with a server's authorization server. */
+const CLIENT_METADATA = {
+  client_name: 'Hello.', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'],
+  token_endpoint_auth_method: 'none', application_type: 'native',
+};
+
+/** The server wants a sign-in Hello does not have, or no longer has: the person signs in from Settings. */
+export class McpSignInRequiredError extends Error {
+  constructor(name: string) { super(`${name} needs you to sign in. Use Sign in beside it in Settings › Extensions.`); }
+}
 export interface McpOptions {
   connectTimeoutMs?: number; callTimeoutMs?: number; maxMessageBytes?: number;
 }
@@ -285,6 +302,133 @@ class McpConnection implements McpLink {
   }
 }
 
+/** A tools/list answer as Hello keeps it, within the same limits for every transport. */
+function keptTools(rows: unknown[]): McpTool[] {
+  if (rows.length > MAX_TOOLS) throw new Error(`This server exceeds Hello's ${MAX_TOOLS}-tool limit.`);
+  return rows.flatMap(item => {
+    if (!object(item) || typeof item.name !== 'string' || !item.name) return [];
+    const schema = object(item.inputSchema) ? item.inputSchema : { type: 'object', properties: {} };
+    if (Buffer.byteLength(JSON.stringify(schema)) > 20_000) throw new Error(`MCP tool “${item.name.slice(0, 100)}” has an input schema larger than Hello's 20 KB limit.`);
+    return [{
+      name: item.name,
+      description: (typeof item.description === 'string' ? item.description : '').slice(0, 4000),
+      schema: schema as Record<string, unknown>,
+    }];
+  });
+}
+
+/**
+ * A server reached over streamable HTTP. It never opens a browser: a server
+ * that wants a sign-in Hello lacks ends the connection with
+ * McpSignInRequiredError, and the person signs in from Settings. Its stored
+ * tokens are refreshed as they expire; a session the server forgot is opened
+ * again once.
+ */
+class McpHttpConnection implements McpLink {
+  private client?: McpClient;
+  private closed = false;
+  private toolsSupported = false;
+  /** Header values and tokens, longest first, so a message never carries a secret. */
+  private readonly secrets: string[];
+  toolsDirty = false;
+  tools: McpTool[] = [];
+
+  constructor(
+    private readonly row: ResourceRow,
+    private readonly headers: Record<string, string>,
+    private readonly auth: McpOAuthStateStore,
+    private readonly options: McpOptions = {},
+  ) {
+    this.secrets = Object.values(headers).filter(value => value.length >= 6).sort((a, b) => b.length - a.length);
+  }
+
+  get running(): boolean { return Boolean(this.client) && !this.closed; }
+
+  private redact(text: string): string {
+    let result = text;
+    for (const secret of this.secrets) result = result.split(secret).join('[redacted]');
+    return result;
+  }
+
+  /** What went wrong, said for the person: a sign-in when that is what the server wants. */
+  private problem(error: unknown): Error {
+    if (error instanceof McpSignInRequiredError) return error;
+    if (error instanceof McpAuthRequiredError || error instanceof McpOAuthAuthorizationRequiredError) return new McpSignInRequiredError(this.row.name);
+    return new Error(this.redact(error instanceof Error ? error.message : 'The MCP server could not be reached.'));
+  }
+
+  async start(): Promise<void> {
+    const config = parseConfig(this.row) as McpConfig;
+    const url = mcpServerUrl(config.url ?? '');
+    // A refused request refreshes a grant the person already gave, and nothing
+    // more: no registration, no authorization — those are the sign-in's, which
+    // only a click starts. Without a grant the answer is "needs sign-in".
+    const provider = new McpOAuthProvider({ serverUrl: url, redirectUrl: 'http://127.0.0.1/callback', clientMetadata: CLIENT_METADATA, store: this.auth, onRedirect: () => {} });
+    const refresh = adaptOAuthProvider(provider);
+    const auth: AuthProvider = {
+      token: refresh.token,
+      onUnauthorized: async context => {
+        if (!(await provider.tokens())?.refresh_token) throw new McpSignInRequiredError(this.row.name);
+        await refresh.onUnauthorized?.(context);
+      },
+    };
+    const client = new McpClient({ name: 'Hello.', version: '1', requestTimeoutMs: this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS });
+    const transport = new StreamableHttpTransport({ url, headers: this.headers, authProvider: auth, maxMessageBytes: this.options.maxMessageBytes ?? MAX_MESSAGE_BYTES });
+    client.onNotification('notifications/tools/list_changed', () => { this.toolsDirty = true; });
+    // Only the client in use closes the connection: the one a forgotten session replaced does not.
+    client.onClose(() => { if (this.client === client) this.closed = true; });
+    try {
+      const started = await client.connect(transport);
+      this.client = client;
+      this.closed = false;
+      this.toolsSupported = object(started.capabilities) && object(started.capabilities.tools);
+      await this.refreshTools();
+    } catch (error) {
+      this.closed = true;
+      await client.close().catch(() => {});
+      throw this.problem(error);
+    }
+  }
+
+  async refreshTools(signal?: AbortSignal): Promise<McpTool[]> {
+    if (!this.client) throw new Error('The MCP server is not connected.');
+    if (!this.toolsSupported) return this.tools = [];
+    try { this.tools = keptTools(await this.client.listTools({ signal, timeoutMs: this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS })); }
+    catch (error) { throw this.problem(error); }
+    this.toolsDirty = false;
+    return this.tools;
+  }
+
+  async call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    const attempt = async () => {
+      if (!this.client) throw new Error('The MCP server is not connected.');
+      return this.client.callTool(name, args, { signal, timeoutMs: this.options.callTimeoutMs ?? CALL_TIMEOUT_MS });
+    };
+    let payload: unknown;
+    try { payload = await attempt(); }
+    catch (error) {
+      // The server forgot the session, so the call never ran: open a new one and ask once more.
+      if (!(error instanceof McpSessionExpiredError)) throw this.problem(error);
+      const forgotten = this.client;
+      this.client = undefined;
+      await forgotten?.close().catch(() => {});
+      await this.start();
+      try { payload = await attempt(); } catch (again) { throw this.problem(again); }
+    }
+    const text = resultText(payload);
+    if (object(payload) && payload.isError === true) throw new Error(this.redact(text));
+    return text;
+  }
+
+  async stop(): Promise<void> {
+    this.closed = true;
+    const client = this.client;
+    this.client = undefined;
+    await client?.close().catch(() => {});
+  }
+}
+
 export interface McpToolHandle {
   /** Hello tool name offered to the model. */
   name: string;
@@ -305,8 +449,69 @@ export class McpManager {
   private readonly generations = new Map<string, number>();
   private readonly lastUsed = new Map<string, number>();
   private idleTimer?: NodeJS.Timeout;
+  /** HTTP servers that answered with a sign-in Hello does not have. */
+  private readonly signInNeeded = new Set<string>();
+  private readonly signingIn = new Map<string, Promise<McpServerStatus>>();
 
   constructor(private readonly store: DataStore, private readonly options: McpOptions = {}) {}
+
+  /** A server's sign-in, read and written through the encrypted store. */
+  private authStore(id: string): McpOAuthStateStore {
+    return {
+      load: () => this.store.resourceAuth(id) as McpOAuthState | undefined,
+      save: state => this.store.saveResourceAuth(id, state as unknown as Record<string, unknown>),
+    };
+  }
+
+  private linkFor(row: ResourceRow): McpLink {
+    const config = parseConfig(row) as McpConfig;
+    return config.transport === 'http'
+      ? new McpHttpConnection(row, this.store.resourceSecret(row.id), this.authStore(row.id), this.options)
+      : new McpConnection(row, this.store.resourceSecret(row.id), this.options);
+  }
+
+  /**
+   * Signs in to an HTTP server the way the MCP specification says: the
+   * authorization server is discovered from the server, Hello registers
+   * itself, and the person approves in their own browser — opened only by
+   * this call, which only a click in Settings makes — with the answer coming
+   * back to a one-time callback on 127.0.0.1. Then the server is connected.
+   */
+  signIn(id: string, openUrl: (url: string) => Promise<void>): Promise<McpServerStatus> {
+    const running = this.signingIn.get(id);
+    if (running) return running;
+    const attempt = (async () => {
+      const row = this.store.getResourceRow(id);
+      const config = parseConfig(row) as McpConfig;
+      if (row.kind !== 'mcp' || config.transport !== 'http' || !config.url) throw new Error('Only an MCP server reached over HTTP signs in.');
+      const url = mcpServerUrl(config.url);
+      const callback = await OAuthCallbackServer.listen({ host: '127.0.0.1', path: '/callback', timeoutMs: SIGN_IN_TIMEOUT_MS });
+      try {
+        const provider = new McpOAuthProvider({
+          serverUrl: url, redirectUrl: callback.redirectUrl, clientMetadata: CLIENT_METADATA, store: this.authStore(id),
+          onRedirect: target => {
+            if (target.protocol !== 'https:' && !(target.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname)))
+              throw new Error('The server sent a sign-in page that is not https.');
+            return openUrl(target.href);
+          },
+        });
+        // A registration made for another callback address does not hold for this one.
+        await provider.invalidateCredentials('client');
+        let result = await authorizeMcp(provider, { serverUrl: url, skipRefresh: true });
+        if (result === 'REDIRECT') {
+          const answer = await callback.waitForCallback(await provider.state());
+          result = await authorizeMcp(provider, { serverUrl: url, authorizationCode: answer.code, iss: answer.iss });
+        }
+        if (result !== 'AUTHORIZED') throw new Error('The sign-in did not finish.');
+      } finally { await callback.close(); }
+      this.signInNeeded.delete(id);
+      await this.disconnect(id);
+      return this.probe(id);
+    })();
+    this.signingIn.set(id, attempt);
+    void attempt.finally(() => { if (this.signingIn.get(id) === attempt) this.signingIn.delete(id); }).catch(() => {});
+    return attempt;
+  }
 
   private async connect(row: ResourceRow): Promise<McpLink> {
     if (this.disposed) throw new Error('MCP manager is closed.');
@@ -318,7 +523,7 @@ export class McpManager {
     const pending = this.starting.get(row.id);
     if (pending) return pending.promise;
     const generation = (this.generations.get(row.id) ?? 0);
-    const connection = new McpConnection(row, this.store.resourceSecret(row.id), this.options);
+    const connection = this.linkFor(row);
     const attempt = (async () => {
       try {
         await connection.start();
@@ -329,6 +534,7 @@ export class McpManager {
         }
         this.connections.set(row.id, connection);
         this.errors.delete(row.id);
+        this.signInNeeded.delete(row.id);
         this.lastUsed.set(row.id, Date.now());
         this.scheduleIdleSweep();
         return connection;
@@ -337,6 +543,7 @@ export class McpManager {
         if ((this.generations.get(row.id) ?? 0) === generation) {
           this.connections.delete(row.id);
           this.errors.set(row.id, error instanceof Error ? error.message : 'The MCP server could not start.');
+          if (error instanceof McpSignInRequiredError) this.signInNeeded.add(row.id);
         }
         throw error;
       } finally {
@@ -426,6 +633,11 @@ export class McpManager {
     return connection.call(handle.remoteName, args, signal);
   }
 
+  /** The servers among these that want the person to sign in first, by name. */
+  needingSignIn(rows: ResourceRow[]): string[] {
+    return rows.filter(row => this.signInNeeded.has(row.id)).map(row => row.name);
+  }
+
   /** Connect on demand so Settings can show what a server actually offers. */
   async probe(id: string): Promise<McpServerStatus> {
     const row = this.store.getResourceRow(id);
@@ -435,7 +647,10 @@ export class McpManager {
       await connection.refreshTools();
       return { id, name: row.name, connected: true, tools: connection.tools.map(tool => tool.name) };
     } catch (error) {
-      return { id, name: row.name, connected: false, tools: [], error: error instanceof Error ? error.message : 'The MCP server could not start.' };
+      return {
+        id, name: row.name, connected: false, tools: [], error: error instanceof Error ? error.message : 'The MCP server could not start.',
+        ...(error instanceof McpSignInRequiredError ? { needsSignIn: true } : {}),
+      };
     }
   }
 
@@ -446,6 +661,7 @@ export class McpManager {
         id: row.id, name: row.name, connected: Boolean(connection?.running),
         tools: connection?.tools.map(tool => tool.name) ?? [],
         error: this.errors.get(row.id) ?? null,
+        ...(this.signInNeeded.has(row.id) ? { needsSignIn: true } : {}),
       };
     });
   }

@@ -28,7 +28,7 @@ function imageType(bytes: Buffer): string | undefined {
 }
 function textContent(bytes: Buffer): string {
   if (bytes.subarray(0, 5).toString('ascii') === '%PDF-')
-    throw new Error('PDF attachments are not supported yet. Drop extracted text or page images instead.');
+    throw new Error('A PDF is not attached as text. Put it in the folder attached to this chat and ask about it there: Hello reads a PDF in the folder, scans included.');
   if (bytes.some(byte => byte === 0 || (byte < 32 && ![9, 10, 13].includes(byte))))
     throw new Error('This binary document cannot be read as text. Drop UTF-8 text/code or a PNG, JPEG, WebP or GIF image.');
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }

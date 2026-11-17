@@ -21,11 +21,14 @@ export interface LibraryResource {
   /** Reported by an import that found declared dependencies Hello does not install. */
   warning?: string;
   /** Lossless editor data. Environment values are deliberately absent. */
-  mcp?: { command: string; args: string[]; cwd: string | null; envNames: string[] };
+  mcp?: { command: string; args: string[]; cwd: string | null; envNames: string[]; transport?: 'stdio' | 'http'; url?: string };
   createdAt: number; updatedAt: number;
 }
 export interface McpServerInput {
+  /** A command to start on this Mac (stdio), or empty with `url` for a server reached over HTTP. */
   name: string; command: string; args: string[]; env: Record<string, string>; cwd?: string | null;
+  /** A streamable HTTP server: https, or http on this Mac. `env` then holds its request headers. */
+  url?: string;
   /** Set when editing an existing server. */
   id?: string;
   /** Editing with an empty environment box keeps the stored values. */
@@ -35,9 +38,11 @@ export interface McpServerInput {
 export interface DiscoveredMcpServer {
   id: string; name: string; source: string; configPath: string;
   command: string; args: string[]; cwd?: string;
-  /** Variable names only — values never leave the main process. */
+  /** Variable names only — values never leave the main process. For an HTTP server, its header names. */
   envNames: string[];
-  transport: 'stdio' | 'remote';
+  /** `http`: a streamable HTTP server Hello can reach; `remote`: one it cannot (legacy SSE, plain http off this Mac). */
+  transport: 'stdio' | 'http' | 'remote';
+  url?: string;
   /** Why Hello cannot use this entry, when it cannot. */
   unsupported?: string;
 }
@@ -77,7 +82,9 @@ export interface ConnectionModels { name: string; endpointUrl: string; active: b
 export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[]; }
 /** A discovered voice server on this Mac: OpenAI-shaped speech or whisper.cpp. Discovery never takes ownership of the process. */
 export interface VoiceServer { name: string; baseUrl: string; kind: 'speech' | 'whisper.cpp'; }
-export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null; }
+export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null;
+  /** An HTTP server that wants the person to sign in before it answers. */
+  needsSignIn?: boolean; }
 export interface ResourceChange { conversationId?: string }
 /** The switches of a chat's notebook sections (user, 29.09). `planning` is
  *  Plans — the Plan switch, because a two-line request answered with a
@@ -85,7 +92,10 @@ export interface ResourceChange { conversationId?: string }
  *  (user, 05.10) and on only when switched on. A section that is off stays
  *  in the notebook, quieter, and is invisible to the model and CLI workers —
  *  no tool, no export, nothing about it in what the model is told. */
-export interface Conversation { id: string; title: string; folder: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean;
+export interface Conversation { id: string; title: string; folder: string | null; planning?: boolean; runbook?: boolean; tasks?: boolean;
+  /** The chat's Workbook — its page of Runbooks, Tasks and Plans — is on. Off by default (user, 17.11): a chat is a
+   *  chat until this one needs more. While it is off the page is not shown and its sections read as off. */
+  notebook?: boolean;
   /** When the chat was last restarted: the model's memory begins here; what came before stays for the person. */
   freshFrom?: number;
   /** The model this chat runs on, on its connection: the last one used or picked in it (user, 04.10). Absent, the chat runs on the selection in Settings. */
@@ -94,12 +104,15 @@ export interface Conversation { id: string; title: string; folder: string | null
 /** A model on the connection that serves it: the endpoint keys the stored API key. */
 export interface ChatModel { endpointUrl: string; id: string; }
 export interface ChatAttachment { id: string; name: string; kind: 'text' | 'image'; size: number; }
-export interface ChatDropResult { folder?: string; attachments: ChatAttachment[]; }
+export interface ChatDropResult { folder?: string; attachments: ChatAttachment[]; /** Workbooks the drop opened in Sheets, by title: an .xlsx is not attached as text, it becomes a workbook of the chat. */ workbooks?: string[]; /** Workbooks and PDFs the drop put in the chat’s folder, by the name the tools take: named in the draft, so the message says which file is meant. */ documents?: string[]; }
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string; durationMs?: number }
   | { type: 'tool'; id: string; name: string; input: string; output?: string; status: 'running' | 'complete' | 'error' | 'approval'; approvalId?: string; durationMs?: number };
-export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; parts?: MessagePart[]; status: 'complete' | 'streaming' | 'error'; createdAt: number; error?: string | null; usage?: MessageUsage; runtimePhase?: 'starting' | 'working' | 'compacting' | 'retrying';
+/** What a streaming reply is doing right now, as the chat shows it: the model
+ *  reading, thinking, writing, a tool running, or the turn's own housekeeping. */
+export type RuntimePhase = 'starting' | 'working' | 'waiting' | 'thinking' | 'writing' | 'tool' | 'compacting' | 'retrying';
+export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; parts?: MessagePart[]; status: 'complete' | 'streaming' | 'error'; createdAt: number; error?: string | null; usage?: MessageUsage; runtimePhase?: RuntimePhase;
   /** Display-only history; never injected into the model prompt. */
   compactions?: Array<{ partIndex: number; tokensBefore: number; tokensAfter?: number }>;
   /** The model that wrote this reply, as it was selected when the reply began. */
@@ -142,7 +155,7 @@ export type MicrophoneAccess = 'not-determined' | 'granted' | 'denied' | 'restri
 export interface VoiceTranscript { text: string; language?: string; }
 /** One spoken chunk, as the voice server made it. */
 export interface VoiceSpeech { audio: Uint8Array; mime: string; }
-export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; /** Light, dark, or as macOS is (audit B2); unset is System. */ appearance?: 'system' | 'light' | 'dark'; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key; unset, the chat's model. It belongs to its connection and is cleared when the connection changes. */ subagentModel?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; /** Voice, off unless the person turns it on. */ voice?: VoiceSettings; connections: SavedConnection[]; }
+export interface AppSettings { endpointUrl: string; model: string; apiKeySet: boolean; systemPrompt: string; temperature: number; /** Light, dark, or as macOS is (audit B2); unset is System. */ appearance?: 'system' | 'light' | 'dark'; reasoningEffort?: 'off' | 'low' | 'medium' | 'high'; contextWindow?: number; maxOutputTokens?: number; modelCompatibility?: 'auto' | 'openai' | 'qwen-chat-template'; approvals?: ApprovalMode; /** The model plugins' subagents run on (pi-subagents' subagents.defaultModel), on the chat's own connection and key unless subagentEndpointUrl names another; unset, the chat's model. On the chat's connection it belongs to that connection and is cleared when the connection changes. */ subagentModel?: string; /** The kept connection the subagent model is on, when it is not the chat's own (user, 16.11: a local chat model with subagents on OpenRouter). Its key is that connection's. Unset: the chat's connection. */ subagentEndpointUrl?: string; /** Endpoint and model the stored context/output numbers were resolved for. Main stamps it; a change means the limits must be looked up again. */ limitsFor?: string; /** How much of the published window main hands the runtime. Learned from what the provider reports, never edited by hand: a runtime that estimates its own context low needs to be told a smaller number. */ contextScale?: number; /** Voice, off unless the person turns it on. */ voice?: VoiceSettings; connections: SavedConnection[]; }
 export type SettingsPatch = Partial<Omit<AppSettings, 'apiKeySet' | 'connections'>> & { apiKey?: string };
 /** Where a message the person wrote during a run is meant to land. */
 export type QueuedMode = 'steer' | 'next' | 'later';
@@ -301,17 +314,38 @@ export interface HelloAPI {
     read(conversationId: string, path: string): Promise<FileDocument>;
     open(conversationId: string, path: string): Promise<void>;
     reveal(conversationId: string, path: string): Promise<void>;
+    /** Hand a file of the chat over: saved where the person chooses when it lies in the folder Hello keeps for the chat (null when they cancel), shown in Finder when it lies in a folder of theirs. Optional for an older preload. */
+    deliver?(conversationId: string, path: string): Promise<{ saved: string } | { revealed: string } | null>;
     resolvePaths(conversationId: string, paths: string[]): Promise<string[]>;
     /** The lines of the chat's folder that hold the words (audit A3b). Optional for an older preload. */
     searchContents?(conversationId: string, requestId: string, query: string, options?: { matchCase?: boolean }): Promise<ContentSearch>;
     /** Stops the chat's search of the contents, if one runs. */
     cancelSearch?(conversationId: string): Promise<void>;
   };
+  /** A chat's workbooks (shared/sheets.ts). Optional for an older preload. */
+  sheets?: {
+    list(conversationId: string): Promise<import('./sheets').SheetWorkbookInfo[]>;
+    snapshot(conversationId: string, workbookId: string): Promise<import('./sheets').SheetSnapshot>;
+    create(conversationId: string, title: string): Promise<import('./sheets').SheetWorkbookInfo>;
+    /** A native picker. A file of the chat's folder is worked on in place; any other is copied in. Null when cancelled. */
+    open(conversationId: string): Promise<import('./sheets').SheetWorkbookInfo | null>;
+    /** What the person typed into the grid. */
+    edit(conversationId: string, workbookId: string, sheet: string, edits: import('./sheets').SheetCellEdit[]): Promise<{ info: import('./sheets').SheetWorkbookInfo; errors: import('./sheets').SheetFormulaError[]; recalculated: boolean }>;
+    /** Writes a folder file's changes to it. */
+    save(conversationId: string, workbookId: string): Promise<import('./sheets').SheetWorkbookInfo>;
+    /** A native save dialog; the path written, or null when cancelled. */
+    export(conversationId: string, workbookId: string): Promise<string | null>;
+    /** Asks first, in a native dialog. False when the person kept it. */
+    remove(conversationId: string, workbookId: string): Promise<boolean>;
+    /** What the pane shows now — workbook, sheet, selected range — or null when it shows nothing. It goes with the person's next message. Optional for an older preload. */
+    select?(conversationId: string, view: import('./sheets').SheetView | null): Promise<void>;
+    onChange(listener: (event: import('./sheets').SheetChange) => void): () => void;
+  };
   bootstrap(): Promise<Bootstrap>;
   conversations: {
     list(): Promise<Conversation[]>;
     create(title?: string): Promise<Conversation>;
-    update(id: string, patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null }): Promise<Conversation>;
+    update(id: string, patch: { title?: string; folder?: string | null; notebook?: boolean; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null }): Promise<Conversation>;
     delete(id: string): Promise<void>;
     /** The model starts fresh from now; messages, tabs, terminals, notes and the folder stay. */
     restart(id: string): Promise<Conversation>;
@@ -384,6 +418,8 @@ export interface HelloAPI {
     setActive(conversationId: string, resourceId: string, active: boolean): Promise<string[]>;
     status(): Promise<McpServerStatus[]>;
     probe(id: string): Promise<McpServerStatus>;
+    /** Signs in to an HTTP server in the browser, then connects. Optional for an older preload. */
+    signIn?(id: string): Promise<McpServerStatus>;
     disconnect(id: string): Promise<void>;
     onChange(listener: (event: ResourceChange) => void): () => void;
   };

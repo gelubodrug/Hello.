@@ -20,6 +20,23 @@ afterEach(() => {
   host.remove();
 });
 
+describe('a link to a file whose name has spaces', () => {
+  it('is a link, as the model meant it, and code is left as written', async () => {
+    const { spacedLinks } = await import('../src/shared/files');
+    expect(spacedLinks('Gata, în [Profi Phone List 22.05.2023.xlsx](Profi Phone List 22.05.2023.xlsx), salvat.')).toBe('Gata, în [Profi Phone List 22.05.2023.xlsx](<Profi Phone List 22.05.2023.xlsx>), salvat.');
+    expect(spacedLinks('[x](rapoarte/Raport final.md:12) și [y](a.md) și [z](<b c.md>) și [t](https://example.com/a "titlu")')).toBe('[x](<rapoarte/Raport final.md:12>) și [y](a.md) și [z](<b c.md>) și [t](https://example.com/a "titlu")');
+    expect(spacedLinks('`[a](b c.md)` și\n```\n[a](b c.md)\n```\n[a](b c.md)')).toBe('`[a](b c.md)` și\n```\n[a](b c.md)\n```\n[a](<b c.md>)');
+    expect(spacedLinks('f(x) = [1](2 3) fără extensie')).toBe('f(x) = [1](2 3) fără extensie');
+    const opened: unknown[] = [];
+    await act(async () => { root.render(createElement(Markdown, { text: 'Gata, în [Profi Phone List 22.05.2023.xlsx](Profi Phone List 22.05.2023.xlsx).', onOpenFile: target => { opened.push(target); } })); });
+    const link = host.querySelector('a')!;
+    expect(link.textContent).toBe('Profi Phone List 22.05.2023.xlsx');
+    expect(host.textContent).toBe('Gata, în Profi Phone List 22.05.2023.xlsx.');
+    await act(async () => { link.click(); });
+    expect(opened).toEqual([{ path: 'Profi Phone List 22.05.2023.xlsx' }]);
+  });
+});
+
 describe('a table a model writes', () => {
   it('breaks a cell’s lines at <br>, and still renders no other HTML', async () => {
     const text = [

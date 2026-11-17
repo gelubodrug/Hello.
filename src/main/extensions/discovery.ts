@@ -15,7 +15,7 @@ import { basename, dirname, join } from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { parse as parseYaml } from 'yaml';
 import type { DiscoveredMcpServer, DiscoveredPlugin, DiscoveredSkill } from '../../shared/types';
-import { readPlugin, slug } from './library';
+import { mcpServerUrl, readPlugin, slug } from './library';
 
 /** Whole file read into memory; a config far past this is not one of these tools'. */
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
@@ -51,7 +51,10 @@ function entry(
     ? raw.command.filter((value): value is string => typeof value === 'string')
     : [];
   const command = line.length ? line[0] : typeof raw.command === 'string' ? raw.command.trim() : '';
-  const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+  // Claude Code and VS Code write `url`, Gemini CLI `httpUrl`, Windsurf `serverUrl`.
+  const url = [raw.httpUrl, raw.url, raw.serverUrl].find((value): value is string => typeof value === 'string' && Boolean(value.trim()))?.trim() ?? '';
+  // Gemini CLI's `url` is its SSE transport; only `httpUrl` is streamable HTTP.
+  const sse = raw.type === 'sse' || (source.label === 'Gemini CLI' && typeof raw.httpUrl !== 'string' && typeof raw.url === 'string');
   const args = [
     ...line.slice(1),
     ...(Array.isArray(raw.args)
@@ -74,19 +77,33 @@ function entry(
     envNames: Object.keys(env).sort(),
     env,
   };
-  if (!command)
-    // Hello speaks stdio only. Showing the rest, disabled, beats hiding servers
-    // the user can see listed in their other tool.
+  if (!command) {
+    // A streamable HTTP server Hello reaches itself. What it cannot reach is
+    // still listed, disabled with the reason: hiding a server the person sees
+    // in their other tool would only make them wonder where it went.
+    const headers = object(raw.headers)
+      ? Object.fromEntries(Object.entries(raw.headers)
+        .filter(([key, value]) => /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(key) && typeof value === 'string')
+        .map(([key, value]) => [key, String(value)]))
+      : {};
+    const why = !url ? 'This entry has no command to run.' : remoteProblem(url, sse);
     return {
       ...common,
+      ...(why ? {} : { envNames: Object.keys(headers).sort(), env: headers }),
       command: url,
       args: [],
-      transport: 'remote',
-      unsupported: url
-        ? 'Hello connects over stdio. This one is an HTTP/SSE server.'
-        : 'This entry has no command to run.',
+      url,
+      transport: why ? 'remote' : 'http',
+      ...(why ? { unsupported: why } : {}),
     };
+  }
   return { ...common, command, args, cwd, transport: 'stdio' };
+}
+
+/** Why an HTTP entry is out of reach, or nothing when Hello can connect to it. */
+function remoteProblem(url: string, sse: boolean): string {
+  if (sse) return 'This server uses the old SSE transport. Hello connects to streamable HTTP servers.';
+  try { mcpServerUrl(url); return ''; } catch (error) { return error instanceof Error ? error.message : 'Hello cannot reach this server.'; }
 }
 
 function fromMcpServers(text: string, source: Source): DiscoveredMcpEntry[] {

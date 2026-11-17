@@ -446,6 +446,32 @@ describe("real conversation controls", () => {
       expect.objectContaining({ model: "second-model" }),
     );
   });
+  // How hard the model thinks is chosen where the model is (user, 17.11), not only in Settings.
+  it("offers the reasoning effort beside the model: a Thinking switch, and the levels", async () => {
+    localStorage.removeItem("hello.effort.last");
+    await render(view());
+    // Off until chosen; the trigger says where it stands.
+    expect(button("Reasoning effort: thinking off").textContent).toBe("Off");
+    await click(button("Reasoning effort: thinking off"));
+    expect([...document.querySelectorAll('[role^="menuitem"] .menu-item-copy')].map(node => node.firstChild?.textContent)).toEqual(["Thinking", "Low", "Medium", "High"]);
+    // A server sent no reasoning setting is said to be one, under the switch.
+    expect(menuItem("Thinking").textContent).toContain("sent no reasoning setting");
+    await click(menuItem("High"));
+    expect(mocks.settingsSave).toHaveBeenLastCalledWith({ reasoningEffort: "high" });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(expect.objectContaining({ reasoningEffort: "high" }));
+    // Thinking switched on from off comes back at the level last chosen.
+    await click(button("Reasoning effort: thinking off"));
+    await click(menuItem("Thinking"));
+    expect(mocks.settingsSave).toHaveBeenLastCalledWith({ reasoningEffort: "high" });
+    // A switch leaves its menu open; it is closed by its trigger.
+    await click(button("Reasoning effort: thinking off"));
+    // With a level set, the trigger names it and the switch turns thinking off.
+    await render(createElement(ConversationView, { ...view().props, settings: { ...settings, reasoningEffort: "medium" } }));
+    expect(button("Reasoning effort: medium").textContent).toBe("Medium");
+    await click(button("Reasoning effort: medium"));
+    await click(menuItem("Thinking"));
+    expect(mocks.settingsSave).toHaveBeenLastCalledWith({ reasoningEffort: "off" });
+  });
   it("reuses a user message without deleting an existing draft or rewriting history", async () => {
     await render(
       view([
@@ -575,7 +601,7 @@ describe("compact activity timeline", () => {
     output: JSON.stringify({ kind: "web_search", query: "weather", engine: "example", results: [], note: "" }) };
   const message: Message = { id: "activity", conversationId: "test-chat", role: "assistant", createdAt: 1, status: "streaming", content: "Answer",
     parts: [{ type: "thinking", text: "Original reasoning", durationMs: 612 }, tool,
-      { type: "text", text: "Checking the source." }, { ...tool, id: "next", name: "file_read", input: "{}", output: "Original output" },
+      { ...tool, id: "next", name: "file_read", input: "{}", output: "Original output" },
       { type: "text", text: "Answer" }] };
   const show = (value: Message) => render(createElement(MessageContent, { message: value, sources: [] }));
   const summary = () => host.querySelector<HTMLButtonElement>(".activity-summary")!;
@@ -583,15 +609,14 @@ describe("compact activity timeline", () => {
   const tail = () => host.querySelector<HTMLDivElement>(".activity-tail .activity-entries");
   const reveal = () => host.querySelector<HTMLDivElement>(".activity-reveal")!;
 
-  it("groups interleaved commentary once, leaves the answer outside and collapses successful work on completion", async () => {
+  it("groups a run of steps once, leaves the answer outside and collapses successful work on completion", async () => {
     await show(message);
     expect(host.querySelectorAll(".activity-group")).toHaveLength(1);
     expect(summary().textContent).toContain("1 search · 1 tool");
     // While the reply is still arriving the whole list stays folded: only the
     // work happening now shows, in place, under the summary.
     expect(reveal().dataset.open).toBe('false');
-    expect(Array.from(tail()!.children).map(node => node.className)).toEqual(["activity-note", "tool-part"]);
-    expect(tail()!.textContent).toContain("Checking the source.");
+    expect(Array.from(tail()!.children).map(node => node.className)).toEqual(["tool-part", "tool-part"]);
     expect(tail()!.textContent).not.toContain("Answer");
     expect(host.lastElementChild?.textContent).toBe("Answer");
     expect(host.querySelector('.thinking-part[data-active="true"]')).toBeNull();
@@ -601,10 +626,10 @@ describe("compact activity timeline", () => {
     expect(reveal().inert).toBe(true);
     // Opened once, the steps stay mounted through a roll-up: no abrupt unmount.
     await click(summary());
-    expect(detail().children).toHaveLength(4);
+    expect(detail().children).toHaveLength(3);
     await click(summary());
     expect(reveal().dataset.open).toBe('false');
-    expect(detail().children).toHaveLength(4);
+    expect(detail().children).toHaveLength(3);
   });
   it("respects explicitly opened activity and tool details after completion", async () => {
     await show(message);
@@ -645,32 +670,29 @@ describe("compact activity timeline", () => {
     expect(host.querySelector(".thinking-body")?.textContent).toContain("Original reasoning");
     expect(summary().textContent).toContain("Running");
   });
-  it("folds commentary long enough to be a wall down to the one row its neighbours are", async () => {
-    const wall = { type: "text" as const, text: Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n\n") };
-    // jsdom reports no layout, so measurement has to be stood in for.
-    const heights = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(400);
-    try {
-      await show({ ...message, parts: [{ type: "thinking", text: "Reasoning", durationMs: 5 }, wall, tool] });
-      const note = host.querySelector<HTMLElement>('.activity-note')!;
-      expect(note.dataset.folded).toBe('true');
-      // The same row as the thinking and the tool: a title and a chevron.
-      const row = note.querySelector<HTMLButtonElement>('.disclosure-button')!;
-      expect(row.textContent).toContain('line 0');
-      expect(row.getAttribute('aria-expanded')).toBe('false');
-      await click(row);
-      expect(note.dataset.folded).toBeUndefined();
-      expect(note.textContent).toContain('line 39');
-    } finally { heights.mockRestore(); }
-  });
-
-  it("says a short remark outright rather than making it a row to open", async () => {
-    const heights = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(20);
-    try {
-      await show({ ...message, parts: [{ type: "text", text: "Checking the source." }, tool] });
-      const note = host.querySelector<HTMLElement>('.activity-note')!;
-      expect(note.querySelector('.disclosure-button')).toBeNull();
-      expect(note.textContent).toContain('Checking the source.');
-    } finally { heights.mockRestore(); }
+  it("keeps everything the model says on the page where it said it, and folds only what it does", async () => {
+    // An answer in paragraphs, then the model goes on working (user, 16.11: it
+    // was read on screen and then vanished into the activity list). And a short
+    // remark is said just as much: no length decides what stays.
+    const answer = { type: "text" as const, text: "Fair question. I chose the top ten and went on.\n\nSo, to be clear:" };
+    const remark = { type: "text" as const, text: "Checking the source." };
+    const later = { ...tool, id: "later", name: "file_read", input: "{}", output: "x" };
+    const last = { ...tool, id: "last", name: "file_read", input: "{}", output: "y" };
+    await show({ ...message, status: "complete", parts: [{ type: "thinking", text: "Reasoning", durationMs: 5 }, tool, answer, later, remark, last, { type: "text", text: "Done." }] });
+    const order = Array.from(host.children).map(node => node.classList.contains("activity-group") ? "steps"
+      : node.classList.contains("tool-part") ? "step" : node.textContent!.slice(0, 13));
+    // A run of steps folds under one line; a single step between two things said is its own row.
+    expect(order).toEqual(["steps", "Fair question", "step", "Checking the ", "step", "Done."]);
+    expect(host.querySelector(".activity-group")!.textContent).not.toContain("Fair question");
+    expect(host.querySelector(".activity-note")).toBeNull();
+    // The same words before a tool call arrives and after it: nothing said is moved.
+    for (const said of [answer, remark]) {
+      await show({ ...message, status: "streaming", parts: [said] });
+      const before = host.firstElementChild!.outerHTML;
+      await show({ ...message, status: "streaming", parts: [said, { ...later, status: "running" as const, output: undefined }] });
+      expect(host.firstElementChild!.outerHTML).toBe(before);
+      expect(host.children[1].classList.contains("tool-part")).toBe(true);
+    }
   });
 
   it("opens the whole run as a continuation of the tail, and never shows both", async () => {
@@ -680,7 +702,7 @@ describe("compact activity timeline", () => {
     // One list at a time: the tail is the folded state of the same steps.
     expect(reveal().dataset.open).toBe('true');
     expect(tail()).toBeNull();
-    expect(Array.from(detail().children).map(node => node.className)).toEqual(["thinking-part", "tool-part", "activity-note", "tool-part"]);
+    expect(Array.from(detail().children).map(node => node.className)).toEqual(["thinking-part", "tool-part", "tool-part"]);
   });
   it("says a long run of the same work once, and keeps every step behind it", async () => {
     const parts = Array.from({ length: 25 }, (_, index) => ({ ...tool, id: `tool-${index}` }));

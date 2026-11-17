@@ -1,6 +1,7 @@
 import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, Notification, systemPreferences, type BrowserWindow } from 'electron';
 import { applyAppearance } from './appearance';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chatFolderOf, keptFile } from './chat/chat-folder';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -61,6 +62,26 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('files.cancelSearch', id => files.cancelSearch(str(id)));
   handle('files.resolvePaths', (id, paths) => resolveDropPaths(store.getConversation(str(id)).folder, paths));
   handle('files.reveal', async (id, path) => { const target = await files.target(str(id), str(path, 'path', 8192)); shell.showItemInFolder(target.absolute); });
+  // A file handed over by a link in the chat. In a folder of the person's it is already theirs: it is shown in
+  // Finder. In the folder Hello keeps for the chat they cannot see it, so they are asked where to save it —
+  // a copy; what the chat works on stays where it is. The same for a file Hello keeps beside a folder of the
+  // person's — a PDF they dropped from outside it — which a link names by its name alone.
+  handle('files.deliver', async (id, path) => {
+    const conversationId = str(id), requested = str(path, 'path', 8192);
+    const folder = store.getConversation(conversationId).folder;
+    const own = !!folder && resolve(folder) === resolve(chatFolderOf(store.dataDir, conversationId));
+    const target = await files.target(conversationId, requested).then(found => ({ found }), (error: unknown) => ({ error }));
+    const inFolder = 'found' in target && statSync(target.found.absolute, { throwIfNoEntry: false })?.isFile() ? target.found : undefined;
+    if (inFolder && !own) { shell.showItemInFolder(inFolder.absolute); return { revealed: inFolder.path }; }
+    const absolute = inFolder?.absolute ?? await keptFile(store.dataDir, conversationId, requested);
+    if (!absolute) throw 'error' in target ? target.error : new Error('That is not a file.');
+    const name = absolute.split(sep).at(-1)!;
+    const picked = await dialog.showSaveDialog(window, { title: 'Save file', defaultPath: join(app.getPath('downloads'), name) });
+    if (picked.canceled || !picked.filePath) return null;
+    copyFileSync(absolute, picked.filePath);
+    shell.showItemInFolder(picked.filePath);
+    return { saved: picked.filePath };
+  });
   handle('files.open', async (id, path) => {
     const target = await files.target(str(id), str(path, 'path', 8192));
     // Shell associations can execute scripts. A document link itself never invokes this action.
@@ -76,7 +97,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('conversations.create',(title)=>store.createConversation(title===undefined?undefined:str(title,'title',250)));
   handle('conversations.update',(id,value)=>{
     const conversationId=str(id);
-    const patch=record(value);const clean:{title?:string;folder?:string|null;chatMode?:'chat'|'coder';planning?:boolean;runbook?:boolean;tasks?:boolean;model?:{endpointUrl:string;id:string}|null}={};
+    const patch=record(value);const clean:{title?:string;folder?:string|null;notebook?:boolean;planning?:boolean;runbook?:boolean;tasks?:boolean;model?:{endpointUrl:string;id:string}|null}={};
     // The model the chat runs on, picked in its composer (user, 04.10); its next turn takes it.
     if(patch.model!==undefined){
       if(patch.model===null)clean.model=null;
@@ -87,14 +108,13 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
       if(patch.folder===null)clean.folder=null;
       else {const folder=str(patch.folder,'folder',8192);if(!isAbsolute(folder)||!statSync(folder).isDirectory())throw new Error('Choose an existing folder.');clean.folder=folder;}
     }
-    if(patch.chatMode!==undefined){
-      if(patch.chatMode!=='chat'&&patch.chatMode!=='coder')throw new Error('Unknown chat mode.');
-      if(chat.isRunning(conversationId))throw new Error('Stop the current response before changing chat mode.');
-      clean.chatMode=patch.chatMode;
-    }
     // A section switches while a reply runs too (user, 30.09: Plans would not
     // turn on mid-reply). Its tools follow from the next step, a tool call
     // checks the switch when it runs, and the next turn's instructions match.
+    if(patch.notebook!==undefined){
+      if(typeof patch.notebook!=='boolean')throw new Error('The Workbook is on or off.');
+      clean.notebook=patch.notebook;
+    }
     if(patch.planning!==undefined){
       if(typeof patch.planning!=='boolean')throw new Error('Planning is on or off.');
       clean.planning=patch.planning;
@@ -132,6 +152,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(patch.approvals!==undefined)clean.approvals=patch.approvals as SettingsPatch['approvals'];
     if(patch.appearance!==undefined){if(!['system','light','dark'].includes(patch.appearance as string))throw new Error('Appearance is System, Light or Dark.');clean.appearance=patch.appearance as SettingsPatch['appearance'];}
     if(patch.subagentModel!==undefined){if(typeof patch.subagentModel!=='string'||patch.subagentModel.length>500)throw new Error('Invalid subagent model.');clean.subagentModel=patch.subagentModel;}
+    if(patch.subagentEndpointUrl!==undefined){if(typeof patch.subagentEndpointUrl!=='string'||patch.subagentEndpointUrl.length>2000)throw new Error('Invalid subagent connection.');clean.subagentEndpointUrl=patch.subagentEndpointUrl;}
     if(patch.voice!==undefined)clean.voice=voicePatch(patch.voice,store.getSettings().voice);
     const saved=store.saveSettings(clean);
     // The app's look follows at once: native menus, and what pages read as prefers-color-scheme.
@@ -338,8 +359,10 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     if(wanted!=='mcp')throw new Error('Only skills, Pi extensions and MCP servers are discovered.');
     const server=(await discoverMcpServers(discoveryHome(),discoveryProjects())).find(item=>item.id===wantedId);
     if(!server)throw new Error('That server is no longer in that tool’s configuration.');
-    if(server.transport!=='stdio')throw new Error(server.unsupported??'Hello connects to MCP servers over stdio.');
-    const saved=chat.library.addMcp({name:server.name,command:server.command,args:server.args,env:server.env,cwd:server.cwd??null});
+    if(server.transport==='remote'||(server.transport==='http'&&!server.url))throw new Error(server.unsupported??'Hello cannot reach this server.');
+    const saved=server.transport==='http'
+      ? chat.library.addMcp({name:server.name,command:'',args:[],url:server.url,env:server.env})
+      : chat.library.addMcp({name:server.name,command:server.command,args:server.args,env:server.env,cwd:server.cwd??null});
     announceExtensions();
     return saved;
   });
@@ -349,10 +372,13 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     const env=input.env===undefined?{}:record(input.env);
     if(Object.values(env).some(item=>typeof item!=='string'))throw new Error('Environment values must be text.');
     const existing=typeof input.id==='string'&&input.id?str(input.id):undefined;
+    // A server reached over HTTP has an address instead of a command; its env box holds its headers.
+    const url=typeof input.url==='string'&&input.url.trim()?str(input.url,'server URL',2048):undefined;
     const server:McpServerInput={
       ...(existing?{id:existing,keepEnv:input.keepEnv===true}:{}),
+      ...(url?{url}:{}),
       name:str(input.name,'name',120),
-      command:str(input.command,'command',4096),
+      command:url?'':str(input.command,'command',4096),
       args:input.args as string[],
       env:env as Record<string,string>,
       cwd:input.cwd===undefined||input.cwd===null?null:str(input.cwd,'folder',8192),
@@ -390,6 +416,12 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   });
   handle('extensions.probe',async(id)=>{
     const status=await chat.mcp.probe(str(id));
+    announceExtensions();
+    return status;
+  });
+  // Only the person's click reaches this: the browser opens for the server's own sign-in page, never on its own.
+  handle('extensions.signIn',async(id)=>{
+    const status=await chat.mcp.signIn(str(id),async url=>{await shell.openExternal(url);});
     announceExtensions();
     return status;
   });

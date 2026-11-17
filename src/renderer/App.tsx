@@ -17,6 +17,7 @@ import {
   MessageCircle,
   MoreHorizontal,
   PanelLeft,
+  BookOpen,
   Pencil,
   Plus,
   RotateCcw,
@@ -74,6 +75,7 @@ import {
 } from "./workspace/Workspace";
 import { hasExpandedPane, navigationShown, transcriptShown } from "./workspace/navigation";
 import { filesTabId } from '../shared/files';
+import { sheetsTabId } from '../shared/sheets';
 
 interface ShellState {
   chromeVersion: 4;
@@ -765,10 +767,14 @@ function Application() {
       command("new-chat", "New chat", () => void newChat()),
       ...(active ? [
         command("show-chat", "Show Chat", () => showPage(active.id, "chat"), active.title),
-        command("show-notebook", "Show Notebook", () => showPage(active.id, "notebook"), active.title),
+        ...(active.notebook === true ? [command("show-notebook", "Show Workbook", () => showPage(active.id, "notebook"), active.title)] : []),
         command("open-files", "Open Files", () => {
           select(active.id);
           updateUI(active.id, { filesOpen: true, toolsOpen: true, toolsMinimized: false, expanded: false, toolId: filesTabId(active.id), focus: "tools" });
+        }, active.title),
+        command("open-sheets", "Open Sheets", () => {
+          select(active.id);
+          updateUI(active.id, { sheetsOpen: true, toolsOpen: true, toolsMinimized: false, expanded: false, toolId: sheetsTabId(active.id), focus: "tools" });
         }, active.title),
         command("new-browser", "New browser tab", () => void launch(active, "browser"), active.title),
         command("new-terminal", "New terminal", () => void launch(active, "terminal"), active.title),
@@ -872,6 +878,7 @@ function Application() {
         ...(boot?.browsers ?? []),
         ...(boot?.terminals ?? []),
         ...(shell.workspaces[tool.conversationId]?.filesOpen ? [{ id: filesTabId(tool.conversationId), conversationId: tool.conversationId }] : []),
+        ...(shell.workspaces[tool.conversationId]?.sheetsOpen ? [{ id: sheetsTabId(tool.conversationId), conversationId: tool.conversationId }] : []),
       ].filter(
         (row) =>
           row.conversationId === tool.conversationId && row.id !== tool.id && !inChat.includes(row.id),
@@ -1100,8 +1107,28 @@ function Application() {
                   <MenuButton
                     label={`Actions for ${conversation.title}`}
                     items={[
-                      // Runbooks, Tasks and Plans are switched in the notebook
-                      // itself, where they stay visible when off (user, 29.09).
+                      // The Workbook — the chat's page of Runbooks, Tasks and Plans — is off until this chat
+                      // needs it (user, 17.11). Its sections are switched in the page itself, where they
+                      // stay visible when off (user, 29.09).
+                      {
+                        id: "workbook",
+                        label: "Workbook",
+                        icon: BookOpen,
+                        detail: "Runbooks, tasks and plans for this chat",
+                        toggle: true,
+                        checked: conversation.notebook === true,
+                        stayOpen: true,
+                        action: () => {
+                          const on = conversation.notebook !== true;
+                          void api.conversations.update(conversation.id, { notebook: on })
+                            .then((updated) => {
+                              changeConversation(updated);
+                              // Switched on in the chat on screen, it is what was asked for: shown.
+                              if (on && updated.id === shell.activeId) showPage(updated.id, "notebook");
+                            })
+                            .catch(reportError);
+                        },
+                      },
                       {
                         id: "rename",
                         label: "Rename",

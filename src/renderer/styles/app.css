@@ -1221,7 +1221,6 @@ svg {
 .activity-entries { display: flex; flex-direction: column; gap: var(--sp-4); }
 .activity-entries > * { flex-shrink: 0; min-width: 0; }
 .activity-entries > .markdown,
-.activity-entries > .activity-note > .activity-note-body > .markdown { margin: var(--sp-8) 0; color: var(--ink-secondary); }
 .tool-query { color: var(--ink-tertiary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-metadata { margin: 0 0 var(--sp-8); color: var(--ink-tertiary); }
 .web-tool-argument { overflow-wrap: anywhere; white-space: pre-wrap; margin-block: var(--sp-4) var(--sp-12); color: var(--ink-secondary); }
@@ -1514,6 +1513,11 @@ svg {
 }
 .model-trigger > svg {
   flex: none;
+}
+/* The effort beside the model: its own width, never squeezed by a long model name. */
+.effort-trigger {
+  flex: none;
+  max-width: none;
 }
 .model-trigger:hover:not(:disabled),
 .model-trigger[aria-expanded='true'] {
@@ -2484,6 +2488,14 @@ svg {
   color: var(--color-success);
   border-color: var(--color-success-subtle);
 }
+/* A server asking for a sign-in: the same size as a status, and the one control that opens the browser. */
+.extension-sign-in {
+  flex: none;
+  min-height: 0;
+  padding: 1px var(--sp-12);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .extension-body {
   display: flex;
   flex-direction: column;
@@ -2608,25 +2620,6 @@ svg {
   margin: var(--sp-4) 0 0;
 }
 
-/* Commentary inside the activity list. Short enough to say, it is said; longer
-   than that, it folds to the same single row as the thinking and the tools
-   beside it, so the list has one tier and not two. */
-.activity-note { min-width: 0; }
-.activity-note-body {
-  overflow: hidden;
-  transition: max-height var(--motion-base) var(--ease-out);
-}
-.activity-note[data-folded="true"] > .activity-note-body {
-  max-height: 0;
-  transition: max-height var(--motion-fast) var(--ease-in);
-}
-.activity-note > .activity-note-body > .markdown {
-  margin: var(--sp-8) 0;
-  color: var(--ink-secondary);
-  font-size: var(--fs-13);
-}
-/* A file printed out loud must not become the page: it scrolls in its own box. */
-.activity-note-body pre { max-height: 240px; overflow: auto; }
 
 /* A run said once. Its members are rows of the same tier, set off by
    whitespace: a heading for rows, never a card around them. */

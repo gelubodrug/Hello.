@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePart } from '../src/shared/types';
-import { activityLayout, activityRows, activitySummary, liveTail, stepDetail, stepLabel, thinkingTitle } from '../src/renderer/chat/activity';
+import { activityLayout, activityRows, activitySummary, liveTail, replySegments, stepDetail, stepLabel, thinkingTitle } from '../src/renderer/chat/activity';
 
 const text = (text: string): MessagePart => ({ type: 'text', text });
 const thought = (text: string): MessagePart => ({ type: 'thinking', text });
@@ -81,6 +81,34 @@ describe('chat activity layout and truthful labels', () => {
     expect([...layout.activity, ...layout.answer]).toEqual(parts);
     expect(activitySummary(layout.activity)).toMatchObject({ title: 'Research', counts: '1 search · 2 pages read' });
   });
+  it('lays a reply out by one rule: what is said stays where it was said, what is done folds', () => {
+    const answer = text('You are right.\n\nHere is why I went on without asking.');
+    const parts = [text('I will check.'), thought('Reasoning'), search, answer, page('first', 'https://example.com/one'), text('I found a source.'), page('second', 'https://example.com/two'), text('Final answer.')];
+    expect(replySegments(parts)).toEqual([
+      // A short remark is as much said as a long answer: neither is ever a step.
+      { kind: 'prose', index: 0 },
+      { kind: 'activity', start: 1, end: 3, grouped: true, last: false },
+      { kind: 'prose', index: 3 },
+      // A single step between two things said is its own row, not a list of one.
+      { kind: 'activity', start: 4, end: 5, grouped: false, last: false },
+      { kind: 'prose', index: 5 },
+      { kind: 'activity', start: 6, end: 7, grouped: false, last: true },
+      { kind: 'prose', index: 7 },
+    ]);
+    // Steps with nothing said between them are one list, however many.
+    expect(replySegments([thought('One'), search, page('first', 'https://example.com/one'), page('second', 'https://example.com/two'), text('Answer')]))
+      .toEqual([{ kind: 'activity', start: 0, end: 4, grouped: true, last: true }, { kind: 'prose', index: 4 }]);
+    // Words and nothing else are simply said; a single thought gets no wrapper; blank text is nothing.
+    expect(replySegments([text('An answer')])).toEqual([{ kind: 'prose', index: 0 }]);
+    expect(replySegments([thought('Reasoning'), text('An answer')])).toEqual([{ kind: 'activity', start: 0, end: 1, grouped: false, last: true }, { kind: 'prose', index: 1 }]);
+    expect(replySegments([thought('One'), text('  '), search])).toEqual([{ kind: 'activity', start: 0, end: 3, grouped: true, last: true }]);
+    // Length never decides: the same words are prose before a step arrives and after.
+    for (const said of [text('Ok.'), answer]) {
+      expect(replySegments([said])).toEqual([{ kind: 'prose', index: 0 }]);
+      expect(replySegments([said, search])[0]).toEqual({ kind: 'prose', index: 0 });
+    }
+  });
+
   it('never groups text-only messages or creates an extra wrapper for a single thought', () => {
     expect(activityLayout([text('An answer')], false)).toMatchObject({ activity: [], grouped: false });
     expect(activityLayout([thought('Reasoning'), text('An answer')], false).grouped).toBe(false);

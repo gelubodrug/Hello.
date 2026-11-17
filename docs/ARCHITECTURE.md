@@ -18,6 +18,7 @@ boundary is recorded in
 | Chat child | Pi in persistent RPC mode — the version pinned in package.json, or one updated from the sidebar into `<data>/pi/runtime`; agent execution and session context | [`chat/pi-rpc.ts`](../src/main/chat/pi-rpc.ts), [`chat/pi-extension.ts`](../src/main/chat/pi-extension.ts) |
 | Terminal children | Interactive shells and explicitly launched CLI clients; separate from the chat engine | [`terminal/`](../src/main/terminal/) |
 | DSH host (utility process) | One DeepSeek Harness profile (`hello`), booted like dsh's own desktop host; hosts the upstream DSH application | [`dsh/host-entry.ts`](../src/main/dsh/host-entry.ts), [`dsh/service.ts`](../src/main/dsh/service.ts) |
+| Workbooks | ExcelJS workbooks and IronCalc recalculation in main; the renderer shows a snapshot in Univer and reports typed cells | [`sheets/workbooks.ts`](../src/main/sheets/workbooks.ts), [`renderer/sheets/SheetsPane.tsx`](../src/renderer/sheets/SheetsPane.tsx) |
 | DSH surface (web content) | dsh's own web client in one `<webview>` of partition `persist:hello-dsh`, no preload; src and every preference from main | [`dsh/surface.ts`](../src/main/dsh/surface.ts), [`renderer/dsh/DshView.tsx`](../src/renderer/dsh/DshView.tsx) |
 
 The main window uses context isolation, Electron sandboxing and no Node
@@ -32,8 +33,20 @@ optional working folder, notebook (Runbooks, Tasks and Plans), browser tabs and 
 terminal/worker sessions. Settings, including the selected model endpoint, are
 application-wide.
 
-The chat area contains two permanent pills without close buttons: Chat and
-Notebook (user, 29.09: one button beside Chat, not one per section). The
+The chat area contains pills without close buttons: Chat, and — only in a chat
+that has it on — Workbook (user, 29.09: one button beside Chat, not one per
+section). The Workbook is what the person calls the chat's notebook: in code,
+in the model's tools and in the stored data it stays `notebook`, and a
+"workbook" there is an Excel file of the Sheets pane. It is a switch of the
+chat, **off by default** (user, 17.11: a chat is a chat until it needs more),
+first in the chat's menu in the sidebar, stored as `chat-notebook:<id>` and
+read as `Conversation.notebook`. While it is off the pill and the page are not
+there, and every section reads as off whatever is stored for it
+(`hydrateConversation`), so the model has no notebook tools, no line about
+them in its instructions, and CLI workers get empty exports; switched on
+again, the sections are as they were. A chat that used the page before the
+switch existed — a section on, or anything written — had it written down as on
+(database version 17). The
 notebook is one pane: a tree of three sections — Runbooks, Tasks and Plans —
 each with its chapters, beside the editor. A section's switch is the chat's own
 Runbook, Tasks or Plan setting (Plans holds the plan `plan_write` keeps and is
@@ -129,6 +142,142 @@ open document, coalesces bursts, and retains its tree selection, mode, scroll an
 text-selection positions. Late reads cannot replace a newly selected document.
 There is no filesystem watcher, and reads/rendering emit no change event.
 
+## Conversation Sheets tool
+
+A chat can hold Excel workbooks. Three libraries, one job each, all local:
+
+| Job | Library | Where |
+| --- | --- | --- |
+| The workbook itself: read and write `.xlsx`, cells, formulas, looks | ExcelJS (MIT) | main, [`sheets/workbooks.ts`](../src/main/sheets/workbooks.ts) |
+| Computing the formulas | IronCalc, its N-API Node binding (MIT/Apache-2.0) | main, [`sheets/engine.ts`](../src/main/sheets/engine.ts) |
+| The grid the person sees and types into | Univer sheets-core preset (Apache-2.0) | renderer, [`sheets/SheetsPane.tsx`](../src/renderer/sheets/SheetsPane.tsx) |
+
+Main owns the workbook. The renderer holds a picture of it (`SheetSnapshot`,
+[`shared/sheets.ts`](../src/shared/sheets.ts)) and reports what was typed; it
+never names a path and never writes a file.
+
+**Two kinds of workbook.** One Hello made (`sheet_new`, the pane's New, or a
+copy of a file picked from outside the folder) lives whole in
+`sheets/<sha256 of the chat id>/<uuid>.xlsx` beside a small `<uuid>.json`
+record, and is kept after every change. One opened from the chat's folder
+(`sheet_open`, or the pane's Open on a file inside the folder) is only pointed
+at by its folder-relative path: its changes are held in the same working copy
+and reach the file only on a save. Both survive a restart, unsaved changes
+included. The previous contents of a file a save replaces are copied to
+`sheets/<key>/history/` (the last 10). Deleting a chat removes its `sheets`
+folder.
+
+**Computing.** Every write ends in `recalculate`: ExcelJS writes the workbook
+to a private scratch file (`sheets/scratch/`, removed at once — the binding
+loads xlsx by path), IronCalc evaluates it, and each result is put beside its
+formula, so a saved file opens with values. A formula that ends in an error is
+returned by sheet, cell, formula and error. When the engine cannot load a
+workbook nothing is changed and the answer says the values may be old. The
+call is synchronous in the main process; workbooks are capped at 20 MB.
+
+**What is not carried.** ExcelJS does not round-trip charts, pivot tables,
+macros, slicers or links to other workbooks. Opening a file notes which of
+those its package holds (`lossy`); such a file is never saved over — only to a
+new path — and both the model and the pane say what the copy lacks. Only
+`.xlsx` opens.
+
+**Model tools** ([`sheets/tools.ts`](../src/main/sheets/tools.ts)), the
+`sheets` tool group, loaded with `tools_find` like the others: `sheet_list`,
+`sheet_new`, `sheet_open` (only with a folder), `sheet_read`, `sheet_write`
+(a block of rows, single cells, a look for a range, column widths; text
+starting with `=` is a formula; an unknown sheet name adds the sheet) and
+`sheet_save`. One workbook is one working place: the result of work on a
+workbook's data is a new sheet of that workbook. The tools hold that line —
+`sheet_new` refuses a title the chat already has and says when the chat holds
+other workbooks, `sheet_write` refuses to guess a sheet when there are several,
+and only a sheet the model added (`added` in the workbook's record) can be
+removed again (`removeSheet`). `sheet_read` with `summary` gives each column in
+a few numbers, so a large table is not read row by row. `sheet_group` is the
+pivot a person asks for, done by main in one call: the distinct values (or
+combinations of up to three columns) written once as labels in a new sheet,
+each with a `COUNTIFS` on the source, a share, a total and the count of rows
+with no key. It exists because a model given only cell reads and writes read
+the whole table to find the distinct values (a traced Haiku run: 19 calls and
+107,000 characters of results for what is now one call of about 1,200). A formula that returns
+a range (SORT, UNIQUE, FILTER…) keeps one value and is reported as `notKept`.
+Spreadsheet work is coder work, done with the shell and the file tools every
+chat has in view. A table reaches
+a script as a file, not through the model: `sheet_read toFile` writes the
+sheet's values as CSV to `sheets/<key>/exchange/` in the app's data and
+returns the path; the script (python3's `csv`, or node, through `bash`)
+writes its result beside it; `sheet_write fromFile` places a CSV from that
+folder or from the chat's folder, nothing else. A script never opens the
+`.xlsx` itself — main holds the workbook.
+**Where the person is looking.** The pane tells main which workbook and sheet
+it shows and which cells are selected (`sheets.select`, `Workbooks.setView`;
+memory only, cleared when the pane is hidden). The chat's live context carries
+it as one line — workbook, sheet, range, never cell contents — taken once per
+reply like the clock, so "check the formulas here" has a here. The pane shows
+what will go with the next message.
+
+**Charts.** `sheet_chart` puts a real Excel chart (bar, column, pie, line) in
+a sheet from a range of labels and a range of numbers. It runs Hello's own
+fixed openpyxl program (`chartScript` in `sheets/charts.ts`) through the same
+door as `sheet_script`; what the model chose reaches it as data, never as
+code, and a chart already at the anchor is replaced rather than joined.
+`sheet_save discard` gives up a file workbook's unsaved changes
+(`Workbooks.revert`).
+
+**The shell in a chat.** `bash` is in the core tool set wherever a chat has a
+folder, and Hello's extension keeps a tool of that name active in every chat
+step (`activeNow`, `pi-extension.ts`): tools a group brings exist only from
+the step after `tools_find`, and models call the shell in the same message
+that loads a group.
+
+**Scripts.** `sheet_script` runs Python with openpyxl on a workbook's own
+working file ([`sheets/python.ts`](../src/main/sheets/python.ts),
+`Workbooks.runScript`) — the route to what ExcelJS cannot write: real Excel
+charts, merged cells, conditional formats, structural edits. This is the
+approach of Anthropic's xlsx skill, with IronCalc in place of its LibreOffice
+recalculation. The interpreter is a virtual environment in
+`sheets/python/venv` in the app's data, built on first use (`python3 -m venv`,
+then `pip install openpyxl`, and pandas only where a ready-made build exists);
+the system's Python is not changed. A script gets `WORKBOOK` and `OUT`. Before
+it runs the file is copied; afterwards main reads it again, computes it in
+memory and returns the formula errors, or puts the copy back when what is left
+is not a workbook. What a script made that ExcelJS does not carry is recorded
+(`scripted`, the same package markers as `lossy`), and export and save hand
+over the file's own bytes. Charts are carried through Hello's own writer
+([`sheets/carried.ts`](../src/main/sheets/carried.ts)): after `sheet_write`,
+`sheet_group` or typing in the pane, the file ExcelJS wrote takes each sheet's
+drawing, its charts and what they name from the file that held them, matched
+by sheet name, so tables and charts are made in any order. Anything else a
+script made that ExcelJS does not carry still makes the file the script's:
+those writers are refused with the reason. `sheet_chart` cuts a pie of more
+than nine groups to the largest eight and Other (`top` for any chart), from a
+small table of formulas it writes beside the chart. `sheet_save` given the path
+of the file the workbook was opened from is a save over it, not a copy. The
+pane does not draw charts and says so. The
+charts a file holds are read from its package
+([`sheets/charts.ts`](../src/main/sheets/charts.ts): sheet, kind, title,
+anchor, cells) and returned by `sheet_script` and `sheet_read`, with a note
+when two charts of a sheet draw the same cells — openpyxl keeps existing
+charts on load, so adding one again leaves two. ExcelJS
+cannot even load a file whose sheet has a chart, so such a file is read from a
+copy with its drawing parts taken out (`readWorkbook`); this also lets a file
+that came with charts be opened at all.
+
+The group's manual (`sheetsManual`) carries the working rules: one place,
+prepare before writing, formulas rather than computed totals, fix reported
+errors, what the tools lack (pivots, charts), say what is unsaved.
+
+**The pane.** One Sheets tab per chat (`sheetsOpen`), holding all the chat's
+workbooks with one shown. Univer is imported on first use. Its toolbar, sheet
+bar and context menu are off: formats, sheets and rows are not reported to
+main, so the pane does not offer to change them; the pane draws its own sheet
+tabs. A change by the model rebuilds the grid from a new snapshot; what the
+person types arrives as `SheetValueChanged`, is sent as cell edits
+(`sheets.edit`) and computed by main, which ignores a report of what it
+already holds. A workbook the model makes or opens brings the Sheets tab up
+beside the chat without taking focus. IPC is in
+[`sheets/ipc.ts`](../src/main/sheets/ipc.ts); `hello:sheets-changed` carries
+ids and a revision, never data.
+
 ## Durable data
 
 [`DataStore`](../src/main/data/store.ts) owns a versioned SQLite database with WAL,
@@ -199,12 +348,60 @@ not a claim of live acceptance or complete CLI parity. Hello retains endpoint
 discovery and its configured OpenAI-compatible connection. Pi's broader provider
 catalog does not automatically become a supported Hello settings/authentication UI.
 
-The Chat/Coder composer switch persists under `chat-mode:<conversationId>` in
-the existing settings table, without a schema migration. Chat uses Hello's
-conversational prompt; Coder appends Hello capability guidance to Pi's coding
-prompt. Both share the same JSONL history and main-process tool gates. IPC rejects
-mode changes while a response is active. The next request restarts a warm process
-whose mode/configuration changed, reopening its existing session.
+**Three rules that cost a run its minutes (T194).** Measured on one task: a
+12,618-character script re-sent whole to mend one line; six checking scripts,
+each reading 29,425 rows again; and a script named `inspect.py`, which Python
+loaded in place of the module openpyxl imports — the same name chosen in two
+separate runs. The system prompt now says a script is written once and mended
+with `file_edit`, never named after a module, and checked in one pass at the
+end. They sit in `modeGuidance`, not in `CODING_MANUAL`: the `coding` group is
+`core`, and every path in the Pi extension filters `!group.core`, so that
+manual is never delivered.
+
+**The Python Hello keeps is named in the snapshot (T193).** The Mac's own
+`python3` need not have openpyxl — on the owner's it is Homebrew 3.15, which
+does not — and the only line saying Hello keeps one that does lived in the
+sheets manual, which is not loaded unless that group is. A model working in the
+shell therefore spent minutes probing interpreters and then built a 16 MB venv
+beside the person's data for a library already present. `liveContext` now names
+`sheetPythonInterpreter(dataDir)` when that file exists, with the rule not to
+pip install or build a venv. The path is constant, so it costs no prefix cache.
+
+**A sheet's extent is read once (T185).** ExcelJS's `columnCount` is a getter
+that walks every row of the sheet, and `rowCount` reads back over the row
+array. Left in a loop condition, either turns one pass over the cells into a
+quadratic. `sheet_read toFile` on a 29,426 x 14 sheet took 237,553 ms that way
+and 124 ms with the counts read once — and those four minutes were spent inside
+the main process with nothing yielding, so the window, the IPC and the Pi tool
+bridge stopped with it. Every pass now takes `extentOf(sheet)` first
+(`main/sheets/workbooks.ts`) and loops on the numbers; a count never appears in
+a loop condition. `tests/sheets-tools.test.ts` builds a 6,000-row sheet and
+fails if export, summary or grouping stops being quick.
+
+**Reasoning effort, beside the model (user, 17.11).** The composer has an
+effort selector next to the model picker: a Thinking switch and Low, Medium,
+High (`shared/reasoning.ts`, `EFFORT_LEVELS`). It is the same
+`settings.reasoningEffort` Settings always had, saved through `settings.save`;
+it reaches Pi as `--thinking`, so a change applies from the next message, in a
+session whose launch says so. Under the switch the menu says what the chat's
+connection does with a level (`effortHint`, from `reasoningReach`): the level
+itself, only on or off, or nothing at all. Nothing above High is offered: for
+a model Hello declares to Pi without a `thinkingLevelMap`, Pi sends the
+provider's own value through `high` and treats `xhigh` and `max` as
+unsupported.
+
+**One way of working (user, 17.11).** A chat has no mode: the Chat/Coder
+switch is gone, and with it every "if" it stood for. Every chat runs on Hello's
+own system prompt (`--system-prompt`; Pi's coding prompt, written for tools
+Hello does not offer, is never appended to), has `bash` and the file tools in
+view from its first step, and reads its folder's root instructions. A reply
+also always has a folder: where the person chose none, `ChatService.start`
+attaches the folder Hello keeps for the chat (`ensureFolder`, the same
+`Chat files` folder a dropped file lands in), so no tool waits for one. To the
+person that folder is "none chosen" — the composer and Work path show it as
+not set — and what is made there reaches them as a link. A `chat-mode:` row an
+older version stored is read by nothing and goes with its chat. What still
+asks is what was never a mode: approvals, per-tab Agent control, path scope.
 
 **Engine updates.** The sidebar's footer shows the Pi that runs and, only when
 npm's `latest` is newer, `update` (`chat/pi-engine.ts`, asked a moment after
@@ -260,11 +457,11 @@ the output cap can raise this minimum. Smaller profiles need separate tuning.
 
 The pinned startup contract disables AGENTS.md/CLAUDE.md discovery with Pi's
 `-nc`; extension/skill/prompt discovery stays disabled with `-ne`, `-ns` and `-np`.
-In Coder mode only, Hello explicitly imports root `AGENTS.md` (or root
-`CLAUDE.md` when AGENTS.md is absent) from the attached folder, capped at 32 KiB.
+In every chat, Hello explicitly imports root `AGENTS.md` (or root
+`CLAUDE.md` when AGENTS.md is absent) from the chat's folder, capped at 32 KiB.
 It does not walk parents or subfolders or follow file links. The contents join
-the appended system instructions and the session fingerprint, so edits take
-effect on the next turn. Chat mode omits them; there is no separate switch.
+the system instructions and the session fingerprint, so edits take
+effect on the next turn. There is no switch for it.
 It disables only native tools with `--no-builtin-tools`, while explicitly loading
 the Hello tool extension. `--no-tools` would disable extension tools too and is
 not an equivalent flag.
@@ -275,9 +472,12 @@ skill, `-e <entry>` per plugin extension and `--prompt-template <file>` per
 plugin template, with discovery still off. Changing the selection, imported
 fingerprint, MCP configuration or tool definitions changes the session
 fingerprint, so the child restarts on the same
-durable session file. MCP is not a Pi feature: `src/main/extensions/mcp.ts` is
-Hello's own stdio client, and its tools are offered through the same tool bridge
-as Hello's built-in ones. `src/main/extensions/library.ts` owns import,
+durable session file. MCP stays out of Pi: `src/main/extensions/mcp.ts` is
+Hello's own client — its stdio transport, and for remote servers streamable HTTP
+and OAuth through `@earendil-works/pi-mcp` behind the same `McpLink` — and its
+tools are offered through the same tool bridge as Hello's built-in ones. Pi 1.4's
+built-in MCP extension is off (`-ne`): it would bypass the per-chat `mcp:<server>`
+groups and needs the TUI's `/mcp` screen to sign in. `src/main/extensions/library.ts` owns import,
 verification and the imported copies under `<data>/library/`.
 
 A plugin extension that imports npm packages is bundled once, at import, by
@@ -303,11 +503,189 @@ there (OpenViking's memory scopes itself by the folder's git remote). Pi's own
 `ctx.cwd` and `pi.exec`'s default stay the private directory; an extension that
 wants the folder explicitly reads `HELLO_CHAT_FOLDER`.
 
+A group can also be loaded by Hello before a reply's first step. Main reads
+the request (`ChatService.preloadGroups`, once per reply): a spreadsheet file
+named or attached, the thing called by its name (`spreadsheetWork`), or the
+Sheets pane showing a workbook as the person writes, and the bridge's tool
+listing carries `preload: ['sheets']`. The Pi extension answers at
+`before_agent_start`: it activates the group and what it brings, and returns
+one custom message (`hello-tools-loaded`) with the same text a `tools_find`
+result has — the tools in a line each and the manual. That message is in the
+durable transcript, so the rules are said once per chat, never per step and
+never per tool result; a restarted Pi reads it back as it reads a `tools_find`
+result, and a compaction that summarized it away unloads the group so the next
+reply that needs it loads it again. Pi places such a message after the request;
+the `context` hook shows it ahead of the request on every step alike, so the
+rules come first and the person's words last. The sheets manual
+(`sheetsManual`) is the only place the rules for workbooks are written: there
+is no spreadsheet skill beside it, the system prompt no longer sends the model
+to `skills_find` for one, and tool results carry what happened, not the rules
+again. With the sheets group the runtime snapshot also names the chat's
+workbooks by id and the folder's unopened `.xlsx` files (`sheetState`, taken
+once per reply), which is what `sheet_list` returns without the step.
+
+What a result says, it says about that call. A workbook's sheets, what its
+file holds besides cells and what that means are given when the file is opened
+(`summary(info, true)`), and after that a result carries the fact in a word
+(`holds`, `unsavedChanges`) and no sentence: a note repeated in every result
+was half of what a model read in a five-call task. For each `.xlsx` of the
+folder not opened yet the snapshot also names its sheets and how many charts
+it holds, read from the package (`outlineOf`), so a file worked on before is
+seen as such before the first step.
+
+`sheet_group` groups by the label a person reads: case and the spaces around
+it do not make another group, because the COUNTIFS that counts it ignores case
+and does not trim — separate groups counted every row several times, and a
+trimmed label missed the rows written with a space. A group written one way is
+counted through its own cell; one written several ways, or holding a character
+COUNTIFS reads as a pattern or a comparison, by the sum of one exact-text
+criterion per way (`"=…"`, `~*`, `~?`). The Total is compared with the rows
+counted and a difference is reported instead of the word "checked". A header
+two columns share is refused with their letters. The table's own words
+(`labels`) and the chart table's rest (`other`) are the caller's, so a
+Romanian workbook is not given English headers.
+
+The charts a file came with are carried the same way as a script's: on the
+first change Hello's writer makes, they are taken from the file itself
+(`persist`), and from then on the workbook is saved over its file like any
+other. Where they cannot be carried the old rule holds — a version without
+them, saved only to a new path. `sheet_save` with a path and `discard: true`
+writes the copy and gives up the changes held against the original in one call.
+
+`sheet_chart` also works straight from the data: `by` names a column, and the
+tool counts it with `Workbooks.group` onto a new sheet and draws the chart from
+that table — one call for "a chart of how many per …", with the counts, the
+rows left out and the look-alike labels in its result. Labels that differ only
+by an accent, a hyphen or a dot stay separate groups and are returned as
+`alike`; counting them together (`together`) is the person's decision, and the
+manual has the model ask for it at the end of its answer rather than choose.
+
+In the chat a link whose destination has a space — `[Raport final.xlsx](Raport
+final.xlsx)`, as a model names a file — is given the angle brackets Markdown
+needs before it is parsed (`spacedLinks`), and a linked `.xlsx` brings up the
+Sheets pane instead of the Files viewer.
+
+A workbook computes, and the tools are made so that a script is not needed to
+make it do so. Beside the count `sheet_group` takes `also`: another column per
+group summed, averaged, its least or most (SUMIFS, AVERAGEIFS, MINIFS, MAXIFS
+on the data) or its values listed. The list is a formula as well — a TEXTJOIN
+over an IF on the group's rows, written as an array formula — which Excel
+computes and IronCalc answers with `#N/IMPL!`. `recalculate` computes that one
+shape itself ([`sheets/listed.ts`](../src/main/sheets/listed.ts): TEXTJOIN over
+IF or FILTER, one vector chosen by comparisons of others, summed and
+multiplied as "or" and "and"), from the values the engine gave everything
+else, and then runs the engine once more with those lists standing as text so
+that formulas reading them compute too. A model that met the `#N/IMPL!` had
+built a helper sheet of 1,702 formulas to avoid it. Any other formula the
+engine does not implement keeps the value it had in the file and is reported
+as `notComputed`; with no value to keep it is an error like any other. A
+formula that compares a whole range cell by cell anywhere else — `SUM(IF(A2:A90="x",…))`
+— gets a number from the engine and no error, from one row of the range where
+Excel 365 reads them all; `comparesRange` names those (`unsure`) and the result
+tells the model to write them with SUMIFS, COUNTIFS or SUMPRODUCT. `sheet_script` reports each sheet a script made that
+holds numbers and no formula, with what to write instead. `sheet_read` with
+`find` returns the cells that contain a text, in one sheet or all. A chart
+that needs a table of its own and was given no sheet gets one, named after the
+chart, so nothing is written into the sheet whose cells it draws.
+
+An `.xlsx` dropped on the chat is not attached as text: `ChatService.attach`
+opens it as a workbook of the chat (where it is, when it lies in the chat's
+folder; a copy otherwise) and `Workbooks.reveal` brings the Sheets pane up.
+
+Two things a file needs for Excel are the app's business, not the model's.
+Functions newer than the file format are kept and shown plain (`=IFS(…)`) and
+written into files with their prefix (`_xlfn.IFS(…)`,
+[`sheets/future.ts`](../src/main/sheets/future.ts)): without it Excel shows
+`#NAME?` although Hello's own engine computes the formula. A chart
+`sheet_chart` makes says outright what openpyxl leaves unsaid — square frame,
+legend and title beside the plot, axes shown, a pie's labels as the share only.
+
+### A chat with no folder, and a file dropped on it
+
+A PDF or an `.xlsx` dropped on a chat that has no folder of the person's is
+copied into a folder Hello keeps for that chat —
+`chat-files/<sha256 of the chat id>/Chat files` in the app's data
+(`chat/chat-folder.ts`) — and that folder becomes the chat's folder
+(`ChatService.attach`). Nothing else is special about it: every file, sheet and
+PDF tool, the shell and the Files tab work there as in a folder the person
+chose, a dropped workbook is opened as a file of it, and a second file of the
+same name gets a number rather than replacing the first. The composer names
+the dropped file in the draft, so the message says which file it is about. The
+runtime snapshot tells the model that this folder is Hello's, what it holds,
+and that the person does not see it: each file made or changed is handed over
+as a Markdown link. A click on such a link calls `files.deliver`, which asks
+where to save a copy (Downloads by default) and shows it in Finder; in a folder
+of the person's the same call only shows the file where it already is. The
+folder goes when the chat is deleted. Where a chat has a folder of the
+person's, a dropped PDF of that folder is named to the composer by its path.
+One from elsewhere follows the model of a workbook from elsewhere (user,
+17.11): Hello keeps a copy for the chat — in that same `Chat files` folder,
+which is then not the chat's folder — and the person's folder gets nothing it
+was not asked to hold. The copy takes a name no file at the top of the folder
+has, the runtime snapshot names it, and the PDF tools find it by that name
+alone (`keptFile`): the folder is asked first, then the kept files; no path
+reaches them, no other tool does, and what `pdf_compress` makes from one is
+written into the person's folder like any result. A link to the kept file
+itself goes through `files.deliver` and saves a copy where the person chooses.
+
+### PDF — reading one, and making a vector PDF smaller
+
+`src/main/pdf/` is a tool group of its own (`pdf`: `pdf_read`, `pdf_inspect`,
+`pdf_compress`), offered where a chat has a folder and loaded before the first
+step when a request names a PDF file, or the word with something asked of it —
+to read it, to find something in it, to make it smaller (`pdfWork`).
+
+`pdf_read` uses the Mac's poppler and no Python. `pdfinfo` counts the pages;
+`pdftotext` writes the text of a page range into a file in the app's data
+(`pdf/work`, removed after each call), which is returned page by page in whole
+pages up to about 28,000 characters, with `next` naming what is left and
+`pagesWithoutText` naming the pages that are pictures. Where every page asked
+for has no text — a scan, a drawing — or when pictures are asked for, the
+pages are rendered with `pdftoppm` as JPEGs (1,600 px on the long side, 1,000
+when one would be too heavy) and returned as the tool's pictures, four a call,
+the same way a browser screenshot is: a model that sees reads them, and the
+text says they were pictures. `find` returns the pages and lines that contain
+a text, without regard to capitals or accents. Hello does not install poppler;
+without it the tool says so and how the person installs it.
+
+The compression recipe
+is one fixed program, `PDF_PROGRAM` in
+[`pdf/program.ts`](../src/main/pdf/program.ts), run with pikepdf in a Python
+environment of Hello's own (`pdf/python`, built on first use like the one for
+sheets). It keeps a plan or drawing vector: coordinates are written with fewer
+decimals, a colour set again to what it already is and a line to its own start
+are left out, graphics states that say the same thing become one, and the file
+is saved with object streams. Four levels, mildest first; the first that
+reaches the target is kept, and with no target only the lossless one runs. The
+result is always a new file; the original is never written. Afterwards both
+files are rendered (`pdftoppm`, when the Mac has poppler) and compared pixel by
+pixel, and the tool's result says what each level came to, whether the target
+was reached and whether the two render alike — or that it could not check, and
+why. What the model chooses reaches the program as a JSON job in its
+environment, never as code, and the program's answer comes back in a file of
+its own rather than on its output, which the shell runner filters.
+
 Tools are prompt-context driven (`src/main/chat/tool-groups.ts`). A request
 carries a core set — `web_search`, `fetch_url`, `tools_find`, `skills_find` /
-`skill_load`, and `plan_write` when the chat turned it on; in Coder mode also the coding group —
+`skill_load`, `bash`, the file tools (the `coding` group, in view in every
+chat) and `plan_write` when the chat turned it on —
 and every other area is a group the model loads with `tools_find` when its work
-gets there: `coding` (files and shell), `browser`, `workers`, `notebook`, one per
+gets there, or that Hello loads by itself when the request plainly is that work
+(`ChatService.preloadGroups`: `sheets`, `pdf`, and `browser` when the request
+names an address, a site, a link or a tab, or the person handed a tab over). The
+browser's sixteen tools and manual weigh more than the rest of a first request
+together, which is why they are not in view everywhere; a `web_search` or
+`fetch_url` stopped by bot protection loads them in the Pi extension and says
+so in the failure, with the search's address ready to open (`stoppedByBots`).
+A request for a group already in view is answered as that, not with the list.
+And a
+failure that sends the model to another group's tools loads that group for the
+next step (`groupAfter`): `file_read` given a PDF or a workbook names `pdf_read`
+or `sheet_open` and they are there. `file_read` itself gives a document — `.rtf`,
+`.doc`, `.docx`, `.odt` — as the text in it (`chat/document-text.ts`, the Mac's
+`textutil`), and `fetch_url` given a file of the Mac says that `file_read` reads
+it, with the name to give.
+The groups: `browser`, `sheets`, `pdf`, `workers`, `notebook`, one per
 MCP server and one per plugin extension (grouped in the Pi child by the
 extension that registered each tool). Loading activates the group for the next
 step through `pi.setActiveTools()` and returns its manual — the rules that used
@@ -405,7 +783,11 @@ names and descriptions. MCP keeps one process per configured server, shared by
 activated chats; access is checked at both discovery and call time. Pending
 starts are owned and stopped on disconnect/dispose too. Its stdio client validates
 the protocol version and tools capability, follows bounded tool pagination and
-refreshes a changed tool catalog between turns. Its trust boundaries and limits
+refreshes a changed tool catalog between turns. An HTTP server (`transport:
+'http'`, `url`, header names in `envNames`) is a `McpHttpConnection`: the same
+tool limits, a session the server forgot reopened once, and a 401 surfaced as
+`needsSignIn` for Settings' Sign in (`McpManager.signIn`, the MCP authorization
+flow with a loopback callback). Its trust boundaries and limits
 are in [SECURITY.md](SECURITY.md); the 10.09 verification report is archived
 ([archive](archive/EXTENSIONS-VERIFICATION-2026-09-10.md)).
 
@@ -577,7 +959,7 @@ clears the chats on it, and deleting a chat clears its row.
   there is nothing left to approve.
 - **Readable code steps (B1).** `file_edit` shows a line diff (`chat/diff.ts`,
   LCS, at most 500 lines a side, otherwise Old and New), `file_write` the file's
-  code, `command_run` a shell block (`chat/ToolCode.tsx`); any other tool, or input
+  code, `bash` a shell block (`chat/ToolCode.tsx`); any other tool, or input
   that does not parse, stays JSON. The − and + are text, not only colour.
 - **Appearance (B2).** Settings › App › Appearance: System, Light or Dark sets
   `data-theme` on the document root (absent for System), and main sets

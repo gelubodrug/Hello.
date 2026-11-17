@@ -314,7 +314,7 @@ describe('the model’s side', () => {
 
   it('tells the model to look for a skill only when it can', () => {
     const settings = { systemPrompt: '' } as AppSettings;
-    expect(helloSystemPrompt(settings, 'chat', { skills: [], mcp: [], catalog: true })).toContain('Skills are prompt-context driven too');
-    expect(helloSystemPrompt(settings, 'chat', { skills: [], mcp: [] })).not.toContain('skills_find');
+    expect(helloSystemPrompt(settings, { skills: [], mcp: [], catalog: true })).toContain('Skills are prompt-context driven too');
+    expect(helloSystemPrompt(settings, { skills: [], mcp: [] })).not.toContain('skills_find');
   });
 });

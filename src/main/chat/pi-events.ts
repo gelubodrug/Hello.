@@ -3,6 +3,7 @@
 // dist/modes/json-event.d.ts. This reducer owns presentation only; Pi owns
 // the agent loop, retries, compaction, and durable session history.
 import type { Message, MessagePart } from '../../shared/types';
+import type { MeasuredCall } from './runtime-status';
 
 type ToolPart = Extract<MessagePart, { type: 'tool' }>;
 type ThinkingPart = Extract<MessagePart, { type: 'thinking' }>;
@@ -148,6 +149,10 @@ export class PiEventMapper {
   private warning?: string;
   private aborted = false;
   private compaction?: PiCompactionState;
+  /** The model call streaming now: when it began, and when its first token came. */
+  private callStart?: number;
+  private firstToken?: number;
+  private readonly measured: MeasuredCall[] = [];
 
   constructor(readonly message: Message, private readonly now: () => number = Date.now) {
     message.parts ??= [];
@@ -163,6 +168,11 @@ export class PiEventMapper {
    * an otherwise empty new response look successful. */
   get responseText(): string {
     return this.message.parts!.filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text' && !this.priorParts.has(part)).map(part => part.text).join('\n\n');
+  }
+
+  /** The model calls that ended since the last take, timed as they streamed in. */
+  takeMeasured(): MeasuredCall[] {
+    return this.measured.splice(0);
   }
 
   apply(value: unknown): PiEventUpdate {
@@ -203,6 +213,8 @@ export class PiEventMapper {
       this.closeThinking(at);
       this.commitActiveUsage();
       this.active = { blocks: new Map(), pendingArgs: new Map() };
+      this.callStart = at;
+      this.firstToken = undefined;
       // Pi can emit message_start with an already-finished response when a
       // provider never streamed. Such a snapshot supplies no thinking timing.
       this.acceptContent(incoming.content, true, at);
@@ -219,6 +231,8 @@ export class PiEventMapper {
       else this.acceptDelta(delta, at);
       this.setActiveUsage(event.usage ?? partial?.usage);
       const subtype = string(delta.type) ?? '';
+      // A delta is a token arriving; a start or end only frames a block.
+      if (subtype.endsWith('_delta')) { this.callStart ??= at; this.firstToken ??= at; }
       if (subtype.startsWith('thinking')) this.phase = 'thinking';
       else if (subtype.startsWith('text')) this.phase = 'writing';
       else if (subtype.startsWith('toolcall')) this.phase = 'tool';
@@ -239,6 +253,15 @@ export class PiEventMapper {
         this.commitActiveUsage();
         this.active = undefined;
         const reason = string(incoming.stopReason);
+        // Timed only when it streamed: a reply that arrived whole, or one cut
+        // off, has no first-to-last token time worth dividing by.
+        const usage = readUsage(incoming.usage);
+        if (usage && usage.output > 0 && this.firstToken !== undefined && reason !== 'error' && reason !== 'aborted')
+          this.measured.push({
+            at, input: promptOf(usage), output: usage.output, streamMs: at - this.firstToken,
+            ...(this.callStart === undefined ? {} : { firstTokenMs: this.firstToken - this.callStart }),
+          });
+        this.callStart = this.firstToken = undefined;
         if (reason === 'error' || reason === 'aborted') {
           this.aborted = reason === 'aborted';
           const reported = string(incoming.errorMessage) ?? string(incoming.error);

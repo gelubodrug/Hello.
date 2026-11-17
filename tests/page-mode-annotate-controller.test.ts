@@ -302,7 +302,7 @@ describe('Annotate — PageModeController', () => {
       expect(uses).toHaveLength(4);
       expect(uses[0]).toMatch(/^const pageModes=new PageModeController\(/);
       expect(uses[1]).toBe('await pageModes.removeConversation(id).catch(()=>{});');
-      expect(uses[2]).toBe("},()=>emit('hello:extensions-changed',{}),pageModes);");
+      expect(uses[2]).toBe("},()=>emit('hello:extensions-changed',{}),pageModes,voice);");
       expect(uses[3]).toBe("{name:'page modes',dispose:()=>pageModes.dispose()},");
     });
 

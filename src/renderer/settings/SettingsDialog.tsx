@@ -1,21 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Blocks, Check, ChevronDown, ChevronLeft, Plug, RefreshCw, SlidersHorizontal, Star, AppWindow } from "lucide-react";
-import type { AppSettings, LocalServer, ModelChoice, SettingsPatch, VoiceServer } from "../../shared/types";
+import type { AppSettings, ConnectionModels, LocalServer, ModelChoice, SettingsPatch, VoiceServer } from "../../shared/types";
 import { api } from "../api";
 import { ErrorNote, IconButton, MenuButton, MenuLayerAbove, errorText } from "../ui/primitives";
+import type { MenuItem } from "../ui/primitives";
 import { ExtensionsSection } from "./ExtensionsSection";
 import { AppAuditSection } from "./AppAuditSection";
 import { VoiceSection } from "./VoiceSection";
-import { reasoningNote, reasoningReach } from "../../shared/reasoning";
+import { EFFORT_LEVELS, reasoningNote, reasoningReach } from "../../shared/reasoning";
 import { ENDPOINT_PRESETS, endpointIdentity, modelName, presetFor, suggestedName } from "./presets";
+import { connectionName } from "../../shared/connection-name";
 import { compactNumber, t } from "../i18n";
 
-const reasoningOptions = [
-  { value: "off", label: "Provider default" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-] as const;
+// The same levels the composer offers beside the model.
+const reasoningOptions = [{ value: "off", label: "Provider default" }, ...EFFORT_LEVELS] as const;
 const approvalOptions = [
   { value: 'all', label: 'Work without asking', detail: 'Writes in the chat folder and shell commands run straight away' },
   { value: 'writes', label: 'Ask before commands', detail: 'Files in the chat folder are written; a shell command waits for you' },
@@ -69,6 +67,8 @@ export function SettingsDialog({
   const [limitsEdited, setLimitsEdited] = useState(false);
   const [keyMasked, setKeyMasked] = useState(false);
   const [models, setModels] = useState<ModelChoice[]>([]);
+  /** The kept connections' models, for a subagent model that is not on the chat's connection. */
+  const [catalog, setCatalog] = useState<ConnectionModels[]>([]);
   const [probe, setProbe] = useState<Probe>({ state: 'idle' });
   const [servers, setServers] = useState<LocalServer[] | null>(null);
   const [voiceServers, setVoiceServers] = useState<VoiceServer[] | null>(null);
@@ -103,6 +103,8 @@ export function SettingsDialog({
       setError(null);
       setSaved(false);
       setModels([]);
+      setCatalog([]);
+      void api.settings.catalog().then(setCatalog, () => {});
       setServers(null);
       setVoiceServers(null);
       void scan();
@@ -145,6 +147,13 @@ export function SettingsDialog({
 
   const remembered = settings.connections.find(
     entry => endpointIdentity(entry.endpointUrl) === endpointIdentity(draft.endpointUrl));
+  // A kept connection on this Mac is named by the server answering there now,
+  // never by one that ran there before; keeping it again rewrites the name.
+  const named = (entry: { name: string; endpointUrl: string }) => connectionName(entry, servers ?? []);
+  const keepName = named({
+    name: remembered?.name || suggestedName(draft.endpointUrl) || draft.endpointUrl.trim(),
+    endpointUrl: draft.endpointUrl,
+  });
   const preset = presetFor(draft.endpointUrl);
   const keyShown = keyOpen || keyMasked || key !== "" || !isLocal(draft.endpointUrl);
   // A key, a model id and a model list all belong to the exact server that
@@ -201,8 +210,20 @@ export function SettingsDialog({
     modelCompatibility: draft.modelCompatibility ?? 'auto',
     approvals: draft.approvals ?? 'all',
     subagentModel: (draft.subagentModel ?? '').trim(),
+    subagentEndpointUrl: (draft.subagentModel ?? '').trim() ? (draft.subagentEndpointUrl ?? '') : '',
     ...(keyEdited ? { apiKey: key } : {}),
   });
+  // The other connections a subagent model can be on: the kept ones, by the
+  // name they were kept under. Only a kept connection has a key of its own.
+  const otherConnections = (draft.connections ?? []).filter(kept => endpointIdentity(kept.endpointUrl) !== endpointIdentity(draft.endpointUrl)).map(kept => {
+    const listed = catalog.find(entry => endpointIdentity(entry.endpointUrl) === endpointIdentity(kept.endpointUrl));
+    return { name: kept.name || suggestedName(kept.endpointUrl) || kept.endpointUrl, endpointUrl: kept.endpointUrl, models: listed?.models ?? [], error: listed?.error };
+  });
+  const subagentElsewhere = draft.subagentModel?.trim() && draft.subagentEndpointUrl
+    ? otherConnections.find(connection => endpointIdentity(connection.endpointUrl) === endpointIdentity(draft.subagentEndpointUrl!))
+    : undefined;
+  const subagentUnlisted = Boolean(subagentElsewhere && subagentElsewhere.models.length &&
+    !subagentElsewhere.models.some(model => model.id === draft.subagentModel?.trim()));
   const save = () => run(async () => {
     const result = await api.settings.save(patch());
     // A key just saved is what the endpoint may have been waiting for.
@@ -503,7 +524,7 @@ export function SettingsDialog({
             items={[
               ...settings.connections.map(entry => ({
                 id: entry.endpointUrl,
-                label: entry.name,
+                label: named(entry),
                 detail: entry.model ? modelName(entry.model) : entry.endpointUrl,
                 checked: endpointIdentity(entry.endpointUrl) === endpointIdentity(settings.endpointUrl),
                 action: () => void run(() => api.settings.useConnection(entry.endpointUrl)),
@@ -511,14 +532,13 @@ export function SettingsDialog({
               ...(settings.connections.length ? [{ id: 'keep-separator', label: '', separator: true }] : []),
               {
                 id: 'keep',
-                label: remembered ? `Update “${remembered.name}”` : 'Keep this connection',
+                label: remembered ? `Update “${keepName}”` : 'Keep this connection',
                 detail: remembered
                   ? 'Saves the endpoint, key and model as they are now'
-                  : `Saves this endpoint, key and model as “${suggestedName(draft.endpointUrl) || 'this connection'}”`,
+                  : `Saves this endpoint, key and model as “${keepName || 'this connection'}”`,
                 action: () => void run(async () => {
                   await api.settings.save(patch());
-                  return api.settings.rememberConnection(
-                    remembered?.name || suggestedName(draft.endpointUrl) || draft.endpointUrl.trim());
+                  return api.settings.rememberConnection(keepName);
                 }),
               },
               ...(settings.connections.some(entry => endpointIdentity(entry.endpointUrl) !== endpointIdentity(settings.endpointUrl))
@@ -529,7 +549,7 @@ export function SettingsDialog({
                       .filter(entry => endpointIdentity(entry.endpointUrl) !== endpointIdentity(settings.endpointUrl))
                       .map(entry => ({
                         id: `forget:${entry.endpointUrl}`,
-                        label: entry.name,
+                        label: named(entry),
                         detail: 'Also deletes its saved key',
                         action: () => void run(() => api.settings.forgetConnection(entry.endpointUrl)),
                       })),
@@ -538,7 +558,7 @@ export function SettingsDialog({
             ]}
           >
             <Star size={14} aria-hidden />
-            {remembered ? remembered.name : 'Saved'}
+            {remembered ? named(remembered) : 'Saved'}
             <ChevronDown size={14} />
           </MenuButton>
         </div>
@@ -631,8 +651,9 @@ export function SettingsDialog({
             <ChevronDown size={14} />
           </MenuButton>
         </div>
-        {/* The model a plugin's subagents run on (pi-subagents), on this same
-            connection: a quick one keeps a fan-out from waiting on a slow chat model. */}
+        {/* The model a plugin's subagents run on (pi-subagents): on this
+            connection, or on another one the person kept — a local chat model
+            with its subagents on a provider (user, 16.11). */}
         <div className="settings-model-row">
           <label>
             Model for subagents
@@ -641,13 +662,19 @@ export function SettingsDialog({
               placeholder="Same as the chat"
               onChange={(event) => setDraft((value) => ({ ...value, subagentModel: event.target.value }))}
             />
-            {probe.state === 'ok' && models.length > 0 && draft.subagentModel?.trim() &&
+            {subagentElsewhere && subagentUnlisted ? (
+              <span className="settings-status" data-state="error" role="status">
+                {subagentElsewhere.name} does not list that model. Subagents will use the chat’s model until it does.
+              </span>
+            ) : subagentElsewhere ? (
+              <span className="muted">On {subagentElsewhere.name}, with that connection’s key. What the chat hands a subagent is sent there.</span>
+            ) : probe.state === 'ok' && models.length > 0 && draft.subagentModel?.trim() &&
               !models.some(model => model.id === draft.subagentModel?.trim()) ? (
               <span className="settings-status" data-state="error" role="status">
                 This address does not list that model. Subagents will use the chat’s model until it does.
               </span>
             ) : (
-              <span className="muted">For plugins that start subagents, such as pi-subagents. Empty: they use the chat’s model.</span>
+              <span className="muted">For plugins that start subagents, such as pi-subagents. Empty: they use the chat’s model. It can be a model of another connection you kept.</span>
             )}
           </label>
           <MenuButton
@@ -655,13 +682,23 @@ export function SettingsDialog({
             searchPlaceholder={'search models try "free"'}
             className="pill"
             items={[
-              { id: "same", label: "Same as the chat", checked: !draft.subagentModel?.trim(), action: () => setDraft(value => ({ ...value, subagentModel: "" })) },
-              ...models.map((model) => ({
+              { id: "same", label: "Same as the chat", checked: !draft.subagentModel?.trim(), action: () => setDraft(value => ({ ...value, subagentModel: "", subagentEndpointUrl: "" })) },
+              ...models.map((model): MenuItem => ({
                 id: `subagent:${model.id}`,
                 label: modelName(model.id),
-                checked: draft.subagentModel === model.id,
-                action: () => setDraft(value => ({ ...value, subagentModel: model.id })),
+                ...(otherConnections.length ? { group: 'This connection' } : {}),
+                checked: !subagentElsewhere && draft.subagentModel === model.id,
+                action: () => setDraft(value => ({ ...value, subagentModel: model.id, subagentEndpointUrl: "" })),
               })),
+              ...otherConnections.flatMap((connection): MenuItem[] => connection.models.length
+                ? connection.models.map((model): MenuItem => ({
+                  id: `subagent:${connection.endpointUrl} ${model.id}`,
+                  label: modelName(model.id),
+                  group: connection.name,
+                  checked: subagentElsewhere?.endpointUrl === connection.endpointUrl && draft.subagentModel === model.id,
+                  action: () => setDraft(value => ({ ...value, subagentModel: model.id, subagentEndpointUrl: connection.endpointUrl })),
+                }))
+                : [{ id: `subagent-unreachable:${connection.endpointUrl}`, label: connection.name, detail: connection.error ?? 'No models listed', group: connection.name, disabled: true }]),
             ]}
           >
             <ChevronDown size={14} />

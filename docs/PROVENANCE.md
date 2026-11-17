@@ -16,7 +16,7 @@ At the owner's request, the sibling app’s `src/Sidebar.tsx` `SessionBranchAddR
 `src/ui/app.css` `.sidebar-new-resource-actions .sidebar-new-option-plus`
 were consulted read-only in `sibling-app`.
 The source reveals a plus through width and opacity with `--t-fast: 80ms ease`.
-Hello adapts that motion to the Chat/Coder, Runbook and Tasks titles: active
+Hello adapts that motion to the Chat, Runbook and Tasks titles: active
 titles stay open, inactive titles reveal on hover/focus beside a permanent icon.
 The existing Hello pill styling and tab ownership remain; no add/branch behavior
 or source-app state was copied. Reduced-motion handling uses Hello's settings.
@@ -425,3 +425,91 @@ run, per the active workflow. Full installation, Gatekeeper behavior, audio
 quality, microphone permissions, cancellation/retry UI and process shutdown on
 Apple Silicon and Intel remain user-run application checks. Neither models nor
 model credits were used, and no app/build/packaging/test command was run.
+
+## Sheets — 2026-11-15
+
+The Sheets module is new code in `src/main/sheets/`, `src/renderer/sheets/`
+and `src/shared/sheets.ts`; nothing was taken from the old application or from
+The sibling app. It depends on three packages, pinned exactly, unmodified:
+
+- [ExcelJS 4.4.0](https://github.com/exceljs/exceljs) (MIT) reads and writes
+  `.xlsx` in the main process.
+- [@ironcalc/nodejs 0.9.1](https://github.com/ironcalc/IronCalc) (MIT or
+  Apache-2.0) computes formulas: a prebuilt N-API addon, so one binary serves
+  Node and Electron without a rebuild. Its platform binary arrives as an
+  optional dependency (`@ironcalc/nodejs-darwin-arm64` on this Mac).
+- [@univerjs/presets and @univerjs/preset-sheets-core 1.5.0](https://github.com/dream-num/univer)
+  (Apache-2.0) draw the grid in the renderer.
+
+The recalculate-after-write rule and the "formulas, never computed totals"
+guidance follow the practice of Anthropic's xlsx skill for Claude (openpyxl +
+a LibreOffice recalculation); only the idea was used, with IronCalc in place
+of LibreOffice so that the app needs neither Python nor an office suite.
+
+Validation: non-emitting TypeScript checking and unit tests
+(`tests/sheets-workbooks.test.ts`, `tests/sheets-tools.test.ts`,
+`tests/sheets-grid.test.ts`) plus the existing suites the change touches. The
+ExcelJS → IronCalc path was run under Node and under Electron-as-Node. The
+pane itself — Univer bundled by electron-vite, drawn in the window, typed
+into — was not run: that is a user-run application check, as are packaging
+and an Intel build.
+
+### PDF compression — 2026-11-16
+
+`src/main/pdf/program.ts` is the owner's own recipe: `compress_vector_pdf.py`,
+a script a Claude agent wrote for their plans, pasted into the chat with the
+instruction to make it a tool. The method is taken whole — the four levels,
+rounding by magnitude, dropping a colour set to what it already is and a
+zero-length segment, one graphics-state table, the save with object streams
+and the optional `qpdf` pass, and the pixel comparison of both renderings.
+Changed here, each for a reason found by reading or running it: a
+graphics-state table shared by several pages is renamed once (the script
+renamed it per page and left later pages with names that no longer existed);
+the scale and rotation of `cm` and `Tm` are not rounded (a scale of 0.0003
+became 0); its messages and exit codes are replaced by a JSON answer written to
+a file; the comparison covers at most twenty pages. pikepdf (MPL-2.0) and
+Pillow (MIT-CMU) are not shipped: pip installs them into the app's own data on
+first use. `pdftoppm` (poppler) and `qpdf` are used when the Mac has them and
+are never installed by Hello.
+
+Validation: `tests/pdf-tools.test.ts` — stand-in runs, and with
+`HELLO_TEST_PYTHON` a real two-page drawing with a shared resources table —
+and one run through `scripts/headless-chat` on the owner's 17.08 MB plan:
+7.81 MB at level 3, five pages rendering alike.
+
+### Sheets manual and model colours — 2026-11-16
+
+The sheets manual (`sheetsManual` in `src/main/chat/pi-instructions.ts`) takes
+the rules of Anthropic's xlsx skill that hold in this app, in Hello's own
+words and at the owner's direction: what is asked is made as spelled, an
+existing file's conventions come first, inputs and assumptions in cells of
+their own with their source, a number format on every formula, a legend and an
+example row in a workbook to fill in, and the openpyxl pitfalls. Each was
+checked here by running it. What the skill says about LibreOffice — its
+`recalc.py`, the functions it cannot compute — is not taken: Hello computes
+with IronCalc, which a probe showed computes IFS, XLOOKUP, TEXTJOIN and the
+rest, with or without the `_xlfn.` prefix. No text or code of the skill was
+copied. The colours a financial model is coded with (`MODEL_COLOURS`) are five
+values from the owner's own design-system tokens (their "Revolut" system,
+published from Open Design `revolut@open-design-v0.24.1`): accent, fg, success,
+danger, warn. The list of functions written with the `_xlfn.` prefix
+(`src/main/sheets/future.ts`) is Hello's own, each name checked as absent from
+openpyxl's list of functions of the original format.
+
+### Sheets scripts — 2026-11-16
+
+`sheet_script` adopts the working method of Anthropic's xlsx skill for Claude
+— openpyxl to build and edit, formulas kept as formulas, a recalculation after
+every change — at the owner's direction, after the first design (cell tools
+only) proved too weak for charts and bulk work. No code of the skill was
+copied. openpyxl (MIT) and pandas (BSD-3-Clause) are not shipped: they are
+installed by pip into the app's own data on first use. `jszip` 3.10.2 (MIT),
+already present as ExcelJS's dependency, is now a direct dependency, used to
+read chart-bearing files through a drawing-free copy.
+
+Validation: unit tests with stand-in scripts, and one end-to-end test
+(`tests/sheets-script.test.ts`, run when `HELLO_TEST_PYTHON` names a Python
+with openpyxl) that makes a real bar chart, a merged title and a frozen pane
+with openpyxl 3.1.5 on Python 3.15 and checks that Hello reads the result,
+computes it, refuses its own writer and exports the chart. The in-app first
+run — building the environment with pip over the network — was not run.

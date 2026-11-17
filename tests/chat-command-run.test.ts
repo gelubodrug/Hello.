@@ -79,4 +79,16 @@ describe('bounded command output and per-call deadlines', () => {
     expect((await stat(result.logPath)).mode & 0o777).toBe(0o600);
     expect(result.logTruncated).toBe(false);
   });
+
+  it('hides a secret of the environment, and not a switch that is only named like one', async () => {
+    vi.stubEnv('FIXTURE_AUTH_REFRESH', '1');
+    vi.stubEnv('FIXTURE_API_KEY', 'sk-fixture-0123456789');
+    try {
+      const pending = start(30, new AbortController().signal);
+      child.stdout.write('{"bytes": 17079594} key sk-fixture-0123456789');
+      child.emit('close', 0, null);
+      // The 1 of a file's size is not the "1" a flag is set to.
+      expect(JSON.parse(await pending).output).toBe('{"bytes": 17079594} key [redacted]');
+    } finally { vi.unstubAllEnvs(); }
+  });
 });

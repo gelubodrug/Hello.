@@ -14,7 +14,7 @@ import { ErrorNote, IconButton, errorText } from "../ui/primitives";
 import type { WebSource } from '../../shared/web';
 import { citationPlugin } from './citations';
 import { FileNavigation } from '../files/navigation';
-import { fileLink, type FileLink } from '../../shared/files';
+import { fileLink, spacedLinks, type FileLink } from '../../shared/files';
 
 type Token = { content: string; color?: string; fontStyle?: number };
 let highlighter: Promise<typeof import("shiki")> | undefined;
@@ -234,7 +234,7 @@ export function Markdown({ text, sources = [], onOpenFile, filePath }: { text: s
           ),
         }}
       >
-        {text}
+        {spacedLinks(text)}
       </ReactMarkdown>
     </div>
   );

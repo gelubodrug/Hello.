@@ -174,7 +174,7 @@ describe('the DSH runtime', () => {
   it('lets the runtime\'s lockfile follow a new version, as pnpm in CI would refuse it otherwise', async () => {
     const root = folder('hello-dsh-lockfile-');
     const place = dshLayout(root, join(root, 'resources'));
-    const pnpm = { command: process.execPath, args: [resolve(__dirname, 'fixtures/fake-pnpm-lockfile.mjs')], env: {} };
+    const pnpm = { command: process.execPath, args: [resolve(__dirname, 'fixtures/fake-pnpm-lockfile.mjs')], env: { ELECTRON_RUN_AS_NODE: '1' } };
     await installRuntime(place, pnpm, { version: '0.1.7-rc.2' });
     await installRuntime(place, pnpm, { version: '0.2.0-rc.2' });
     expect(JSON.parse(readFileSync(place.installAnchor, 'utf8')).version).toBe('0.2.0-rc.2');

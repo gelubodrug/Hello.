@@ -161,13 +161,18 @@ function chatModel(value: ChatModel): ChatModel {
   if (!id) throw new Error('Choose a model for this chat.');
   return { endpointUrl: normalizeEndpoint(value.endpointUrl), id };
 }
-/** A chat's switches live in `settings`, keyed by chat: the mode, which
- *  notebook sections are on, and the model it runs on. Absent means the
- *  default — chat, every section off (user, 05.10), the selection in
- *  Settings. Only the departure from the default is stored; a chat made while
+/** A chat's switches live in `settings`, keyed by chat: which notebook
+ *  sections are on, and the model it runs on. Absent means the default —
+ *  every section off (user, 05.10), the selection in Settings. A chat has no
+ *  mode (user, 17.11): a `chat-mode:` row an older version wrote is read by
+ *  nothing, and goes with its chat. Only the departure from the default is stored; a chat made while
  *  Runbook and Tasks started on had them written down for it (version 15). */
+/** The Workbook (the chat's page of Runbooks, Tasks and Plans) is a switch of its own, off by default (user,
+ *  17.11), stored like the others: only when on. While it is off the sections read as off, whatever is stored
+ *  for them — so switching it back on finds them as they were. A chat that used the page before the switch
+ *  existed had it written down as on (version 17). */
 const CONVERSATION_COLUMNS = `SELECT c.*,
-    CASE WHEN m.value = 'coder' THEN 'coder' ELSE 'chat' END AS chatMode,
+    CASE WHEN w.value = 'on' THEN 1 ELSE 0 END AS notebook,
     CASE WHEN p.value = 'on' THEN 1 ELSE 0 END AS planning,
     CASE WHEN r.value = 'on' THEN 1 ELSE 0 END AS runbook,
     CASE WHEN t.value = 'on' THEN 1 ELSE 0 END AS tasks,
@@ -175,16 +180,17 @@ const CONVERSATION_COLUMNS = `SELECT c.*,
     json_extract(cm.value, '$.endpointUrl') AS modelEndpoint,
     json_extract(cm.value, '$.id') AS modelId
   FROM conversations c
-  LEFT JOIN settings m ON m.key = 'chat-mode:' || c.id
+  LEFT JOIN settings w ON w.key = 'chat-notebook:' || c.id
   LEFT JOIN settings p ON p.key = 'chat-plan:' || c.id
   LEFT JOIN settings r ON r.key = 'chat-runbook:' || c.id
   LEFT JOIN settings t ON t.key = 'chat-tasks:' || c.id
   LEFT JOIN settings f ON f.key = 'chat-fresh:' || c.id
   LEFT JOIN settings cm ON cm.key = 'chat-model:' || c.id`;
-type StoredConversation = Omit<Conversation, 'planning' | 'runbook' | 'tasks' | 'freshFrom' | 'model'>
-  & { planning: number; runbook: number; tasks: number; freshFrom: number | null; modelEndpoint: string | null; modelId: string | null };
+type StoredConversation = Omit<Conversation, 'notebook' | 'planning' | 'runbook' | 'tasks' | 'freshFrom' | 'model'>
+  & { notebook: number; planning: number; runbook: number; tasks: number; freshFrom: number | null; modelEndpoint: string | null; modelId: string | null };
 const hydrateConversation = ({ freshFrom, modelEndpoint, modelId, ...row }: StoredConversation): Conversation =>
-  ({ ...row, planning: row.planning === 1, runbook: row.runbook === 1, tasks: row.tasks === 1,
+  ({ ...row, notebook: row.notebook === 1,
+    planning: row.notebook === 1 && row.planning === 1, runbook: row.notebook === 1 && row.runbook === 1, tasks: row.notebook === 1 && row.tasks === 1,
     ...(typeof freshFrom === 'number' && freshFrom > 0 ? { freshFrom } : {}),
     ...(typeof modelEndpoint === 'string' && typeof modelId === 'string' && modelId ? { model: { endpointUrl: modelEndpoint, id: modelId } } : {}) });
 export const NOTEBOOK_KINDS: readonly NotebookKind[] = ['runbook', 'tasks', 'plan'];
@@ -266,7 +272,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 16)
+    if (version > 17)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -475,6 +481,16 @@ export class DataStore {
         if (!columns.includes('compactions')) this.db.exec('ALTER TABLE messages ADD COLUMN compactions TEXT');
         this.db.exec('PRAGMA user_version = 16');
       })();
+    if (version < 17)
+      this.db.transaction(() => {
+        // The Workbook is off in a new chat (user, 17.11). A chat that already uses it — a section on, or
+        // anything written there — keeps it: that is written down for it.
+        this.db.prepare(`INSERT INTO settings (key, value) SELECT 'chat-notebook:' || c.id, 'on' FROM conversations c
+          WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'chat-notebook:' || c.id)
+            AND (EXISTS (SELECT 1 FROM notebooks n WHERE n.conversationId = c.id)
+              OR EXISTS (SELECT 1 FROM settings s WHERE s.value = 'on' AND s.key IN ('chat-plan:' || c.id, 'chat-runbook:' || c.id, 'chat-tasks:' || c.id)))`).run();
+        this.db.exec('PRAGMA user_version = 17');
+      })();
   }
 
   // ── Library of skills, plugins and MCP servers ────────────────────────────
@@ -510,7 +526,7 @@ export class DataStore {
     this.db.transaction(() => {
       this.db.prepare('DELETE FROM resource_activations WHERE resourceId = ?').run(id);
       this.db.prepare('DELETE FROM resources WHERE id = ?').run(id);
-      this.db.prepare('DELETE FROM secrets WHERE key = ?').run(`mcpEnv:${id}`);
+      this.db.prepare('DELETE FROM secrets WHERE key IN (?, ?)').run(`mcpEnv:${id}`, `mcpAuth:${id}`);
     })();
     return row;
   }
@@ -553,10 +569,33 @@ export class DataStore {
         .filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
     } catch { return {}; }
   }
-  /** Every stored MCP value, so an error message can redact all of them. */
+  /**
+   * An HTTP server's sign-in — its client registration and tokens — on the
+   * same encrypted path as the model key. Never in a row, the renderer or a log.
+   */
+  saveResourceAuth(id: string, state: Record<string, unknown> | null): void {
+    if (state) this.db.prepare('INSERT INTO secrets(key,encrypted) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET encrypted=excluded.encrypted')
+      .run(`mcpAuth:${id}`, this.codec.encrypt(JSON.stringify(state)));
+    else this.db.prepare('DELETE FROM secrets WHERE key = ?').run(`mcpAuth:${id}`);
+  }
+  resourceAuth(id: string): Record<string, unknown> | undefined {
+    const row = this.db.prepare('SELECT encrypted FROM secrets WHERE key = ?').get(`mcpAuth:${id}`) as { encrypted: Buffer } | undefined;
+    if (!row) return undefined;
+    try {
+      const parsed: unknown = JSON.parse(this.codec.decrypt(row.encrypted));
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+    } catch { return undefined; }
+  }
+  /** Every stored MCP value and token, so an error message can redact all of them. */
   allResourceSecrets(): string[] {
-    const rows = this.db.prepare("SELECT key FROM secrets WHERE key LIKE 'mcpEnv:%'").all() as Array<{ key: string }>;
-    return rows.flatMap(row => Object.values(this.resourceSecret(row.key.slice('mcpEnv:'.length)))).filter(Boolean);
+    const rows = this.db.prepare("SELECT key FROM secrets WHERE key LIKE 'mcpEnv:%' OR key LIKE 'mcpAuth:%'").all() as Array<{ key: string }>;
+    return rows.flatMap(row => {
+      if (row.key.startsWith('mcpEnv:')) return Object.values(this.resourceSecret(row.key.slice('mcpEnv:'.length)));
+      const auth = this.resourceAuth(row.key.slice('mcpAuth:'.length));
+      const tokens = auth?.tokens && typeof auth.tokens === 'object' ? auth.tokens as Record<string, unknown> : {};
+      const client = auth?.clientInformation && typeof auth.clientInformation === 'object' ? auth.clientInformation as Record<string, unknown> : {};
+      return [tokens.access_token, tokens.refresh_token, client.client_secret].filter((value): value is string => typeof value === 'string');
+    }).filter(Boolean);
   }
 
   listConversations(): Conversation[] {
@@ -585,11 +624,11 @@ export class DataStore {
         'INSERT INTO conversations (id,title,folder,createdAt,updatedAt) VALUES (@id,@title,@folder,@createdAt,@updatedAt)',
       )
       .run(row);
-    return { ...row, chatMode: 'chat', planning: false, runbook: false, tasks: false };
+    return { ...row, notebook: false, planning: false, runbook: false, tasks: false };
   }
   updateConversation(
     id: string,
-    patch: { title?: string; folder?: string | null; chatMode?: 'chat' | 'coder'; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null },
+    patch: { title?: string; folder?: string | null; notebook?: boolean; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null },
   ): Conversation {
     const row = this.getConversation(id);
     if (patch.model !== undefined) {
@@ -602,11 +641,7 @@ export class DataStore {
         throw new Error('Chat folder must be an absolute path.');
       row.folder = patch.folder;
     }
-    if (patch.chatMode !== undefined) {
-      if (patch.chatMode !== 'chat' && patch.chatMode !== 'coder')
-        throw new Error('Unknown chat mode.');
-      row.chatMode = patch.chatMode;
-    }
+    if (patch.notebook !== undefined && typeof patch.notebook !== 'boolean') throw new Error('The Workbook is on or off.');
     if (patch.planning !== undefined) {
       if (typeof patch.planning !== 'boolean') throw new Error('Planning is on or off.');
       row.planning = patch.planning;
@@ -623,9 +658,6 @@ export class DataStore {
           'UPDATE conversations SET title=@title,folder=@folder,updatedAt=@updatedAt WHERE id=@id',
         )
         .run({ id: row.id, title: row.title, folder: row.folder, updatedAt: row.updatedAt });
-      if (patch.chatMode !== undefined)
-        this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-          .run(`chat-mode:${id}`, patch.chatMode);
       // Only a section switched on is written; one that is off, the default,
       // is stored as nothing at all.
       const switchRow = (key: string, store: boolean, value: string) => {
@@ -634,14 +666,16 @@ export class DataStore {
             .run(key, value);
         else this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
       };
+      if (patch.notebook !== undefined) switchRow(`chat-notebook:${id}`, patch.notebook, 'on');
       if (patch.planning !== undefined) switchRow(`chat-plan:${id}`, patch.planning, 'on');
       if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, patch.runbook, 'on');
       if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, patch.tasks, 'on');
       if (patch.model !== undefined) this.writeChatModel(id, row.model ?? null);
     })();
     // A section switched off empties its export: a worker's file is not a way around the switch.
-    if (patch.planning !== undefined || patch.runbook !== undefined || patch.tasks !== undefined) this.refreshNotebookExports(id);
-    return row;
+    if (patch.notebook !== undefined || patch.planning !== undefined || patch.runbook !== undefined || patch.tasks !== undefined) this.refreshNotebookExports(id);
+    // Read back, not assembled: a section reads as the Workbook lets it.
+    return this.getConversation(id);
   }
   /** The model a turn ran on becomes the one the chat runs on next (user,
    *  04.10). Not an edit of the chat, so it keeps its place in the list. */
@@ -710,8 +744,8 @@ export class DataStore {
     const row = this.getConversation(id);
     this.db.transaction(() => {
       this.db.prepare('DELETE FROM settings WHERE key = ?').run(`tool-order:${id}`);
-      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?)')
-        .run(`chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`);
+      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?,?)')
+        .run(`chat-notebook:${id}`, `chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     })();
     // Remove only our known generated exports, never a user repository.
@@ -943,12 +977,19 @@ export class DataStore {
       approvals: patch.approvals ?? current.approvals ?? 'all',
       appearance: patch.appearance ?? current.appearance ?? 'system',
       subagentModel: patch.subagentModel !== undefined ? (patch.subagentModel.trim().slice(0, 500) || undefined) : current.subagentModel,
+      subagentEndpointUrl: patch.subagentEndpointUrl !== undefined ? (patch.subagentEndpointUrl.trim() ? normalizeEndpoint(patch.subagentEndpointUrl) : undefined) : current.subagentEndpointUrl,
       // What was learned about one model does not carry to the next.
       contextScale: patch.contextScale ?? current.contextScale,
       voice: patch.voice !== undefined ? nextVoice(current.voice, patch.voice) : current.voice,
     };
     // A model id is its provider's: another connection starts from the chat's own model again.
-    if (patch.subagentModel === undefined && next.endpointUrl !== current.endpointUrl) delete next.subagentModel;
+    // One placed on a connection of its own stays there whatever the chat moves to.
+    if (patch.subagentModel === undefined && next.endpointUrl !== current.endpointUrl && !next.subagentEndpointUrl) delete next.subagentModel;
+    // No model, no connection for it; and the chat's own connection is not "another".
+    if (!next.subagentModel || (next.subagentEndpointUrl && normalizeEndpoint(next.subagentEndpointUrl) === normalizeEndpoint(next.endpointUrl))) delete next.subagentEndpointUrl;
+    // Only a connection the person kept: its key is what the subagents will be sent with.
+    if (next.subagentEndpointUrl && !current.connections.some(entry => normalizeEndpoint(entry.endpointUrl) === next.subagentEndpointUrl))
+      throw new Error('Subagents can run on the chat’s connection or on one you kept. Keep that connection first.');
     // Provenance for the two numbers Pi launches on. Writing either one claims
     // them for the endpoint and model in force, so a deliberate value is never
     // replaced by a published one; pointing at a different model or provider

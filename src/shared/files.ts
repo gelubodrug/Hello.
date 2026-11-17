@@ -64,6 +64,18 @@ export function fileLink(href: string, relativeTo = ''): FileLink | null {
   return { path: value, ...(line && Number.isSafeInteger(line) ? { line } : {}), ...(anchor && !line ? { anchor } : {}) };
 }
 
+/**
+ * `[Raport final.xlsx](Raport final.xlsx)` is not a link in Markdown: a
+ * destination ends at its first space, so the chat showed the brackets as
+ * written. A model names a file by its name, spaces and all. A destination
+ * that has a space and ends as a file name does is given the angle brackets
+ * Markdown wants; code is left as written.
+ */
+export function spacedLinks(text: string): string {
+  return text.split(/(```[^]*?(?:```|$)|`[^`\n]*`)/).map((piece, index) => index % 2 ? piece
+    : piece.replace(/\]\((?!<)([^()\n<>"]*?\s[^()\n<>"]*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)\)/g, (_whole, destination: string) => `](<${destination.trim()}>)`)).join('');
+}
+
 export function fileLanguage(name: string): string {
   const extension = name.split('.').pop()?.toLowerCase() ?? '';
   return ({ md: 'markdown', mdx: 'markdown', markdown: 'markdown', ts: 'typescript', tsx: 'tsx',

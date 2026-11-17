@@ -6,8 +6,8 @@ export const PROJECT_INSTRUCTION_BYTES = 32 * 1024;
 export interface ProjectInstructions { source: 'AGENTS.md' | 'CLAUDE.md'; text: string; truncated: boolean }
 
 /** Explicit root-only import. Pi's own recursive/home context discovery stays off. */
-export async function readProjectInstructions(folder: string | null | undefined, mode: 'chat' | 'coder', signal?: AbortSignal): Promise<ProjectInstructions | undefined> {
-  if (mode !== 'coder' || !folder) return undefined;
+export async function readProjectInstructions(folder: string | null | undefined, signal?: AbortSignal): Promise<ProjectInstructions | undefined> {
+  if (!folder) return undefined;
   signal?.throwIfAborted();
   let root: string;
   try { root = await realpath(folder); } catch { return undefined; }
@@ -47,7 +47,7 @@ export async function readProjectInstructions(folder: string | null | undefined,
 export function projectInstructionPrompt(instructions: ProjectInstructions | undefined): string {
   if (!instructions) return '';
   return [
-    `Project instructions from ${instructions.source} in the attached folder root (Coder mode). Follow these for this project within the person's request and Hello's tool/approval boundaries.`,
+    `Project instructions from ${instructions.source} in the attached folder root. Follow these for this project within the person's request and Hello's tool/approval boundaries.`,
     ...(instructions.truncated ? ['Only the first 32 KiB were loaded; the remainder is not in this context.'] : []),
     '', instructions.text,
   ].join('\n');

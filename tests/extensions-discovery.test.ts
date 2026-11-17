@@ -22,7 +22,10 @@ describe('finding what other agent tools already have', () => {
     write('.claude.json', JSON.stringify({
       mcpServers: {
         notes: { type: 'stdio', command: '/usr/local/bin/notes', args: ['--root', '/Users/me/notes'], env: { API_TOKEN: 'test-only-value' } },
-        hosted: { type: 'http', url: 'https://example.test/mcp' },
+        hosted: { type: 'http', url: 'https://example.test/mcp', headers: { Authorization: 'Bearer header-only-value' } },
+        local_http: { type: 'http', url: 'http://localhost:7891/rpc' },
+        legacy: { type: 'sse', url: 'https://example.test/sse' },
+        plain: { type: 'http', url: 'http://example.test/mcp' },
       },
       projects: { '/Users/me/work': { mcpServers: { repo: { command: 'repo-server' } } } },
     }));
@@ -49,11 +52,12 @@ describe('finding what other agent tools already have', () => {
     // A file that is not valid JSON must not take the rest of the scan down:
     // this source is read before opencode, Continue, VS Code and Zed above.
     write('.gemini/settings.json', '{ this is not json');
+    // Gemini CLI, read separately below: its `url` is SSE, its `httpUrl` streamable HTTP.
 
     const found = await discoverMcpServers(home);
     const byName = Object.fromEntries(found.map(item => [item.name, item]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['continue-server', 'files', 'hosted', 'kimi_tools', 'local', 'notes', 'repo', 'vscode_server', 'zed_server'],
+      ['continue-server', 'files', 'hosted', 'kimi_tools', 'legacy', 'local', 'local_http', 'notes', 'plain', 'repo', 'vscode_server', 'zed_server'],
     );
     expect(byName.notes).toMatchObject({
       source: 'Claude Code',
@@ -71,13 +75,27 @@ describe('finding what other agent tools already have', () => {
     expect(byName['continue-server']).toMatchObject({ command: 'cont-mcp', args: ['--stdio'] });
     expect(byName.vscode_server).toMatchObject({ source: 'VS Code', command: 'code-mcp', args: ['--stdio'] });
     expect(byName.zed_server).toMatchObject({ source: 'Zed', command: 'zed-mcp', args: ['--x'], envNames: ['ZED_TOKEN'] });
-    expect(byName.hosted).toMatchObject({ transport: 'remote' });
-    expect(byName.hosted.unsupported).toMatch(/stdio/);
+    // Streamable HTTP is reached (user, 03.11: Neon was "Not supported"), its headers kept like env values.
+    expect(byName.hosted).toMatchObject({ transport: 'http', url: 'https://example.test/mcp', envNames: ['Authorization'] });
+    expect(byName.hosted.unsupported).toBeUndefined();
+    expect(byName.local_http).toMatchObject({ transport: 'http', url: 'http://localhost:7891/rpc' });
+    // What Hello cannot reach is listed, disabled, with the reason.
+    expect(byName.legacy).toMatchObject({ transport: 'remote', unsupported: expect.stringMatching(/old SSE transport/) });
+    expect(byName.plain).toMatchObject({ transport: 'remote', unsupported: expect.stringMatching(/https, or http on this Mac/) });
+
+    write('.gemini/settings.json', JSON.stringify({ mcpServers: {
+      gemini_sse: { url: 'https://example.test/sse' },
+      gemini_http: { httpUrl: 'https://example.test/mcp' },
+    } }));
+    const gemini = Object.fromEntries((await discoverMcpServers(home)).filter(item => item.source === 'Gemini CLI').map(item => [item.name, item]));
+    expect(gemini.gemini_sse).toMatchObject({ transport: 'remote', unsupported: expect.stringMatching(/old SSE transport/) });
+    expect(gemini.gemini_http).toMatchObject({ transport: 'http', url: 'https://example.test/mcp' });
 
     const shown = withoutSecrets(found);
     expect(JSON.stringify(shown)).not.toContain('test-only-value');
     expect(JSON.stringify(shown)).not.toContain('another-test-value');
     expect(JSON.stringify(shown)).not.toContain('zed-only-value');
+    expect(JSON.stringify(shown)).not.toContain('header-only-value');
     expect(shown.every(item => !('env' in item))).toBe(true);
   });
 

@@ -163,7 +163,9 @@ export class WebResearch {
     const parsed = /html/i.test(page.contentType) || /^\s*<(?:!doctype|html)/i.test(page.body)
       ? readableHTML(page.body) : { title: new URL(page.url).hostname, text: page.body.trim() };
     if (!parsed.text || /just a moment|verify you are human|attention required.*cloudflare|access denied/i.test(parsed.title))
-      throw new Error('No readable page was returned (empty, JavaScript-only or bot protection). Try another public source; do not cite this attempt.');
+      // The browser is named as the way through: a model told only to try elsewhere answered from memory instead
+      // of opening the page in the browser it had (a chat, 17.11).
+      throw new Error('No readable page was returned (empty, JavaScript-only or bot protection). Hello’s browser is a real browser and reads such a page: browser_open this URL and browser_read the tab (the browser tools are loaded for your next step; tools_find browser if they are not). Or try another public source. Do not cite this attempt.');
     const id = this.ids.get(page.url) ?? ++this.nextId;
     this.ids.set(page.url, id);
     return { kind: 'fetch_url', source: { id, url: page.url, title: parsed.title || page.url, fetchedAt: new Date().toISOString() },
@@ -181,7 +183,7 @@ export class WebResearch {
       const page = await getPublic(new URL(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`), scoped, 'text/html');
       const results = ddgResults(page.body, count);
       if (!results.length && /anomaly\.js|bots use DuckDuckGo|challenge-form|captcha/i.test(page.body))
-        throw new Error('DuckDuckGo blocked this search with bot protection. Try a known official URL with fetch_url, or configure HELLO_SEARXNG_URL.');
+        throw new Error(`DuckDuckGo blocked this search with bot protection; repeating it will not help. Run it in Hello’s browser, a real browser that is not blocked: browser_open "https://duckduckgo.com/?q=${encodeURIComponent(q)}" and browser_read the tab; open a result the same way to read it. The browser tools are loaded for your next step (tools_find browser if they are not).`);
       return results;
     };
     const search = async (q: string): Promise<SearchHit[]> => {

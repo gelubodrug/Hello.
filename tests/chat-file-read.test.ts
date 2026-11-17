@@ -48,3 +48,7 @@ describe('bounded UTF-8 file ranges', () => {
     await expect(readFileRange(join(root, 'missing'), {}, AbortSignal.abort(new Error('Stopped')))).rejects.toThrow('Stopped');
   });
 });
+
+// A brief the person wrote in TextEdit is an .rtf, not a text file. A model
+// asked to follow "the prompt in the folder" had no tool that read it, tried
+// the web reader on file://… and then cat, which gave it markup (a run, 17.11).

@@ -5,9 +5,9 @@ import {
   BookOpen,
   Bot,
   ChevronUp,
-  CodeXml,
   Columns2,
   Globe,
+  Sheet,
   FolderOpen,
   Maximize2,
   MessageCircle,
@@ -38,7 +38,10 @@ import { ToolTabStrip } from './ToolTabStrip';
 import { orderedTools, useToolOrder } from './useToolOrder';
 import { FilesPane, type FileRequest } from '../files/FilesPane';
 import { FileNavigation } from '../files/navigation';
+import { isChatFolderPath } from '../../shared/chat-folder';
 import { filesTabId, type FileLink, type FilesTab } from '../../shared/files';
+import { sheetsTabId, type SheetsTab } from '../../shared/sheets';
+import { SheetsPane } from '../sheets/SheetsPane';
 import {
   ContextMenu,
   IconButton,
@@ -74,6 +77,8 @@ export interface WorkspacePrefs {
   chatOpen: boolean;
   toolsOpen: boolean;
   filesOpen?: boolean;
+  /** The Sheets tab is in the Tools strip. The workbooks themselves are main's. */
+  sheetsOpen?: boolean;
   // Legacy saved preference only; live pinning is derived from expanded/toolsOpen.
   pinned?: boolean;
   minimized: boolean;
@@ -143,10 +148,13 @@ export interface WorkspaceProps {
 
 export function Workspace(props: WorkspaceProps) {
   const { conversation, ui, active, compact, onUI } = props;
-  // The chat is "Chat" in either mode; only its icon says which (user, 05.10).
+  // A chat has one way of working (user, 17.11): no mode, so one icon.
   const chatLabel = 'Chat';
-  const ModeIcon = conversation.chatMode === 'coder' ? CodeXml : MessageCircle;
-  const pageLabels = { chat: chatLabel, notebook: 'Notebook' };
+  const ModeIcon = MessageCircle;
+  // The folder Hello keeps for a chat is not one the person chose: to them, none is set.
+  const chosenFolder = isChatFolderPath(conversation.folder) ? null : conversation.folder;
+  // The page of Runbooks, Tasks and Plans is the chat's Workbook to the person (user, 17.11); in code it stays the notebook.
+  const pageLabels = { chat: chatLabel, notebook: 'Workbook' };
   const body = useRef<HTMLDivElement>(null);
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
   const [choosingWorker, setChoosingWorker] = useState(false);
@@ -170,20 +178,24 @@ export function Workspace(props: WorkspaceProps) {
     return () => { alive = false; unsubscribe?.(); };
   }, [conversation.id]);
   const hasEntries = filled.runbook || filled.tasks || filled.plan;
-  const pages = CHAT_PAGES;
+  // The Workbook is a switch of the chat, off by default: a chat that does not need it is only a chat.
+  const workbook = conversation.notebook === true;
+  const pages = workbook ? CHAT_PAGES : CHAT_PAGES.filter(page => page !== 'notebook');
   const fileNonce = useRef(0);
   const choosingFolder = useRef(false);
   const dragSplit = useRef<number | null>(null);
   const filesTool: FilesTab = { id: filesTabId(conversation.id), conversationId: conversation.id, kind: 'files', title: 'Files' };
+  const sheetsTool: SheetsTab = { id: sheetsTabId(conversation.id), conversationId: conversation.id, kind: 'sheets', title: 'Sheets' };
   // A terminal is in one pane at a time: a chat tab has left the Tools strip.
   const docked = (ui.chatTerminals ?? []).flatMap(tab => props.terminals.filter(session => session.id === tab.id));
   const dockedIds = new Set(docked.map(session => session.id));
-  const shownPage: string = docked.find(session => session.id === ui.chatTerminal)?.id ?? ui.chatTab;
+  // A Workbook switched off while it was in front leaves the chat in front.
+  const shownPage: string = docked.find(session => session.id === ui.chatTerminal)?.id ?? (ui.chatTab === 'notebook' && !workbook ? 'chat' : ui.chatTab);
   const pageKeys: string[] = [...pages, ...docked.map(session => session.id)];
   const [pageMenu, setPageMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const menuSession = docked.find(session => session.id === pageMenu?.id);
   const toolOrder = useToolOrder(conversation.id, props.reportError);
-  const allTools = orderedTools([...props.browsers, ...props.terminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : [])], toolOrder.order);
+  const allTools = orderedTools([...props.browsers, ...props.terminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : []), ...(ui.sheetsOpen ? [sheetsTool] : [])], toolOrder.order);
   /**
    * Each terminal is rendered once, into a node of its own that is moved to
    * whichever pane holds it. Rendering it in the other pane instead would
@@ -219,15 +231,36 @@ export function Workspace(props: WorkspaceProps) {
     finally { choosingFolder.current = false; }
   };
   const openFiles = (target?: FileLink) => {
+    // In the folder Hello keeps for a chat the person sees no file: a link to one is how they get it — saved where
+    // they choose. A workbook is also shown, where workbooks are.
+    if (target && isChatFolderPath(conversation.folder) && api.files.deliver) {
+      if (/\.xlsx$/i.test(target.path) && api.sheets) openSheets();
+      void api.files.deliver(conversation.id, target.path).catch(props.reportError);
+      return;
+    }
+    // A workbook is shown where workbooks are, and a PDF in Finder: the Files viewer reads text.
+    if (target && /\.xlsx$/i.test(target.path) && api.sheets) { openSheets(); return; }
+    // One Hello keeps for the chat — dropped from outside the folder — is saved where the person chooses instead.
+    if (target && /\.pdf$/i.test(target.path)) { void (api.files.deliver ?? api.files.reveal)(conversation.id, target.path).catch(props.reportError); return; }
     if (target) setFileRequest({ ...target, nonce: ++fileNonce.current });
     onUI(ui.filesOpen && ui.toolsOpen && !ui.toolsMinimized && !ui.expanded
       ? { toolId: filesTool.id, focus: 'tools' }
       : { filesOpen: true, toolsOpen: true, toolsMinimized: false, expanded: false, toolId: filesTool.id, focus: 'tools' });
   };
-  const closeTool = (tool: BrowserTab | TerminalSession | FilesTab) => {
-    if ('kind' in tool && tool.kind === 'files') {
+  const openSheets = () => onUI(ui.sheetsOpen && ui.toolsOpen && !ui.toolsMinimized && !ui.expanded
+    ? { toolId: sheetsTool.id, focus: 'tools' }
+    : { sheetsOpen: true, toolsOpen: true, toolsMinimized: false, expanded: false, toolId: sheetsTool.id, focus: 'tools' });
+  // A workbook the model made or opened is shown, as a page it opens is: beside
+  // the chat, without taking the keyboard from what the person is writing.
+  const showSheets = useRef(() => {});
+  showSheets.current = () => onUI({ sheetsOpen: true, toolsOpen: true, toolsMinimized: false, expanded: false, toolId: sheetsTool.id });
+  useEffect(() => api.sheets?.onChange(event => {
+    if (event.conversationId === conversation.id && event.list && (event.by === 'model' || event.show) && event.revision > 0) showSheets.current();
+  }), [conversation.id]);
+  const closeTool = (tool: BrowserTab | TerminalSession | FilesTab | SheetsTab) => {
+    if ('kind' in tool && (tool.kind === 'files' || tool.kind === 'sheets')) {
       const remaining = allTools.filter(item => item.id !== tool.id);
-      onUI({ filesOpen: false, ...(ui.toolId === tool.id ? { toolId: remaining[0]?.id ?? null } : {}),
+      onUI({ ...(tool.kind === 'files' ? { filesOpen: false } : { sheetsOpen: false }), ...(ui.toolId === tool.id ? { toolId: remaining[0]?.id ?? null } : {}),
         ...(!remaining.length ? { toolsOpen: false, toolsMinimized: false, toolsExpanded: false } : {}) });
     } else props.onCloseTool(tool);
   };
@@ -303,6 +336,8 @@ export function Workspace(props: WorkspaceProps) {
       open: () => props.onLaunch('terminal') },
     { id: 'files', label: 'Files', Icon: FolderOpen, detail: 'What the folder holds, without leaving',
       open: () => openFiles() },
+    { id: 'sheets', label: 'Sheets', Icon: Sheet, detail: 'An Excel workbook, yours and the model’s',
+      open: () => openSheets() },
     { id: 'workers', label: 'CLI worker', Icon: Bot, detail: 'Claude, Codex and the rest, in a pane',
       // Choosing which one is the whole point; a bare terminal is the row above.
       open: () => setChoosingWorker(current => !current) },
@@ -336,16 +371,17 @@ export function Workspace(props: WorkspaceProps) {
       ))}
       <li>
         <button type="button" onClick={() => void chooseFilesFolder()}
-          title={conversation.folder ?? 'Choose the folder this chat works in'}>
+          title={chosenFolder ?? 'Choose the folder this chat works in'}>
           <FolderOpen size={16} aria-hidden />
           <span>Work path</span>
         </button>
-        {withDetail && <small>{conversation.folder ?? 'Not set — choose a folder'}</small>}
+        {withDetail && <small>{chosenFolder ?? 'Not set — choose a folder'}</small>}
       </li>
     </ul>
   );
   const toolsMenu: MenuItem[] = [
     { id: 'files', label: 'Files', icon: FolderOpen, action: () => openFiles() },
+    { id: 'sheets', label: 'Sheets', icon: Sheet, action: () => openSheets() },
     {
       id: "browser",
       label: "Browser",
@@ -574,7 +610,7 @@ export function Workspace(props: WorkspaceProps) {
                   jump={props.jump}
                 />
               </div>
-              <div
+              {workbook && <div
                 className="chat-page"
                 role="tabpanel"
                 id={`${conversation.id}-notebook`}
@@ -586,7 +622,7 @@ export function Workspace(props: WorkspaceProps) {
                   reportError={props.reportError}
                   active={active && shownPage === "notebook"}
                 />
-              </div>
+              </div>}
               {docked.map(session => (
                 <div
                   key={session.id}
@@ -711,6 +747,10 @@ export function Workspace(props: WorkspaceProps) {
               <FilesPane key={conversation.folder ?? 'no-folder'} conversation={conversation}
                 visible={toolsVisible && !toolsMinimized && !!ui.filesOpen && currentTool?.id === filesTool.id}
                 request={fileRequest} onChooseFolder={() => void chooseFilesFolder()} onQuote={props.onQuote} />
+            </div>
+            <div className="tool-host" id={`tool-host-${sheetsTool.id}`} data-tool-host={sheetsTool.id} hidden={!ui.sheetsOpen || currentTool?.id !== sheetsTool.id}>
+              {ui.sheetsOpen && <SheetsPane conversation={conversation}
+                visible={toolsVisible && !toolsMinimized && currentTool?.id === sheetsTool.id} />}
             </div>
             {props.browsers.map((tab) => (
               <div

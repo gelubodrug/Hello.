@@ -246,7 +246,7 @@ export async function createWorkerNotebookContext(input: {
       const pages = pagesOf(chat);
       return {
         groups: helloToolGroups(tools, {
-          chatMode: 'chat', notebooks: { runbook: pages.runbook, tasks: pages.tasks }, planning: pages.plan, mcp: [],
+          notebooks: { runbook: pages.runbook, tasks: pages.tasks }, planning: pages.plan, mcp: [],
         }),
         plugins: [],
       };

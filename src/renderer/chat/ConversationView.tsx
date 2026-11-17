@@ -13,9 +13,7 @@ import {
   Square,
   Terminal,
   Bot,
-  CodeXml,
   Loader2,
-  MessageCircle,
   Mic,
   MicOff,
   Paperclip,
@@ -55,11 +53,12 @@ import { toolCode } from "./ToolCode";
 import { useFileMention } from "./FileMention";
 import { fetchedSources, readWebResult, sourcesForMessage, withSourceLinks, type WebSource } from '../../shared/web';
 import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolIcon, webToolTitle } from './WebResearch';
-import { activityLayout, activityRows, liveTail, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
+import { activityLayout, activityRows, liveTail, replySegments, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
 import { useElapsed } from './useElapsed';
 import { PendingMessages } from './PendingMessages';
 import { chatCopySnapshot } from './selection';
-import { PillSwitch } from './PillSwitch';
+import { isChatFolderPath } from '../../shared/chat-folder';
+import { EFFORT_LEVELS, effortHint, reasoningReach, type Effort } from '../../shared/reasoning';
 import { ChatDisclosure } from './ChatDisclosure';
 import { ExtensionsPicker } from './ExtensionsPicker';
 import { useSkillCommands } from './SkillCommands';
@@ -314,52 +313,6 @@ function MergedStep({ row, render }: {
   );
 }
 
-/** How much commentary reads as a step rather than as a wall. */
-const NOTE_CAP = 96;
-
-/**
- * What the model said between its actions. In the activity list every entry is
- * a step and every step is one row: a sentence or two can simply be said, but
- * anything longer — a whole file printed out loud, say — folds to the same
- * single line as the thinking and the tools around it. One list, one tier.
- */
-export function ActivityNote({ text, sources }: { text: string; sources: readonly WebSource[] }) {
-  const body = useRef<HTMLDivElement>(null);
-  const [long, setLong] = useState(false);
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  useLayoutEffect(() => {
-    const node = body.current;
-    if (!node) return;
-    // Measured while clipped: scrollHeight is the whole content either way.
-    const measure = () => setLong(node.scrollHeight > NOTE_CAP);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [text]);
-  const summary = text.trim().split('\n').find(line => line.trim()) ?? text;
-  return (
-    <div className="activity-note" data-folded={long && !open || undefined}>
-      {long && (
-        <button
-          type="button"
-          className="disclosure-button activity-step"
-          aria-expanded={open}
-          aria-controls={id}
-          onClick={() => setOpen(value => !value)}
-        >
-          <span className="tool-action-title">{summary}</span>
-          <ChevronDown size={14} className="disclosure-chevron" aria-hidden />
-        </button>
-      )}
-      <div ref={body} id={id} className="activity-note-body">
-        <Markdown text={text} sources={sources} />
-      </div>
-    </div>
-  );
-}
-
 export function MessageContent({ message, sources }: { message: Message; sources: readonly WebSource[] }) {
   // Keep explicit thinking disclosure choices even when the first arriving tool
   // folds preceding reasoning/commentary into the activity group.
@@ -379,13 +332,11 @@ export function MessageContent({ message, sources }: { message: Message; sources
   if (!message.parts?.length) return <Markdown text={message.content} sources={sources} />;
   const parts = message.parts;
   const layout = activityLayout(parts, message.status === 'streaming');
-  const renderPart = (index: number, step = false) => {
+  const renderPart = (index: number) => {
     const part = parts[index];
     return (
         part.type === "text" ? (
-          step
-            ? <ActivityNote key={index} text={part.text} sources={sources} />
-            : <Markdown key={index} text={part.text} sources={sources} />
+          <Markdown key={index} text={part.text} sources={sources} />
         ) : part.type === "thinking" ? (
           <ThinkingPart
             key={index}
@@ -399,26 +350,30 @@ export function MessageContent({ message, sources }: { message: Message; sources
         )
     );
   };
-  const rows = activityRows(layout.activity);
-  const renderRow = (row: ActivityRow) =>
-    row.count === 1
-      ? renderPart(row.start, true)
-      : <MergedStep key={row.key} row={row} render={renderPart} />;
-  const tailFrom = liveTail(rows);
-  return <>
-    {layout.grouped
-      ? <ActivityGroup
-          parts={layout.activity}
-          streaming={message.status === 'streaming'}
-          startedAt={message.createdAt}
-          workedMs={message.workedMs}
-          tail={rows.slice(tailFrom).map(renderRow)}
-        >
-          {rows.map(renderRow)}
-        </ActivityGroup>
-      : layout.activity.map((_part, index) => renderPart(index))}
-    {layout.answer.map((_part, index) => renderPart(layout.answerStart + index))}
-  </>;
+  const streaming = message.status === 'streaming';
+  // In the order it was made, by one rule: what the model says stays on the
+  // page where it said it; what it does folds, each run of steps under a line.
+  return <>{replySegments(parts).map(segment => {
+    if (segment.kind === 'prose') return renderPart(segment.index);
+    const indexes = Array.from({ length: segment.end - segment.start }, (_item, offset) => segment.start + offset);
+    if (!segment.grouped) return indexes.map(index => renderPart(index));
+    const rows = activityRows(parts.slice(segment.start, segment.end));
+    const renderRow = (row: ActivityRow) =>
+      row.count === 1
+        ? renderPart(segment.start + row.start)
+        : <MergedStep key={row.key} row={{ ...row, start: segment.start + row.start }} render={renderPart} />;
+    // The reply's time, and its live tail, belong to the steps still being made: the last list.
+    const live = streaming && segment.last;
+    return <ActivityGroup
+      key={`steps-${segment.start}`}
+      parts={parts.slice(segment.start, segment.end)}
+      streaming={live}
+      {...(segment.last ? { startedAt: message.createdAt, workedMs: message.workedMs } : {})}
+      tail={live ? rows.slice(liveTail(rows)).map(renderRow) : undefined}
+    >
+      {rows.map(renderRow)}
+    </ActivityGroup>;
+  })}</>;
 }
 
 /** The line a restart draws through the transcript: the model reads nothing above it. */
@@ -498,11 +453,23 @@ function MessageRow({
     return () => clearTimeout(timer);
   }, [copied]);
   const hasVisibleContent = Boolean(message.content.trim()) || message.parts?.some(part => part.type === 'tool' || Boolean(part.text.trim()));
+  // Every moment of a streaming reply says what it is doing. With text already
+  // on the page it used to say nothing, so the minutes between tool calls —
+  // the model reading a long conversation — looked stuck (user, 12.11).
+  const runningTool = [...(message.parts ?? [])].reverse().find((part): part is Extract<typeof part, { type: 'tool' }> =>
+    part.type === 'tool' && (part.status === 'running' || part.status === 'approval'));
+  const phase = message.runtimePhase;
   const runtimeStatus = message.status !== 'streaming' ? null
-    : message.runtimePhase === 'compacting' ? 'Compacting conversation…'
-    : message.runtimePhase === 'retrying' ? 'Retrying response…'
-    : !hasVisibleContent ? message.runtimePhase === 'starting' ? 'Starting chat…' : 'Waiting for response…'
-    : null;
+    : phase === 'compacting' ? 'Compacting conversation…'
+    : phase === 'retrying' ? 'Retrying response…'
+    : phase === 'starting' ? 'Starting chat…'
+    : runningTool?.status === 'approval' ? 'Waiting for your approval…'
+    : runningTool ? `${stepLabel([runningTool], true)}…`
+    : phase === 'thinking' ? 'Thinking…'
+    : phase === 'writing' ? 'Writing…'
+    : phase === 'tool' ? 'Writing a tool call…'
+    : !hasVisibleContent ? 'Waiting for response…'
+    : 'Waiting for the model…';
   // How long it has been waiting, beside the words: a slow local model reads as
   // slow, not as stuck (user, 04.10). Kept out of the live region's words.
   const waited = useElapsed(runtimeStatus !== null, undefined, runtimeStatus);
@@ -568,7 +535,11 @@ function MessageRow({
         <>
           <MessageContent message={message} sources={sources} />
           <ErrorNote error={message.error} />
-          {runtimeStatus && <span className="waiting-response"><span role="status" aria-live="polite">{runtimeStatus}</span>{waited >= 2000 && <span className="waiting-elapsed" aria-hidden="true"> {workDuration(waited)}</span>}</span>}
+          {/* Announced as before — the wait for a first word, compacting,
+              retrying. The phases of a reply already on the page are shown
+              only: read aloud, every switch between them would interrupt it,
+              and the composer already says a response is being generated. */}
+          {runtimeStatus && <span className="waiting-response"><span {...(!hasVisibleContent || phase === 'compacting' || phase === 'retrying' ? { role: 'status', 'aria-live': 'polite' as const } : {})}>{runtimeStatus}</span>{waited >= 2000 && <span className="waiting-elapsed" aria-hidden="true"> {workDuration(waited)}</span>}</span>}
         </>
       )}
       {message.role === "assistant" && message.status !== "streaming" && (
@@ -745,6 +716,8 @@ export function ConversationView({
   const sticky = useRef(true);
   const generation = messages.some((message) => message.status === "streaming");
   const busy = sending || generation;
+  // The folder Hello keeps for a chat is not one the person chose: to them, none is set (user, 17.11).
+  const chosenFolder = isChatFolderPath(conversation.folder) ? null : conversation.folder;
   const [voicePhase, setVoicePhase] = useState<'idle' | 'listening' | 'working'>('idle');
   const voiceTurn = useRef<AbortController | null>(null);
   /** Ends the recording and keeps what was said, where `voiceTurn` throws it away. */
@@ -1121,9 +1094,14 @@ export function ConversationView({
         if (busy) throw new Error('Stop the current response before changing its working folder.');
         const updated = await api.conversations.update(conversation.id, { folder: imported.folder });
         if (mounted.current) onFolderChange(updated);
-      } else {
-        setAttachments(current => [...current, ...imported.attachments]);
       }
+      if (imported.attachments.length) setAttachments(current => [...current, ...imported.attachments]);
+      // A PDF or a workbook that went to the chat's folder is not a chip: it is named in the message, so the request says which file it is about.
+      const documents = imported.documents ?? [];
+      if (documents.length) setDraft(current => {
+        const named = documents.filter(name => !current.includes(name));
+        return named.length ? `${current}${current && !/\s$/.test(current) ? ' ' : ''}${named.join(' ')} ` : current;
+      });
       field.current?.focus({ preventScroll: true });
     } catch (reason) {
       if (mounted.current) setError(errorText(reason));
@@ -1225,6 +1203,25 @@ export function ConversationView({
       action: () => void api.settings.save({ voice: { enabled: !voiceOn } }).then(onSettingsChange).catch(reportError) },
     { id: 'auto-send', label: 'Auto Send', toggle: true, stayOpen: true, checked: settings.voice?.autoSend === true, disabled: !voiceOn,
       action: () => void api.settings.save({ voice: { enabled: true, autoSend: settings.voice?.autoSend !== true } }).then(onSettingsChange).catch(reportError) },
+  ];
+  // How hard the model thinks, beside the model it is (user, 17.11: "nu avem efort selector"): the setting
+  // Settings always had, where it is used. Thinking switches it off and back on at the level it had; a level
+  // applies from the next message. What the connection does with a level is said under the switch.
+  const effort: Effort = settings.reasoningEffort ?? 'off';
+  const setEffort = (level: Effort) => {
+    if (level !== 'off') { try { localStorage.setItem('hello.effort.last', level); } catch { /* Best effort. */ } }
+    void api.settings.save({ reasoningEffort: level }).then(onSettingsChange).catch(reportError);
+  };
+  const lastEffort = (): Effort => {
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('hello.effort.last'); } catch { /* Best effort. */ }
+    return EFFORT_LEVELS.find(level => level.value === saved)?.value ?? 'medium';
+  };
+  const effortItems: MenuItem[] = [
+    { id: 'thinking', label: 'Thinking', toggle: true, stayOpen: true, checked: effort !== 'off',
+      detail: effortHint(reasoningReach({ endpointUrl: chosen.endpointUrl, model: chosen.id, modelCompatibility: settings.modelCompatibility })),
+      action: () => setEffort(effort === 'off' ? lastEffort() : 'off') },
+    ...EFFORT_LEVELS.map((level, index): MenuItem => ({ id: `effort:${level.value}`, label: level.label, checked: effort === level.value, separator: index === 0, action: () => setEffort(level.value) })),
   ];
   const modelItems: MenuItem[] = catalog.flatMap((connection): MenuItem[] => {
     const name = connection.name || suggestedName(connection.endpointUrl) || connection.endpointUrl;
@@ -1444,20 +1441,20 @@ export function ConversationView({
               : preview?.error ? <ErrorNote error={preview.error} />
               : <p role="status">Loading preview…</p>}
           </Dialog>
-          {conversation.folder && (
+          {chosenFolder && (
             <div className="composer-folder">
               <button
                 type="button"
                 className="text-button truncate"
                 onClick={() =>
                   void api.system
-                    .revealPath(conversation.folder!)
+                    .revealPath(chosenFolder)
                     .catch(reportError)
                 }
-                title={conversation.folder}
+                title={chosenFolder}
               >
                 <Folder size={14} />
-                {conversation.folder.split("/").filter(Boolean).at(-1)}
+                {chosenFolder.split("/").filter(Boolean).at(-1)}
               </button>
               <IconButton
                 label="Remove working folder"
@@ -1518,23 +1515,9 @@ export function ConversationView({
             <span className="sr-only" role="status" aria-live="polite">
               {busy ? "Generating response" : ""}
             </span>
-            <PillSwitch
-              label="Chat mode"
-              value={conversation.chatMode ?? 'chat'}
-              options={[
-                { value: 'chat', label: 'Chat', title: 'Chat mode', Icon: MessageCircle },
-                { value: 'coder', label: 'Coder', title: 'Coder mode', Icon: CodeXml },
-              ]}
-              disabled={busy}
-              onChange={chatMode => {
-                if (chatMode === (conversation.chatMode ?? 'chat')) return;
-                void api.conversations.update(conversation.id, { chatMode })
-                  .then(onFolderChange).catch(reportError);
-              }}
-            />
             <IconButton
               label={
-                conversation.folder
+                chosenFolder
                   ? "Change working folder"
                   : "Choose working folder"
               }
@@ -1567,6 +1550,10 @@ export function ConversationView({
                 {modelLoading ? <Loader2 size={13} className="browser-spinner"/> : <ChevronDown size={13} />}
               </MenuButton>
             </div>
+            <MenuButton label={`Reasoning effort: ${effort === 'off' ? 'thinking off' : effort}`} className="model-trigger effort-trigger" items={effortItems}>
+              <span>{effort === 'off' ? 'Off' : EFFORT_LEVELS.find(level => level.value === effort)?.label}</span>
+              <ChevronDown size={13} />
+            </MenuButton>
             {voiceOn || !api.voice?.transcribe ? (
               <IconButton
                 className="icon-button voice-mic"

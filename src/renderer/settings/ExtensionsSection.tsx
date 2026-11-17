@@ -7,7 +7,7 @@ import { ErrorNote, IconButton, errorText } from '../ui/primitives';
 const groups: Array<{ kind: ResourceKind; title: string; blurb: string }> = [
   { kind: 'skill', title: 'Skills', blurb: 'Instructions and reference files the model loads when a task matches. Import a folder with SKILL.md, or a single SKILL.md file.' },
   { kind: 'plugin', title: 'Plugins', blurb: 'Pi packages that add extensions, skills or prompt templates. Extensions are Node code and run with the app’s own access; review a package before importing it.' },
-  { kind: 'mcp', title: 'MCP servers', blurb: 'Local servers started over stdio. Hello connects, lists their tools and offers them to the chats you activate them in.' },
+  { kind: 'mcp', title: 'MCP servers', blurb: 'Servers Hello starts on this Mac, or reaches over HTTP. Hello connects, lists their tools and offers them to the chats you activate them in.' },
 ];
 
 const stateLabel: Record<LibraryResource['state'], string> = {
@@ -48,7 +48,21 @@ function ResourceRow({ resource, status, onChanged, onError, busy, setBusy, onEd
             {stateLabel[resource.state]}
           </span>
         )}
-        {resource.kind === 'mcp' && status && (
+        {resource.kind === 'mcp' && status?.needsSignIn && !status.connected ? (
+          // The server's own sign-in, in the browser, opened by this click and nothing else.
+          <button type="button" className="pill extension-sign-in" disabled={busy || probing || !api.extensions.signIn}
+            onClick={() => {
+              setProbing(true);
+              onError(null);
+              void api.extensions.signIn!(resource.id)
+                .then(result => { if (!result.connected && result.error) onError(result.error); })
+                .then(onChanged)
+                .catch(reason => onError(errorText(reason)))
+                .finally(() => setProbing(false));
+            }}>
+            {probing ? 'Signing in…' : 'Sign in'}
+          </button>
+        ) : resource.kind === 'mcp' && status && (
           <span className={`extension-status${status.connected ? ' is-live' : ''}`}>
             {status.connected ? `${status.tools.length} tool(s)` : status.error ? 'Failed' : 'Not connected'}
           </span>
@@ -132,11 +146,14 @@ function McpForm({ onSaved, onError, busy, setBusy, editing, onCancelEdit }: {
   const [env, setEnv] = useState('');
   const [cwd, setCwd] = useState('');
   const [clearEnv, setClearEnv] = useState(false);
+  // An address instead of a command is a server reached over HTTP: no arguments or
+  // folder then, and the values below are its headers.
+  const remote = /^https?:\/\//i.test(command.trim());
   useEffect(() => {
     if (!editing) return;
     setOpen(true);
     setName(editing.name);
-    setCommand(editing.mcp?.command ?? '');
+    setCommand(editing.mcp?.transport === 'http' ? editing.mcp.url ?? '' : editing.mcp?.command ?? '');
     setArgs(editing.mcp?.args.join('\n') ?? '');
     setCwd(editing.mcp?.cwd ?? '');
     setEnv('');
@@ -157,24 +174,26 @@ function McpForm({ onSaved, onError, busy, setBusy, editing, onCancelEdit }: {
         <input value={name} onChange={event => setName(event.target.value)} placeholder="files" autoComplete="off" spellCheck={false} />
       </label>
       <label>
-        Command
-        <input value={command} onChange={event => setCommand(event.target.value)} placeholder="/usr/local/bin/my-mcp-server" autoComplete="off" spellCheck={false} />
+        Command or URL
+        <input value={command} onChange={event => setCommand(event.target.value)} placeholder="/usr/local/bin/my-mcp-server  or  https://mcp.example.com/mcp" autoComplete="off" spellCheck={false} />
       </label>
+      {!remote && <>
+        <label>
+          Arguments (one per line)
+          <textarea rows={2} value={args} onChange={event => setArgs(event.target.value)} placeholder="--root&#10;/Users/me/notes" spellCheck={false} />
+        </label>
+        <label>
+          Working folder (optional)
+          <input value={cwd} onChange={event => setCwd(event.target.value)} placeholder="/Users/me/notes" spellCheck={false} />
+        </label>
+      </>}
       <label>
-        Arguments (one per line)
-        <textarea rows={2} value={args} onChange={event => setArgs(event.target.value)} placeholder="--root&#10;/Users/me/notes" spellCheck={false} />
-      </label>
-      <label>
-        Working folder (optional)
-        <input value={cwd} onChange={event => setCwd(event.target.value)} placeholder="/Users/me/notes" spellCheck={false} />
-      </label>
-      <label>
-        Environment (NAME=value, one per line)
-        <textarea rows={2} value={env} onChange={event => setEnv(event.target.value)} placeholder="API_TOKEN=…" spellCheck={false} />
+        {remote ? 'Headers (Name: value, one per line)' : 'Environment (NAME=value, one per line)'}
+        <textarea rows={2} value={env} onChange={event => setEnv(event.target.value)} placeholder={remote ? 'Authorization: Bearer …' : 'API_TOKEN=…'} spellCheck={false} />
         <span className="muted">
           {editing
             ? 'Stored values are not shown. Leave this empty to keep them, or type the complete set to replace them.'
-            : 'Values are stored with the same encryption as the model key and passed only to this server’s process.'}
+            : `Values are stored with the same encryption as the model key and ${remote ? 'sent only to this server' : 'passed only to this server’s process'}.`}
         </span>
       </label>
       {editing && <label><input type="checkbox" checked={clearEnv} onChange={event => setClearEnv(event.target.checked)} /> Clear stored environment values</label>}
@@ -188,8 +207,8 @@ function McpForm({ onSaved, onError, busy, setBusy, editing, onCancelEdit }: {
             const environment: Record<string, string> = {};
             for (const line of env.split('\n')) {
               if (!line.trim()) continue;
-              const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-              if (!match) { onError('Use NAME=value for each environment entry.'); return; }
+              const match = remote ? /^\s*([A-Za-z0-9!#$%&'*+.^_`|~-]+)\s*[:=]\s*(.*)$/.exec(line) : /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+              if (!match) { onError(remote ? 'Use Name: value for each header.' : 'Use NAME=value for each environment entry.'); return; }
               environment[match[1]] = match[2];
             }
             setBusy(true);
@@ -197,9 +216,12 @@ function McpForm({ onSaved, onError, busy, setBusy, editing, onCancelEdit }: {
             void api.extensions
               .addMcp({
                 ...(editing ? { id: editing.id, keepEnv: !env.trim() && !clearEnv } : {}),
-                name: name.trim(), command: command.trim(),
-                args: editing?.mcp && args === editing.mcp.args.join('\n') ? editing.mcp.args : args ? args.split('\n') : [],
-                env: clearEnv ? {} : environment, cwd: cwd.trim() || null,
+                name: name.trim(), ...(remote ? { command: '', url: command.trim(), args: [], cwd: null } : {
+                  command: command.trim(),
+                  args: editing?.mcp && args === editing.mcp.args.join('\n') ? editing.mcp.args : args ? args.split('\n') : [],
+                  cwd: cwd.trim() || null,
+                }),
+                env: clearEnv ? {} : environment,
               })
               .then(() => { close(); onSaved(); })
               .catch(reason => onError(errorText(reason)))

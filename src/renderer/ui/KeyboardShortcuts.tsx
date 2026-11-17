@@ -34,7 +34,7 @@ const GROUPS: Group[] = [
     { keys: `${mod} + Shift + ] / [`, label: 'Next or previous chat' },
     { keys: `${mod} + J`, label: 'Next chat waiting for you' },
     { keys: `${mod} + B`, label: 'Show or hide the chats sidebar' },
-    { keys: `${mod} + F or K`, label: 'Find in the chat or the notebook on screen' },
+    { keys: `${mod} + F or K`, label: 'Find in the chat or the Workbook on screen' },
     { keys: 'Esc', label: 'Close dialog or menu' },
   ]},
 ];

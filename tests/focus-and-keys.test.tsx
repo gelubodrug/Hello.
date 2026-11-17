@@ -81,7 +81,7 @@ describe('the keyboard shortcuts', () => {
     expect(text).toContain('First or last message');
     expect(text).toContain('Copy the focused message');
     expect(text).toContain('Show or hide the chats sidebar');
-    expect(text).toContain('Find in the chat or the notebook on screen');
+    expect(text).toContain('Find in the chat or the Workbook on screen');
     expect(text).toContain('Find in the scrollback (terminal focused)');
     expect(text).toContain('Reuse a previous message');
     expect(text).toContain('Go to a chat, tab, message or command');
@@ -133,14 +133,14 @@ describe('the attention list', () => {
   it('groups requests by chat, the oldest first, and leads to the one chosen', async () => {
     const opened: string[] = [];
     const requests = [
-      request('r3', 'b', 3, 'approval', 'command_run'),
+      request('r3', 'b', 3, 'approval', 'bash'),
       request('r1', 'a', 1, 'approval', 'file_edit'),
       request('r2', 'a', 2, 'question', 'Clear session?'),
     ];
     await act(async () => root.render(createElement(AttentionDialog, { open: true, requests, titles: new Map([['a', 'Release'], ['b', 'Docs']]),
       onOpenRequest: chosen => opened.push(chosen.requestId), onClose: () => {} })));
     expect([...document.querySelectorAll('.attention-group h2')].map(node => node.textContent)).toEqual(['Release', 'Docs']);
-    expect([...document.querySelectorAll('.attention-row-label')].map(node => node.textContent)).toEqual(['file edit', 'Clear session?', 'command run']);
+    expect([...document.querySelectorAll('.attention-row-label')].map(node => node.textContent)).toEqual(['file edit', 'Clear session?', 'shell command']);
     expect(document.querySelector('.attention-summary')?.textContent).toBe('3 requests wait for your answer.');
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('.attention-row button')];
     await act(async () => { buttons[1].click(); });

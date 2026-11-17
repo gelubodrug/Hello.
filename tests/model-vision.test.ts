@@ -25,7 +25,7 @@ describe('published model vision', () => {
       await preparePiLaunch({ dataDir, conversationId: 'chat', settings: {
         endpointUrl: 'https://example.test/v1', model: 'text', subagentModel: 'unknown',
         apiKeySet: false, systemPrompt: '', temperature: 0.7, connections: [],
-      }, key: '', systemPrompt: '', history: [], bridgeEnv: {}, requestTimeoutMs: 1000, chatMode: 'chat', vision: false });
+      }, key: '', systemPrompt: '', history: [], bridgeEnv: {}, requestTimeoutMs: 1000, vision: false });
       const written = JSON.parse(await readFile(join(piConversationDir(dataDir, 'chat'), 'agent/models.json'), 'utf8'));
       expect(written.providers.hello.models.map((model: { input: string[] }) => model.input)).toEqual([['text'], ['text', 'image']]);
     } finally { await rm(dataDir, { recursive: true, force: true }); }

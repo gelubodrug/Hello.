@@ -214,7 +214,7 @@ describe('searching the notebook', () => {
       root.render(createElement(Notebook, { conversation: chat({ tasks: false }), onConversationChange: () => {}, reportError: vi.fn(), active: true }));
     });
     await act(async () => { await Promise.resolve(); });
-    const field = host.querySelector<HTMLInputElement>('[aria-label="Search notebook"]')!;
+    const field = host.querySelector<HTMLInputElement>('[aria-label="Search workbook"]')!;
     // ⌘F, with the notebook on screen, goes to its search.
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true })); });
     expect(document.activeElement).toBe(field);
