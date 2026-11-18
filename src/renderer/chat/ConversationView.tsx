@@ -53,7 +53,7 @@ import { toolCode } from "./ToolCode";
 import { useFileMention } from "./FileMention";
 import { fetchedSources, readWebResult, sourcesForMessage, withSourceLinks, type WebSource } from '../../shared/web';
 import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolIcon, webToolTitle } from './WebResearch';
-import { activityLayout, activityRows, liveTail, replySegments, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
+import { activityLayout, activityRows, liveTail, replySegments, runtimeLine, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
 import { useElapsed } from './useElapsed';
 import { PendingMessages } from './PendingMessages';
 import { chatCopySnapshot } from './selection';
@@ -453,23 +453,8 @@ function MessageRow({
     return () => clearTimeout(timer);
   }, [copied]);
   const hasVisibleContent = Boolean(message.content.trim()) || message.parts?.some(part => part.type === 'tool' || Boolean(part.text.trim()));
-  // Every moment of a streaming reply says what it is doing. With text already
-  // on the page it used to say nothing, so the minutes between tool calls —
-  // the model reading a long conversation — looked stuck (user, 12.11).
-  const runningTool = [...(message.parts ?? [])].reverse().find((part): part is Extract<typeof part, { type: 'tool' }> =>
-    part.type === 'tool' && (part.status === 'running' || part.status === 'approval'));
   const phase = message.runtimePhase;
-  const runtimeStatus = message.status !== 'streaming' ? null
-    : phase === 'compacting' ? 'Compacting conversation…'
-    : phase === 'retrying' ? 'Retrying response…'
-    : phase === 'starting' ? 'Starting chat…'
-    : runningTool?.status === 'approval' ? 'Waiting for your approval…'
-    : runningTool ? `${stepLabel([runningTool], true)}…`
-    : phase === 'thinking' ? 'Thinking…'
-    : phase === 'writing' ? 'Writing…'
-    : phase === 'tool' ? 'Writing a tool call…'
-    : !hasVisibleContent ? 'Waiting for response…'
-    : 'Waiting for the model…';
+  const runtimeStatus = runtimeLine(message, Boolean(hasVisibleContent));
   // How long it has been waiting, beside the words: a slow local model reads as
   // slow, not as stuck (user, 04.10). Kept out of the live region's words.
   const waited = useElapsed(runtimeStatus !== null, undefined, runtimeStatus);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePart } from '../src/shared/types';
-import { activityLayout, activityRows, activitySummary, liveTail, replySegments, stepDetail, stepLabel, thinkingTitle } from '../src/renderer/chat/activity';
+import { activityLayout, activityRows, activitySummary, liveTail, replySegments, stepDetail, stepLabel, runtimeLine, thinkingTitle } from '../src/renderer/chat/activity';
 
 const text = (text: string): MessagePart => ({ type: 'text', text });
 const thought = (text: string): MessagePart => ({ type: 'thinking', text });
@@ -137,5 +137,45 @@ describe('chat activity layout and truthful labels', () => {
     expect(thinkingTitle(false, NaN)).toBe('Thought');
     expect(thinkingTitle(false, -1)).toBe('Thought');
     expect(thinkingTitle(true, 612)).toBe('Thinking');
+  });
+});
+
+/**
+ * The thinking row of the activity says "Thinking" and counts the seconds. The
+ * status line under it said the same words with the same count, so a reply
+ * mid-thought read "Thinking 9s" and "Thinking… 9s", one above the other
+ * (user, 18.11).
+ */
+describe('what a streaming reply says it is doing', () => {
+  const thinking = (durationMs?: number) => ({ type: 'thinking' as const, text: 'weighing it', ...(durationMs === undefined ? {} : { durationMs }) });
+  const say = (parts: MessagePart[], runtimePhase?: string, hasText = false) =>
+    runtimeLine({ status: 'streaming', runtimePhase, parts }, hasText);
+
+  it('says nothing while the thinking row is the one counting', () => {
+    expect(say([thinking()], 'thinking')).toBeNull();
+    // A thought that has ended is not that row any more, so the line speaks again.
+    expect(say([thinking(4200)], 'thinking')).toBe('Thinking…');
+    // And with no thinking part at all, as before.
+    expect(say([], 'thinking')).toBe('Thinking…');
+    // A thought followed by something else is no longer the live row.
+    expect(say([thinking(), { type: 'text', text: 'Gata' }], 'thinking')).toBe('Thinking…');
+  });
+
+  it('still says every other phase, and the running step first of all', () => {
+    expect(say([thinking()], 'compacting')).toBe('Compacting conversation…');
+    expect(say([thinking()], 'retrying')).toBe('Retrying response…');
+    expect(say([thinking()], 'starting')).toBe('Starting chat…');
+    expect(say([thinking()], 'writing')).toBe('Writing…');
+    expect(say([thinking()], 'tool')).toBe('Writing a tool call…');
+    expect(say([], undefined, true)).toBe('Waiting for the model…');
+    expect(say([], undefined, false)).toBe('Waiting for response…');
+    // A tool that is running, or waiting to be allowed, outranks the thought.
+    const running = { type: 'tool' as const, id: 't1', name: 'bash', input: '{}', status: 'running' as const };
+    expect(say([thinking(), running], 'thinking')).toMatch(/…$/);
+    expect(say([{ ...running, status: 'approval' as const }], 'thinking')).toBe('Waiting for your approval…');
+  });
+
+  it('says nothing at all once the reply has ended', () => {
+    expect(runtimeLine({ status: 'complete', runtimePhase: 'thinking', parts: [thinking()] }, true)).toBeNull();
   });
 });

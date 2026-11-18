@@ -369,3 +369,34 @@ export function activityRows(parts: readonly MessagePart[]): ActivityRow[] {
   }
   return rows;
 }
+
+/**
+ * What a streaming reply says it is doing, under the activity — or nothing,
+ * when something on screen already says it.
+ *
+ * Every moment of a streaming reply says what it is doing. With text already
+ * on the page it used to say nothing, so the minutes between tool calls — the
+ * model reading a long conversation — looked stuck (user, 12.11). But the
+ * thinking row of the activity says "Thinking" and counts the seconds itself,
+ * and under it this line said the same words with the same count (user,
+ * 18.11): while that row is live, the line stays out of the way.
+ */
+export function runtimeLine(message: { status: string; runtimePhase?: string; parts?: readonly MessagePart[] }, hasVisibleContent: boolean): string | null {
+  if (message.status !== 'streaming') return null;
+  const parts = message.parts ?? [];
+  const phase = message.runtimePhase;
+  const runningTool = [...parts].reverse().find((part): part is Extract<MessagePart, { type: 'tool' }> =>
+    part.type === 'tool' && (part.status === 'running' || part.status === 'approval'));
+  const at = activityLayout(parts, true).activeThinking;
+  const thinking = at >= 0 ? parts[at] : undefined;
+  const thinkingShown = thinking?.type === 'thinking' && thinking.durationMs === undefined;
+  if (phase === 'compacting') return 'Compacting conversation…';
+  if (phase === 'retrying') return 'Retrying response…';
+  if (phase === 'starting') return 'Starting chat…';
+  if (runningTool?.status === 'approval') return 'Waiting for your approval…';
+  if (runningTool) return `${stepLabel([runningTool], true)}…`;
+  if (phase === 'thinking') return thinkingShown ? null : 'Thinking…';
+  if (phase === 'writing') return 'Writing…';
+  if (phase === 'tool') return 'Writing a tool call…';
+  return hasVisibleContent ? 'Waiting for the model…' : 'Waiting for response…';
+}
