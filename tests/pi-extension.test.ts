@@ -272,6 +272,24 @@ describe('arguments as the schema names them', () => {
     expect(schemaArguments('not json', schema)).toBe('not json');
   });
 
+  // Hello's own tools are closed objects, so one field they do not know made Pi refuse the whole call before
+  // Hello saw it: a model wrote `description` beside `command`, the shape another harness's shell takes, and
+  // every bash call was thrown away with "description: unknown field" (a model's report, 18.11).
+  it('drops a field a closed schema does not know, instead of losing the call', () => {
+    const bash = { type: 'object', additionalProperties: false, required: ['command'],
+      properties: { command: { type: 'string' }, timeoutSeconds: { type: 'integer' }, saveLog: { type: 'boolean' } } };
+    expect(schemaArguments({ command: 'echo hi', description: 'Runs an echo' }, bash)).toEqual({ command: 'echo hi' });
+    // What it does know is kept, snake_case included.
+    expect(schemaArguments({ command: 'ls', timeout_seconds: 60, note: 'x' }, bash)).toEqual({ command: 'ls', timeoutSeconds: 60 });
+    // A required field missing is still missing: dropping the rest hides nothing.
+    expect(schemaArguments({ description: 'only this' }, bash)).toEqual({});
+    // An open schema keeps everything, as before: only a closed one drops.
+    expect(schemaArguments({ command: 'ls', description: 'x' }, { type: 'object', properties: { command: { type: 'string' } } }))
+      .toEqual({ command: 'ls', description: 'x' });
+    // And a closed schema with no properties of its own is left alone.
+    expect(schemaArguments({ anything: 1 }, { type: 'object', additionalProperties: false, properties: {} })).toEqual({ anything: 1 });
+  });
+
   it('is what every Hello tool hands Pi to run before its check', async () => {
     offered = [{ type: 'function', function: { name: 'browser_read', description: 'read', parameters: schema } }];
     await helloTools(pi.api);

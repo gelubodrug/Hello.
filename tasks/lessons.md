@@ -197,3 +197,20 @@ acumulată într-un chat nu e consimțământ.
 **Și:** înainte de a propune o revenire la un comit, uită-te când e ultimul.
 Aici era de acum cinci săptămâni, iar „revenim la commitul de dimineață" ar fi
 șters module întregi. Copia de siguranță se face înainte de orice, nu după.
+
+## 2026-11-18 — A closed schema turns a stray field into a lost call
+
+**What happened.** A model reported that every `bash` call failed. It wrote
+`description` beside `command` — the shape Claude Code's shell tool takes —
+and because Hello defines every tool with `additionalProperties: false`, Pi
+refused the call before Hello saw it: "description: unknown field". The
+command never ran. The same fault as `tools_find` on 09.10, in another tool.
+
+**Rule.** A tool's schema is there to describe what the tool needs, not to
+police what the model brings. Where the call can be understood — a field
+nobody asked for, a name in the wrong case — read it and go on; refuse only
+what makes the work impossible, such as a required field that is missing.
+
+**And:** when a fault repeats in a second place, fix the shape, not the
+instance. `description` was the field reported; the fix is that no unknown
+field loses a call.

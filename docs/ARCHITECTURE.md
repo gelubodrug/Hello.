@@ -348,6 +348,16 @@ not a claim of live acceptance or complete CLI parity. Hello retains endpoint
 discovery and its configured OpenAI-compatible connection. Pi's broader provider
 catalog does not automatically become a supported Hello settings/authentication UI.
 
+**A field the schema does not know loses no call (T196).** Hello's tools are
+closed objects (`additionalProperties: false`), so one unexpected field made
+Pi refuse the whole call before Hello saw it: a model wrote `description`
+beside `command` — the shape another harness's shell takes — and every `bash`
+call came back "description: unknown field", with the command never run.
+`schemaArguments` now drops a field a closed schema does not know, after the
+snake_case mapping, and lets the call through; an open schema still keeps
+everything, and a missing required field is still missing. The same reading of
+a call by intent that `tools_find` already had.
+
 **Three rules that cost a run its minutes (T194).** Measured on one task: a
 12,618-character script re-sent whole to mend one line; six checking scripts,
 each reading 29,425 rows again; and a script named `inspect.py`, which Python

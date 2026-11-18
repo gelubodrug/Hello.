@@ -33,10 +33,17 @@ export function schemaArguments(args: unknown, parameters: Record<string, unknow
   }
   if (!object(value)) return value;
   const known = object(parameters.properties) ? parameters.properties : {};
+  // Hello's tools are closed objects, so one field they do not know makes Pi refuse the whole call before
+  // Hello sees it: a model that writes `description` beside `command` — the shape another harness's shell
+  // takes — had every bash call thrown away (a model's report, 18.11). A field nobody asked for is not a
+  // reason to lose the work the model did ask for: it is dropped, and the call goes on. A required one
+  // still has to be there, and the result says what actually ran.
+  const closed = parameters.additionalProperties === false && Object.keys(known).length > 0;
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     const camel = key.includes('_') ? key.replace(/_([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase()) : key;
     const name = !(key in known) && camel in known && !(camel in value) ? camel : key;
+    if (closed && !(name in known)) continue;
     out[name] = item;
   }
   return out;
