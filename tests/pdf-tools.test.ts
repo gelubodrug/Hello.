@@ -45,6 +45,11 @@ describe('the PDF tools', () => {
     expect(names(false)).toEqual([]);
     const group = helloToolGroups(toolDefinitions(true, false, { skills: [], mcp: [] }), { notebooks: { runbook: false, tasks: false }, planning: false, mcp: [] }).find(item => item.id === 'pdf')!;
     expect(group).toMatchObject({ core: false, tools: ['pdf_read', 'pdf_inspect', 'pdf_compress'] });
+    // The manual said "everything this needs is in these tools". A model asked tools_find for "read and edit a
+    // PDF", believed it, and spent six steps discovering that nothing here edits one (a run, 18.11).
+    expect(group.manual).toContain('nothing here CHANGES what a PDF says');
+    expect(group.manual).toContain('done in the shell, with a library you bring yourself');
+    expect(group.manual).not.toContain('Everything this needs is in these tools');
     for (const rule of ['next names the pages still to read', 'read them as you see them', 'never fill in what you could not make out', 'without turning it into pictures', 'never shrink one by rasterising', 'The original is never changed', 'never rounded toward what was asked', 'not verified', 'Making images smaller loses quality', 'no skill and no web search'])
       expect(group.manual).toContain(rule);
     for (const text of ['comprimă planul.pdf sub 8 MB', 'fă PDF-ul mai mic', 'Compress 01 PROFI ENHANCED U PLAN.pdf to 6 mb', 'pdf-ul e prea mare pentru mail', 'reduce the size of the pdf', 'micșorează plansa.PDF',
