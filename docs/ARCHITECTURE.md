@@ -408,6 +408,18 @@ beside the person's data for a library already present. `liveContext` now names
 `sheetPythonInterpreter(dataDir)` when that file exists, with the rule not to
 pip install or build a venv. The path is constant, so it costs no prefix cache.
 
+**A script is checked before a line of it runs (T202).** The model's code is a
+file of its own, `script.py`, line 1 its own line; `run-script.py` beside it
+sets `WORKBOOK` and `OUT` and compiles the whole script under the name `your
+script` before executing it. A typo is therefore caught with nothing done and
+reported where the model wrote it: it used to be three lines lower, pushed
+there by the two names Hello put above the code, so the model was sent to look
+at a comment. The runner's own frame and the source line Python echoes under
+it are taken out of the output, and the script's real path, which carries the
+chat's hash, is replaced by `your script`. The idea came from a reader's
+suggestion of a pre-flight gate; Hello needed no dependency for it, since the
+compile is one line of the runner and costs no extra process.
+
 **A sheet's extent is read once (T185).** ExcelJS's `columnCount` is a getter
 that walks every row of the sheet, and `rowCount` reads back over the row
 array. Left in a loop condition, either turns one pass over the cells into a

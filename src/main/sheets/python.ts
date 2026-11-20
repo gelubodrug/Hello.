@@ -9,11 +9,27 @@ export interface SheetPythonStatus { openpyxl: string; pandas: string | null; py
 
 export const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
-/** What a script starts with: where the workbook is, and where its own files go. */
-const PRELUDE = [
+/**
+ * The model's script is a file of its own, and this is what runs it.
+ *
+ * It compiles the whole script BEFORE a line of it executes, so a typo is
+ * caught at once and reported at the line the model wrote — not after half the
+ * work has been done, and not three lines off, which is where it landed when
+ * these two names sat above the model's own code (a run, 18.11: a SyntaxError
+ * on the model's line 19 came back as line 22, where its code has a comment,
+ * so there was nothing to fix where it was told to look).
+ *
+ * `your script` is the name Python then puts in every frame: the real path is
+ * inside the app's data, carries the chat's hash, and is nothing the model can
+ * open anyway.
+ */
+const RUNNER = [
   'import os',
   "WORKBOOK = os.environ['HELLO_WORKBOOK']  # the .xlsx to load and save, e.g. openpyxl.load_workbook(WORKBOOK)",
   "OUT = os.environ['HELLO_OUT']  # a folder for files this script writes",
+  "with open(os.environ['HELLO_SCRIPT'], encoding='utf-8') as _f:",
+  "    _code = compile(_f.read(), 'your script', 'exec')",
+  'exec(_code)',
   '',
 ].join('\n');
 
@@ -80,10 +96,21 @@ export class SheetPython {
   /** Runs one script on one workbook file. The script's own files go to `folder`. */
   async run(code: string, paths: { workbook: string; folder: string }, signal: AbortSignal, timeoutSeconds: number): Promise<{ exitCode: number | null; output: string }> {
     await mkdir(paths.folder, { recursive: true, mode: 0o700 });
-    const file = join(paths.folder, 'script.py');
-    atomicWriteFileSync(file, PRELUDE + code, { mode: 0o600 });
-    return this.shell(
-      `HELLO_WORKBOOK=${quote(paths.workbook)} HELLO_OUT=${quote(paths.folder)} PYTHONDONTWRITEBYTECODE=1 ${quote(this.interpreter)} ${quote(file)}`,
+    const script = join(paths.folder, 'script.py');
+    const runner = join(paths.folder, 'run-script.py');
+    atomicWriteFileSync(script, code, { mode: 0o600 });
+    atomicWriteFileSync(runner, RUNNER, { mode: 0o600 });
+    const ran = await this.shell(
+      `HELLO_WORKBOOK=${quote(paths.workbook)} HELLO_OUT=${quote(paths.folder)} HELLO_SCRIPT=${quote(script)} PYTHONDONTWRITEBYTECODE=1 ${quote(this.interpreter)} ${quote(runner)}`,
       paths.folder, signal, timeoutSeconds);
+    // The frames left that are Hello's, not the model's: the runner's own line, and the source line Python
+    // echoes under it. Both go, so a traceback holds only what the model wrote.
+    const lines = ran.output.split('\n');
+    const kept: string[] = [];
+    for (let at = 0; at < lines.length; at++) {
+      if (!lines[at].includes(runner)) { kept.push(lines[at]); continue; }
+      if (/^\s/.test(lines[at + 1] ?? '')) at++;
+    }
+    return { ...ran, output: kept.join('\n').replaceAll(script, 'your script') };
   }
 }

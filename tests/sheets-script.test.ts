@@ -273,7 +273,13 @@ describe('the Python scripts run in', () => {
     expect(recorded).toEqual([]);
     await python.run('print(WORKBOOK)', { workbook: "/a/it's.xlsx", folder: join(root, 'out') }, new AbortController().signal, 30);
     expect(recorded[0]).toContain(`HELLO_WORKBOOK='/a/it'\\''s.xlsx'`);
-    expect(await readFile(join(root, 'out', 'script.py'), 'utf8')).toMatch(/^import os\nWORKBOOK = os\.environ\['HELLO_WORKBOOK'\][^]*\nprint\(WORKBOOK\)$/);
+    // The model's code is a file of its own, line 1 its own line; the two names it starts with, and the
+    // compile that happens before any of it runs, are in the runner beside it (18.11).
+    expect(await readFile(join(root, 'out', 'script.py'), 'utf8')).toBe('print(WORKBOOK)');
+    expect(recorded[0]).toContain('HELLO_SCRIPT=');
+    const runner = await readFile(join(root, 'out', 'run-script.py'), 'utf8');
+    expect(runner).toMatch(/^import os\nWORKBOOK = os\.environ\['HELLO_WORKBOOK'\]/);
+    expect(runner).toContain("compile(_f.read(), 'your script', 'exec')");
   });
 
   it('says what is missing when there is no Python or no network', async () => {
@@ -483,4 +489,54 @@ describe('sheet_script', () => {
     expect(removed.sheets).toEqual(['Magazine', 'Grafic', 'Multe', 'Pe judet']);
     expect((await books.describe(chat, made.id)).charts).toHaveLength(3);
   });
+});
+
+/**
+ * The model's code is a file of its own, compiled whole before a line of it
+ * runs. A typo is caught at once, at the line the model wrote — it used to be
+ * reported three lower, where the two names Hello put above the code pushed
+ * it, and the model had nothing to fix where it was told to look (18.11).
+ */
+describe('a script checked before it runs', () => {
+  const ran = async (code: string) => {
+    const home = join(root, 'py');
+    await mkdir(join(home, 'venv', 'bin'), { recursive: true });
+    await symlink(realPython!, join(home, 'venv', 'bin', 'python'));
+    const python = new SheetPython(home, async (command, cwd) => new Promise(done =>
+      execFile('/bin/sh', ['-c', command], { cwd }, (error, stdout, stderr) =>
+        done({ exitCode: error ? Number((error as { code?: number }).code ?? 1) : 0, output: `${stdout}${stderr}` }))));
+    const work = join(root, 'work');
+    await mkdir(work, { recursive: true });
+    return python.run(code, { workbook: join(work, 'book.xlsx'), folder: work }, new AbortController().signal, 60);
+  };
+
+  it.runIf(realPython)('catches a typo before running anything, at the model’s own line', async () => {
+    const result = await ran(['open(OUT + "/ran.txt", "w").write("x")', 'b = 2', 'c = 3', 'd = 4', 'if e=5', '    pass'].join('\n'));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.output).toContain('File "your script", line 5');
+    expect(result.output).toContain('SyntaxError');
+    // Nothing ran: the first line would have written a file, and the whole script was refused before it.
+    expect(await readFile(join(root, 'work', 'ran.txt'), 'utf8').then(() => true, () => false)).toBe(false);
+    // And no path out of the app's data, nor Hello's own runner line.
+    expect(result.output).not.toContain(root);
+    expect(result.output).not.toContain('_code');
+    // The traceback holds only the model's own frames.
+    expect(result.output.split('\n').filter(line => line.includes('File "'))).toEqual(['  File "your script", line 5']);
+  }, 120_000);
+
+  it.runIf(realPython)('gives every frame of a failure the model’s own lines, and still sets WORKBOOK and OUT', async () => {
+    const result = await ran(['# 1', '# 2', '# 3', 'def boom():', '    # 5', '    # 6',
+      '    raise ValueError(OUT and "de la model")', '', 'boom()'].join('\n'));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.output).toContain('File "your script", line 9, in <module>');
+    expect(result.output).toContain('File "your script", line 7, in boom');
+    expect(result.output).toContain('ValueError: de la model');
+    expect(result.output).not.toContain(root);
+  }, 120_000);
+
+  it.runIf(realPython)('runs a good script as before, with both names set', async () => {
+    const result = await ran('import os\nprint(os.path.basename(WORKBOOK), os.path.isdir(OUT))');
+    expect(result.exitCode).toBe(0);
+    expect(result.output.trim()).toBe('book.xlsx True');
+  }, 120_000);
 });
