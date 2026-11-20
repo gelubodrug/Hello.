@@ -25,6 +25,16 @@ describe('what every turn is told before the user says anything', () => {
     }
   });
 
+  it('tells a model behind the gate to execute a work order, not reopen it, and says nothing of it otherwise', () => {
+    // The gate asked before the order was written (user, 18.11: assume the execution, never the problem).
+    const gated = helloSystemPrompt(settings, extensions, false, { runbook: false, tasks: false }, true);
+    expect(gated).toContain('WORK ORDER');
+    expect(gated).toContain('Execute the order as written, in one pass');
+    expect(gated).toContain('never at the level of the problem');
+    expect(helloSystemPrompt(settings, extensions, false, { runbook: false, tasks: false }, false)).not.toContain('WORK ORDER');
+    expect(helloSystemPrompt(settings)).not.toContain('WORK ORDER');
+  });
+
   it('asks for no plan at all when Plan is off, which is the default', () => {
     {
       const prompt = helloSystemPrompt(settings);

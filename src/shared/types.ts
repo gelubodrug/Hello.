@@ -96,6 +96,10 @@ export interface Conversation { id: string; title: string; folder: string | null
   /** The chat's Workbook — its page of Runbooks, Tasks and Plans — is on. Off by default (user, 17.11): a chat is a
    *  chat until this one needs more. While it is off the page is not shown and its sections read as off. */
   notebook?: boolean;
+  /** Ask first: Hello's gate reads each request before the model starts and asks the few questions whose answers it
+   *  needs, so the agent gets a work order, never a conversation (user, 18.11). Unset, it is on for a model on a
+   *  server of the person's own and off for a provider; set, the person's choice for this chat. */
+  askFirst?: boolean;
   /** When the chat was last restarted: the model's memory begins here; what came before stays for the person. */
   freshFrom?: number;
   /** The model this chat runs on, on its connection: the last one used or picked in it (user, 04.10). Absent, the chat runs on the selection in Settings. */
@@ -345,7 +349,7 @@ export interface HelloAPI {
   conversations: {
     list(): Promise<Conversation[]>;
     create(title?: string): Promise<Conversation>;
-    update(id: string, patch: { title?: string; folder?: string | null; notebook?: boolean; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null }): Promise<Conversation>;
+    update(id: string, patch: { title?: string; folder?: string | null; notebook?: boolean; planning?: boolean; runbook?: boolean; tasks?: boolean; askFirst?: boolean; model?: ChatModel | null }): Promise<Conversation>;
     delete(id: string): Promise<void>;
     /** The model starts fresh from now; messages, tabs, terminals, notes and the folder stay. */
     restart(id: string): Promise<Conversation>;

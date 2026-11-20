@@ -38,6 +38,7 @@ import { outlineOf } from '../sheets/charts';
 import { bringIn, chatFiles, chatFolderOf } from './chat-folder';
 import { scopedPath } from './tools';
 import { helloSystemPrompt, runtimeGuidance } from './pi-instructions';
+import { gateQuestionsText, orderSummary, runGate, workOrder, type GateState } from './gate';
 import { runtimeReport, type MeasuredCall } from './runtime-status';
 import { browserOperation, executeToolOutput, toolDefinitions, toolName, type BrowserHooks, type ExtensionTools, type WorkerHooks } from './tools';
 import type { Workbooks } from '../sheets/workbooks';
@@ -992,7 +993,26 @@ export class ChatService {
     return this.attachments.preview(conversationId, attachmentId);
   }
 
-  async send(conversationId: string, text: string, attachmentIds: string[] = []): Promise<void> {
+  /**
+   * Ask first — the gate (gate.ts) — is on for this chat: the person's choice,
+   * or, unset, on for a model on a server of their own and off for a provider
+   * (user, 18.11: a local model is given a work order, never a conversation).
+   */
+  askFirst(conversationId: string, settings = this.chatSettings(conversationId)): boolean {
+    const chosen = this.store.getConversation(conversationId).askFirst;
+    if (chosen !== undefined) return chosen;
+    try {
+      return ownServer(new URL(normalizeEndpoint(settings.endpointUrl)).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  async send(conversationId: string, text: string, attachmentIds: string[] = [], options: {
+    /** The message is the person's own, typed into this chat: the gate reads it when Ask first is on. A worker's
+     *  report or a queued message arrives through here too, and those the gate never sees. */
+    gate?: boolean;
+  } = {}): Promise<void> {
     this.assertIdle(conversationId);
     if (typeof text !== 'string') throw new Error('Message must be text.');
     if (!Array.isArray(attachmentIds)) throw new Error('Invalid attachments. Drop files into this chat first.');
@@ -1033,7 +1053,71 @@ export class ChatService {
       this.store.updateConversation(conversationId, {
         title: (text.trim() || attachments?.attachments[0]?.name || 'Attached files').split('\n')[0].slice(0, 80),
       });
-    await this.start(conversationId, settings, undefined, prompt, attachments);
+    // The gate waits on nothing once Ask first is off, or the message has no words for it to read.
+    const waiting = this.store.getGate(conversationId);
+    if (!options.gate || !text.trim() || !this.askFirst(conversationId, settings)) {
+      if (waiting) this.store.setGate(conversationId, null);
+      await this.start(conversationId, settings, undefined, prompt, attachments);
+      return;
+    }
+    await this.gate(conversationId, settings, waiting, text, generation, attachments);
+  }
+
+  /**
+   * The gate's call, between the person's message and the agent's turn. The
+   * reply's bubble opens at once and shows the gate thinking; it either ends
+   * there, with the gate's questions, or carries on as the agent's reply to the
+   * work order. A failed call lets the request through as it was.
+   */
+  private async gate(conversationId: string, settings: AppSettings, waiting: GateState | null, text: string, generation: number, attachments?: AttachmentContext): Promise<void> {
+    const state: GateState = waiting
+      ? { ...waiting, answers: [...waiting.answers, text] }
+      : { request: text, understood: '', questions: [], answers: [], rounds: 0, at: Date.now() };
+    const message: Message = {
+      id: randomUUID(), conversationId, role: 'assistant', content: '', parts: [], status: 'streaming', createdAt: Date.now(),
+      runtimePhase: 'thinking', ...(settings.model ? { model: settings.model } : {}),
+    };
+    this.emit({ conversationId, message });
+    const controller = new AbortController();
+    let pending = this.preparations.get(conversationId);
+    if (!pending) this.preparations.set(conversationId, pending = new Set());
+    pending.add(controller);
+    this.starting.add(conversationId);
+    let verdict;
+    try {
+      verdict = await runGate({
+        fetcher: this.fetcher, url: completionURL(settings.endpointUrl), key: this.store.getApiKey(settings.endpointUrl),
+        settings, folder: this.store.getConversation(conversationId).folder, prior: this.store.getLastOrder(conversationId) ?? undefined,
+        attached: attachments?.attachments.map(item => item.name), signal: controller.signal,
+      }, state);
+      this.assertPreparation(conversationId, generation);
+    } catch (error) {
+      // Stopped while the gate read: the bubble closes with the reason, like a reply stopped before its first word.
+      const stopped: Message = { ...message, status: 'error', error: error instanceof Error ? error.message : String(error), runtimePhase: undefined };
+      this.store.saveMessage(stopped);
+      this.emit({ conversationId, message: stopped });
+      this.store.setGate(conversationId, null);
+      return;
+    } finally {
+      pending.delete(controller);
+      if (!pending.size) this.preparations.delete(conversationId);
+      this.starting.delete(conversationId);
+    }
+    if (verdict.kind === 'ask') {
+      const asked: GateState = { ...state, understood: verdict.understood, questions: [...state.questions, ...verdict.questions], rounds: state.rounds + 1, at: Date.now() };
+      this.store.setGate(conversationId, asked);
+      const content = gateQuestionsText(verdict);
+      const reply: Message = { ...message, content, parts: [{ type: 'text', text: content }], status: 'complete', runtimePhase: undefined };
+      this.store.saveMessage(reply);
+      this.emit({ conversationId, message: reply });
+      return;
+    }
+    this.store.setGate(conversationId, null);
+    // A question or a conversation is not an order: it reaches the agent as the person wrote it.
+    const order = verdict.kind === 'ready' && verdict.work ? verdict : null;
+    if (order) this.store.setLastOrder(conversationId, orderSummary(order));
+    const prompt = order ? workOrder(order, state) : text;
+    await this.start(conversationId, settings, message, prompt, attachments);
   }
 
   async retry(conversationId: string): Promise<void> {
@@ -1750,6 +1834,7 @@ export class ChatService {
       // The instructions name the notebook sections that are on: a switched
       // section starts the next turn in a session whose instructions say so.
       sections: { plan: conversation.planning === true, runbook: conversation.runbook === true, tasks: conversation.tasks === true },
+      askFirst: this.askFirst(run.conversationId, settings),
       // A changed selection OR a re-imported copy restarts the child; the
       // durable Pi session file, and the conversation history, are unaffected.
       // Paths alone would not change on update: the row keeps its id.
@@ -1820,7 +1905,7 @@ export class ChatService {
           mcp: resources.mcp.map(tool => ({ name: tool.name, serverName: tool.serverName })),
           catalog: Boolean(this.skillCatalog),
         }, conversation.planning === true,
-        { runbook: conversation.runbook === true, tasks: conversation.tasks === true }), runtime, projectInstructionPrompt(projectInstructions),
+        { runbook: conversation.runbook === true, tasks: conversation.tasks === true }, this.askFirst(run.conversationId, settings)), runtime, projectInstructionPrompt(projectInstructions),
         // A server turned on but not signed in to has no tools here: say so, rather than let the model guess at them.
         resources.mcpWaiting.length ? `MCP servers turned on in this chat that need the person to sign in before their tools can be used: ${resources.mcpWaiting.join(', ')}. If the task needs one, say so and point to Sign in beside it in Settings › Extensions; do not guess its tools.` : '',
         ].filter(Boolean).join('\n\n'),

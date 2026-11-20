@@ -103,6 +103,37 @@ parks its host behind the app rather than collapsing it: Chromium creates no pag
 for an element without a box, and the agent must still be able to read a tab
 whose pane is closed. Header controls remain in the app renderer.
 
+## The gate: Ask first
+
+A model is trained to do something and explain afterwards what it did not
+know, never to ask first; people write to it the way frontier models taught
+them to write. A local model given such a request guesses, loops and delivers
+a fraction (user, 18.11). So Hello closes the gap before the agent sees the
+request: [`chat/gate.ts`](../src/main/chat/gate.ts).
+
+When **Ask first** is on for a chat (the sidebar menu; on by itself for a
+model on a server of the person's own, `ownServer`, off for a provider; the
+person's choice is stored as `chat-ask-first:<id>`), `ChatService.send` with
+`{ gate: true }` — only the IPC `chat.send`, never a queued message or a
+worker's report — makes one short call to the chat's model first: no tools, no
+history, thinking off where the connection takes the switch, a 1–2K prompt.
+The model answers with what it understood, the execution decisions it takes
+as assumptions, and at most three questions, only about the problem. With
+questions, the reply's bubble ends there with them, the state waits in
+`chat-gate:<id>` and the person answers in the composer; the answer goes back
+through the gate (at most two rounds, then it decides and lets the work
+through). Without questions, the bubble carries on as the agent's reply to a
+**work order** — understood, assumed, asked and answered, and the person's own
+words last, as reference — and the instructions tell the model to execute the
+order in one pass and never reopen what it settled. A failed call lets the
+request through as it was; a restart clears what the gate waited on. The
+gate is also told the last order it handed this chat (`chat-order:<id>`), so
+"now add a sheet" is read against it, and the names of the files attached to
+the message. A plain question or a conversation (`work: false`) goes to the
+agent as the person wrote it. `tests/gate-eval.test.ts` runs 18 requests through
+a live server (`GATE_EVAL=1`) to tune the prompt by reading the verdicts. The
+agent assumes at the level of execution, never at the level of the problem.
+
 ## Conversation Files tool
 
 `src/main/files/service.ts` owns lazy directory listings, bounded filename/path

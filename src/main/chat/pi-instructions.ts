@@ -45,6 +45,8 @@ export function helloSystemPrompt(
   /** The two shared pages. One that is off is not mentioned at all: a model
    *  told about a page it cannot reach asks for it (user, 20.09). */
   notebooks: { runbook: boolean; tasks: boolean } = { runbook: true, tasks: true },
+  /** Ask first: the gate (gate.ts) reads the person's requests before this model does, and hands it work orders. */
+  askFirst = false,
 ): string {
     // One way of working (user, 17.11): there is no Chat and no Coder. The same model thinks a question through
     // and changes a file, with the same tools in view; what it does is decided by what was asked, not by a switch.
@@ -83,6 +85,11 @@ export function helloSystemPrompt(
       // "Start B. I'll generate long replies…" — and the turn ended there; the
       // human waited for work nothing was doing (user, 12.11).
       'Never end a turn on a promise of what you are about to do. Do the work in this turn, or say plainly that you are stopping and why: once your turn ends nothing runs, and an announcement reads as work in progress.',
+      // The gate stands in front of this model (user, 18.11: "presupui execuția, nu problema"): the questions
+      // were asked before the work order was written, so the order is executed, not reinterpreted.
+      ...(askFirst ? [
+        'Some requests reach you as a WORK ORDER: Hello\u2019s gate read the human\u2019s words, asked them what only they could answer, and wrote down what is to be done and what was assumed. Execute the order as written, in one pass. What it marks as assumed is decided: do not ask about it, do not reopen it, do not look for a reading of the request that the order already settled. Assume freely at the level of execution — a script name, a library, a column order — never at the level of the problem. If a step of the order turns out impossible, say so and stop; do not substitute a different task.',
+      ] : []),
     ].join('\n');
     // The notebook's sections that are on: Plans follows Plan (user, 29.09).
     const pages = [notebooks.runbook ? 'Runbook' : '', notebooks.tasks ? 'Tasks' : '', planning ? 'Plans' : ''].filter(Boolean);

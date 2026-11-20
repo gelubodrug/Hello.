@@ -97,7 +97,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('conversations.create',(title)=>store.createConversation(title===undefined?undefined:str(title,'title',250)));
   handle('conversations.update',(id,value)=>{
     const conversationId=str(id);
-    const patch=record(value);const clean:{title?:string;folder?:string|null;notebook?:boolean;planning?:boolean;runbook?:boolean;tasks?:boolean;model?:{endpointUrl:string;id:string}|null}={};
+    const patch=record(value);const clean:{title?:string;folder?:string|null;notebook?:boolean;planning?:boolean;runbook?:boolean;tasks?:boolean;askFirst?:boolean;model?:{endpointUrl:string;id:string}|null}={};
     // The model the chat runs on, picked in its composer (user, 04.10); its next turn takes it.
     if(patch.model!==undefined){
       if(patch.model===null)clean.model=null;
@@ -123,6 +123,10 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
       if(patch[page]===undefined)continue;
       if(typeof patch[page]!=='boolean')throw new Error(`${page} is on or off.`);
       clean[page]=patch[page] as boolean;
+    }
+    if(patch.askFirst!==undefined){
+      if(typeof patch.askFirst!=='boolean')throw new Error('Ask first is on or off.');
+      clean.askFirst=patch.askFirst;
     }
     const previousFolder=store.getConversation(conversationId).folder;
     const updated=store.updateConversation(conversationId,clean);
@@ -230,7 +234,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   handle('chat.send',(id,text,attachmentIds)=>{
     if(typeof text!=='string'||text.length>200000)throw new Error('Invalid message.');
     if(attachmentIds!==undefined&&(!Array.isArray(attachmentIds)||attachmentIds.length>8||attachmentIds.some(value=>typeof value!=='string'||value.length>100)))throw new Error('Invalid attachments.');
-    return chat.send(str(id),text,attachmentIds);
+    return chat.send(str(id),text,attachmentIds,{gate:true});
   });
   handle('chat.queue',(id,text,mode)=>{
     if(typeof text!=='string'||text.length>200000)throw new Error('Invalid message.');

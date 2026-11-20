@@ -16,7 +16,12 @@ const io = join(root, 'io');
 // A chat with a folder of the person's (folder/), or one with none; and the files dropped onto it (drop/), from outside that folder.
 const folder = existsSync(join(root, 'folder')) ? realpathSync(join(root, 'folder')) : undefined;
 const dropped = existsSync(join(root, 'drop')) ? readdirSync(join(root, 'drop')).filter(name => !name.startsWith('.')).map(name => realpathSync(join(root, 'drop', name))) : [];
-const prompt = readFileSync(join(root, 'prompt.txt'), 'utf8');
+// One message, or several separated by a line of three dashes, each sent once the turn before it has ended.
+const prompts = readFileSync(join(root, 'prompt.txt'), 'utf8').split(/^---\s*$/m).map(text => text.trim()).filter(Boolean);
+// A real server in the model's chair (HEADLESS_ENDPOINT + HEADLESS_MODEL): the run then needs no replies from io/.
+const real = process.env.HEADLESS_ENDPOINT && process.env.HEADLESS_MODEL ? { endpointUrl: process.env.HEADLESS_ENDPOINT, model: process.env.HEADLESS_MODEL } : undefined;
+// Ask first (HEADLESS_GATE=1): the messages are the person's, read by the gate before the agent.
+const gate = process.env.HEADLESS_GATE === '1';
 const trace = (entry: Record<string, unknown>) => appendFileSync(join(root, 'trace.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
 const sleep = (ms: number) => new Promise(done => setTimeout(done, ms));
 
@@ -60,9 +65,11 @@ const port = (server.address() as { port: number }).port;
 const dataDir = join(root, 'data');
 mkdirSync(dataDir, { recursive: true });
 const store = createDataStore(dataDir, { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() });
-store.saveSettings({ endpointUrl: `http://127.0.0.1:${port}/v1`, model: 'headless-model', reasoningEffort: 'off', contextWindow: 200000, maxOutputTokens: 8192 });
+store.saveSettings({ endpointUrl: real?.endpointUrl ?? `http://127.0.0.1:${port}/v1`, model: real?.model ?? 'headless-model',
+  reasoningEffort: (process.env.HEADLESS_EFFORT as 'off' | 'low' | 'medium' | 'high' | undefined) ?? 'off', contextWindow: 200000, maxOutputTokens: 8192 });
 const conversation = store.createConversation('Headless sheets run');
 if (folder) store.updateConversation(conversation.id, { folder });
+if (gate) store.updateConversation(conversation.id, { askFirst: true });
 const sheets = new Workbooks({
   dataDir,
   resolveFile: async (conversationId, path, writing) => {
@@ -90,31 +97,42 @@ const chat = new ChatService({
   },
 });
 
-trace({ kind: 'start', port, folder, conversation: conversation.id, pi: process.env.HEADLESS_PI_ENTRY ?? 'bundled' });
+trace({ kind: 'start', port, folder, conversation: conversation.id, pi: process.env.HEADLESS_PI_ENTRY ?? 'bundled', model: real ?? 'headless', gate, turns: prompts.length });
 writeFileSync(join(io, 'ready'), String(port));
 // As the window does it: the files are dropped first, and a document that went to the chat's folder is named in the message.
-let said = prompt;
-if (dropped.length) {
-  const landed = await chat.attach(conversation.id, dropped);
-  trace({ kind: 'dropped', folder: landed.folder, documents: landed.documents, workbooks: landed.workbooks, attachments: landed.attachments.map(item => item.name) });
-  const named = (landed.documents ?? []).filter(name => !said.includes(name));
-  if (named.length) said = `${said.trimEnd()} ${named.join(' ')}`;
+const turns: unknown[] = [];
+for (const [index, prompt] of prompts.entries()) {
+  let said = prompt;
+  if (index === 0 && dropped.length) {
+    const landed = await chat.attach(conversation.id, dropped);
+    trace({ kind: 'dropped', folder: landed.folder, documents: landed.documents, workbooks: landed.workbooks, attachments: landed.attachments.map(item => item.name) });
+    const named = (landed.documents ?? []).filter(name => !said.includes(name));
+    if (named.length) said = `${said.trimEnd()} ${named.join(' ')}`;
+  }
+  const started = Date.now();
+  trace({ kind: 'send', turn: index + 1, text: said.slice(0, 300) });
+  last = undefined;
+  await chat.send(conversation.id, said, [], { gate });
+  // send() resolves when the turn is accepted — or, with the gate, when the gate has answered; the turn ends when the message does.
+  for (let waited = 0; waited < 60 * 60_000; waited += 300) {
+    const state = last?.status;
+    if (state && state !== 'streaming') break;
+    await sleep(300);
+  }
+  await sleep(500);
+  const final = store.listMessages(conversation.id).filter(message => message.role === 'assistant').at(-1);
+  const parts = (final?.parts ?? []) as MessagePart[];
+  const steps = parts.map(part => part.type === 'tool'
+    ? { tool: part.name, status: part.status, input: part.input.slice(0, 400), output: (part.output ?? '').slice(0, 400) }
+    : { [part.type]: part.text.slice(0, 2000) });
+  turns.push({ turn: index + 1, said: said.slice(0, 300), status: final?.status, error: final?.error, workedMs: final?.workedMs, elapsedMs: Date.now() - started,
+    gate: { waiting: store.getGate(conversation.id), lastOrder: store.getLastOrder(conversation.id) }, steps });
+  trace({ kind: 'turn-end', turn: index + 1, status: final?.status, error: final?.error, elapsedMs: Date.now() - started, tools: parts.filter(part => part.type === 'tool').length });
 }
-await chat.send(conversation.id, said);
-// send() resolves when the turn is accepted; the turn ends when the message does.
-for (let waited = 0; waited < 60 * 60_000; waited += 300) {
-  const state = last?.status;
-  if (state && state !== 'streaming') break;
-  await sleep(300);
-}
-await sleep(500);
 const final = store.listMessages(conversation.id).filter(message => message.role === 'assistant').at(-1);
-const parts = (final?.parts ?? []) as MessagePart[];
 writeFileSync(join(root, 'result.json'), JSON.stringify({
   status: final?.status, error: final?.error, workedMs: final?.workedMs,
-  steps: parts.map(part => part.type === 'tool'
-    ? { tool: part.name, status: part.status, input: part.input.slice(0, 400), output: (part.output ?? '').slice(0, 400) }
-    : { [part.type]: part.text.slice(0, 2000) }),
+  turns,
   workbooks: await sheets.list(conversation.id).catch(() => []),
 }, null, 1));
 trace({ kind: 'end', status: final?.status, error: final?.error, requests });

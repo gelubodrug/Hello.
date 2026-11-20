@@ -28,6 +28,20 @@ either key may be left out, and a reply with no tool calls ends the turn. Each
 model input shows the tools callable in that step, exactly as Pi sends them —
 a tool that is not listed is not callable, as for a real model.
 
+## A real server, and the gate
+
+With `HEADLESS_ENDPOINT` and `HEADLESS_MODEL` set, the model's chair is a real
+OpenAI-compatible server (a Kapitsa on this Mac, say) and nothing waits in
+`io/`; `HEADLESS_EFFORT` is the chat's reasoning setting (default `off`).
+With `HEADLESS_GATE=1` the chat has Ask first on and every message goes through
+the gate as a person's would. `prompt.txt` may hold several messages separated
+by a line of three dashes; each is sent once the turn before it has ended, so a
+gate's questions can be answered and a follow-up tried. `result.json` then
+lists the turns, each with its steps, its time and what the gate kept.
+
+    HEADLESS_ENDPOINT=http://127.0.0.1:8000/v1 HEADLESS_MODEL=<id> HEADLESS_GATE=1 \
+      node scripts/headless-chat/start.mjs /tmp/hello-run
+
 ## What it leaves
 
 - `trace.jsonl` — every model request (message count, tools, size), every reply,

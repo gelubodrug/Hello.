@@ -373,6 +373,38 @@ describe('new application persistence', () => {
 
 // Plan is a switch in the composer, off until the human asks for it: absent
 // from the settings table means off, so every chat that exists is already off.
+describe('Ask first, and what the gate waits on', () => {
+  it('is unset in a new chat, keeps either choice, and goes with the chat', () => {
+    // Unset is the default, decided where the connection is known (on for a server of the person's own);
+    // both choices are written down, because off is a departure too.
+    const chat = store.createConversation('Gated');
+    expect(chat).not.toHaveProperty('askFirst');
+    expect(store.getConversation(chat.id)).not.toHaveProperty('askFirst');
+    expect(store.updateConversation(chat.id, { askFirst: false }).askFirst).toBe(false);
+    expect(store.listConversations().find(row => row.id === chat.id)?.askFirst).toBe(false);
+    expect(store.updateConversation(chat.id, { askFirst: true }).askFirst).toBe(true);
+    expect(store.updateConversation(chat.id, { title: 'Still gated' }).askFirst).toBe(true);
+    expect(() => store.updateConversation(chat.id, { askFirst: 'yes' as unknown as boolean })).toThrow('Ask first is on or off.');
+
+    expect(store.getGate(chat.id)).toBeNull();
+    const waiting = { request: 'fă raportul', understood: 'A report', questions: ['Which month?'], answers: [], rounds: 1, at: 5 };
+    store.setGate(chat.id, waiting);
+    expect(store.getGate(chat.id)).toEqual(waiting);
+    expect(store.getLastOrder(chat.id)).toBeNull();
+    store.setLastOrder(chat.id, 'Build the report.');
+    expect(store.getLastOrder(chat.id)).toBe('Build the report.');
+    // A restart is a fresh start: the gate waits on nothing from before it, and remembers no order.
+    store.restartConversation(chat.id);
+    expect(store.getGate(chat.id)).toBeNull();
+    expect(store.getLastOrder(chat.id)).toBeNull();
+    store.setGate(chat.id, waiting);
+    store.setLastOrder(chat.id, 'Build the report.');
+    store.deleteConversation(chat.id);
+    expect(store.createConversation('Fresh')).not.toHaveProperty('askFirst');
+    expect((store as unknown as { db: { prepare(sql: string): { all(): unknown[] } } }).db.prepare("SELECT key FROM settings WHERE key LIKE 'chat-ask-first:%' OR key LIKE 'chat-gate:%' OR key LIKE 'chat-order:%'").all()).toEqual([]);
+  });
+});
+
 describe('the Plan switch of a chat', () => {
   it('is off for a new chat, survives being turned on, and goes with the chat', () => {
     const chat = store.createConversation('Planned');

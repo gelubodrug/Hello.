@@ -269,6 +269,89 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(assistant()).not.toHaveProperty('runtimePhase');
   });
 
+  // The gate (user, 18.11): the person's words are read once, before the agent; what only they can answer is
+  // asked then, and the agent gets a work order. A worker's report never passes through it.
+  it('asks first when Ask first is on, and hands Pi the work order once the person has answered', async () => {
+    store.updateConversation(conversationId, { askFirst: true });
+    const gateAnswers = [
+      '{"understood":"A report from gps.xlsx.","assumptions":[],"questions":["Which month?"]}',
+      '{"work":true,"understood":"A report from gps.xlsx for October.","assumptions":["openpyxl"],"questions":[]}',
+      '{"work":false,"understood":"Thanks; nothing to do.","assumptions":[],"questions":[]}',
+    ];
+    const gateCalls: unknown[] = [];
+    const chat = create({ fetch: async (url, init) => {
+      if (String(url).endsWith('/chat/completions')) {
+        gateCalls.push(JSON.parse(init?.body as string));
+        return new Response(JSON.stringify({ choices: [{ message: { content: gateAnswers.shift() } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [{ id: store.getSettings().model }] }));
+    } });
+    await chat.send(conversationId, 'fă raportul din gps.xlsx', [], { gate: true });
+    // The gate answered in the chat and no Pi was started.
+    expect(harness.instances).toHaveLength(0);
+    expect(assistant()).toMatchObject({ status: 'complete', content: 'A report from gps.xlsx.\n\n1. Which month?', model: 'test-model' });
+    expect(assistant()).not.toHaveProperty('runtimePhase');
+    expect(store.getGate(conversationId)).toMatchObject({ request: 'fă raportul din gps.xlsx', questions: ['Which month?'], answers: [], rounds: 1 });
+    expect((gateCalls[0] as { messages: Array<{ content: string }> }).messages[1].content).toContain('fă raportul din gps.xlsx');
+
+    const running = chat.send(conversationId, 'October', [], { gate: true });
+    const { rpc } = await runtime();
+    settle(rpc, 'Done.');
+    await running;
+    expect(store.getGate(conversationId)).toBeNull();
+    const [order] = rpc.prompt.mock.calls[0];
+    expect(order).toContain('WORK ORDER');
+    expect(order).toContain('A report from gps.xlsx for October.');
+    expect(order).toContain('- openpyxl');
+    expect(order).toContain('- Which month?\n  October');
+    expect(order).toContain('for reference only:\nfă raportul din gps.xlsx');
+    // The person sees their own words, the gate's questions, their answer and the reply — never the order.
+    expect(store.listMessages(conversationId).map(message => message.content)).toEqual([
+      'fă raportul din gps.xlsx', 'A report from gps.xlsx.\n\n1. Which month?', 'October', 'Done.',
+    ]);
+    expect(readFileSync(path.join(piConversationDir(directory, conversationId), 'system-prompt.md'), 'utf8')).toContain('WORK ORDER');
+    // The order stays with the chat, and the next request is read against it; a conversation goes through as written.
+    expect(store.getLastOrder(conversationId)).toBe('A report from gps.xlsx for October.\nAssumed: openpyxl');
+    const thanks = chat.send(conversationId, 'mulțumesc, e perfect', [], { gate: true });
+    await runtime(0, 2);
+    settle(rpc, 'Cu plăcere.');
+    await thanks;
+    expect((gateCalls[2] as { messages: Array<{ content: string }> }).messages[1].content).toContain('executed earlier in this chat:\nA report from gps.xlsx for October.');
+    expect(rpc.prompt).toHaveBeenLastCalledWith('mulțumesc, e perfect');
+    expect(store.getLastOrder(conversationId)).toBe('A report from gps.xlsx for October.\nAssumed: openpyxl');
+  });
+
+  it('lets a message through untouched when the gate is off, is not the person\'s, or cannot answer', async () => {
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/chat/completions')
+      ? new Response('busy', { status: 503 })
+      : new Response(JSON.stringify({ data: [{ id: store.getSettings().model }] })));
+    const chat = create({ fetch: fetcher });
+    // Off by default on a provider's endpoint, so no gate call at all.
+    const first = chat.send(conversationId, 'Hi', [], { gate: true });
+    const current = await runtime();
+    settle(current.rpc, 'Hello.');
+    await first;
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/chat/completions'))).toHaveLength(0);
+    expect(current.rpc.prompt).toHaveBeenLastCalledWith('Hi');
+
+    store.updateConversation(conversationId, { askFirst: true });
+    // A queued or a worker's message is not the person's: no gate. (The switch changed the
+    // instructions, so this turn runs in a new Pi, like a notebook section switched on.)
+    const second = chat.send(conversationId, '[Worker report] done');
+    const gated = await runtime(1);
+    settle(gated.rpc, 'Noted.');
+    await second;
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/chat/completions'))).toHaveLength(0);
+    // The gate's server is down: the words go through as they were.
+    const third = chat.send(conversationId, 'Build it', [], { gate: true });
+    await runtime(1, 2);
+    settle(gated.rpc, 'Built.');
+    await third;
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/chat/completions'))).toHaveLength(1);
+    expect(gated.rpc.prompt).toHaveBeenLastCalledWith('Build it');
+    expect(store.getGate(conversationId)).toBeNull();
+  });
+
   it('keeps the same warm Pi process for the next explicit message', async () => {
     const chat = create();
     const first = chat.send(conversationId, 'First question');

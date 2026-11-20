@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync } from '../atomic-write';
+import type { GateState } from '../chat/gate';
 import { fetchedSources, sourcesForMessage, withSourceLinks } from '../../shared/web';
 import type {
   AppSettings,
@@ -176,6 +177,7 @@ const CONVERSATION_COLUMNS = `SELECT c.*,
     CASE WHEN p.value = 'on' THEN 1 ELSE 0 END AS planning,
     CASE WHEN r.value = 'on' THEN 1 ELSE 0 END AS runbook,
     CASE WHEN t.value = 'on' THEN 1 ELSE 0 END AS tasks,
+    a.value AS askFirst,
     CAST(f.value AS INTEGER) AS freshFrom,
     json_extract(cm.value, '$.endpointUrl') AS modelEndpoint,
     json_extract(cm.value, '$.id') AS modelId
@@ -184,13 +186,17 @@ const CONVERSATION_COLUMNS = `SELECT c.*,
   LEFT JOIN settings p ON p.key = 'chat-plan:' || c.id
   LEFT JOIN settings r ON r.key = 'chat-runbook:' || c.id
   LEFT JOIN settings t ON t.key = 'chat-tasks:' || c.id
+  LEFT JOIN settings a ON a.key = 'chat-ask-first:' || c.id
   LEFT JOIN settings f ON f.key = 'chat-fresh:' || c.id
   LEFT JOIN settings cm ON cm.key = 'chat-model:' || c.id`;
-type StoredConversation = Omit<Conversation, 'notebook' | 'planning' | 'runbook' | 'tasks' | 'freshFrom' | 'model'>
-  & { notebook: number; planning: number; runbook: number; tasks: number; freshFrom: number | null; modelEndpoint: string | null; modelId: string | null };
-const hydrateConversation = ({ freshFrom, modelEndpoint, modelId, ...row }: StoredConversation): Conversation =>
+type StoredConversation = Omit<Conversation, 'notebook' | 'planning' | 'runbook' | 'tasks' | 'askFirst' | 'freshFrom' | 'model'>
+  & { notebook: number; planning: number; runbook: number; tasks: number; askFirst: string | null; freshFrom: number | null; modelEndpoint: string | null; modelId: string | null };
+// Ask first is the one switch with a default that depends on the chat's connection (on for a server of the
+// person's own), so both choices are written down; absent is the default, decided where the connection is known.
+const hydrateConversation = ({ askFirst, freshFrom, modelEndpoint, modelId, ...row }: StoredConversation): Conversation =>
   ({ ...row, notebook: row.notebook === 1,
     planning: row.notebook === 1 && row.planning === 1, runbook: row.notebook === 1 && row.runbook === 1, tasks: row.notebook === 1 && row.tasks === 1,
+    ...(askFirst === 'on' ? { askFirst: true } : askFirst === 'off' ? { askFirst: false } : {}),
     ...(typeof freshFrom === 'number' && freshFrom > 0 ? { freshFrom } : {}),
     ...(typeof modelEndpoint === 'string' && typeof modelId === 'string' && modelId ? { model: { endpointUrl: modelEndpoint, id: modelId } } : {}) });
 export const NOTEBOOK_KINDS: readonly NotebookKind[] = ['runbook', 'tasks', 'plan'];
@@ -628,7 +634,7 @@ export class DataStore {
   }
   updateConversation(
     id: string,
-    patch: { title?: string; folder?: string | null; notebook?: boolean; planning?: boolean; runbook?: boolean; tasks?: boolean; model?: ChatModel | null },
+    patch: { title?: string; folder?: string | null; notebook?: boolean; planning?: boolean; runbook?: boolean; tasks?: boolean; askFirst?: boolean; model?: ChatModel | null },
   ): Conversation {
     const row = this.getConversation(id);
     if (patch.model !== undefined) {
@@ -651,6 +657,7 @@ export class DataStore {
       if (typeof patch[page] !== 'boolean') throw new Error(`${page} is on or off.`);
       row[page] = patch[page];
     }
+    if (patch.askFirst !== undefined && typeof patch.askFirst !== 'boolean') throw new Error('Ask first is on or off.');
     row.updatedAt = Date.now();
     this.db.transaction(() => {
       this.db
@@ -670,12 +677,42 @@ export class DataStore {
       if (patch.planning !== undefined) switchRow(`chat-plan:${id}`, patch.planning, 'on');
       if (patch.runbook !== undefined) switchRow(`chat-runbook:${id}`, patch.runbook, 'on');
       if (patch.tasks !== undefined) switchRow(`chat-tasks:${id}`, patch.tasks, 'on');
+      if (patch.askFirst !== undefined) switchRow(`chat-ask-first:${id}`, true, patch.askFirst ? 'on' : 'off');
       if (patch.model !== undefined) this.writeChatModel(id, row.model ?? null);
     })();
     // A section switched off empties its export: a worker's file is not a way around the switch.
     if (patch.notebook !== undefined || patch.planning !== undefined || patch.runbook !== undefined || patch.tasks !== undefined) this.refreshNotebookExports(id);
     // Read back, not assembled: a section reads as the Workbook lets it.
     return this.getConversation(id);
+  }
+  /** What the gate asked this chat and is waiting on (chat/gate.ts); nothing while it waits on nothing. Not an
+   *  edit of the chat. The shape is the gate's own; a row this version cannot read is as good as none. */
+  getGate(id: string): GateState | null {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(`chat-gate:${id}`) as { value: string } | undefined;
+    if (!row) return null;
+    try {
+      const value = JSON.parse(row.value) as Partial<GateState>;
+      if (typeof value.request !== 'string' || !Array.isArray(value.questions) || !Array.isArray(value.answers) || typeof value.rounds !== 'number') return null;
+      return { request: value.request, understood: typeof value.understood === 'string' ? value.understood : '', questions: value.questions.filter((item): item is string => typeof item === 'string'),
+        answers: value.answers.filter((item): item is string => typeof item === 'string'), rounds: value.rounds, at: typeof value.at === 'number' ? value.at : 0 };
+    } catch {
+      return null;
+    }
+  }
+  /** The last order the gate handed the agent in this chat, in a few lines, so the next request is read as a follow-up to it. */
+  getLastOrder(id: string): string | null {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(`chat-order:${id}`) as { value: string } | undefined;
+    return row?.value || null;
+  }
+  setLastOrder(id: string, order: string | null): void {
+    this.getConversation(id);
+    if (order) this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`chat-order:${id}`, order.slice(0, 4_000));
+    else this.db.prepare('DELETE FROM settings WHERE key = ?').run(`chat-order:${id}`);
+  }
+  setGate(id: string, state: GateState | null): void {
+    this.getConversation(id);
+    if (state) this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`chat-gate:${id}`, JSON.stringify(state));
+    else this.db.prepare('DELETE FROM settings WHERE key = ?').run(`chat-gate:${id}`);
   }
   /** The model a turn ran on becomes the one the chat runs on next (user,
    *  04.10). Not an edit of the chat, so it keeps its place in the list. */
@@ -716,6 +753,8 @@ export class DataStore {
   }
   /** The model's memory begins now: only messages from this moment on reach it. */
   restartConversation(id: string, at = Date.now()): Conversation {
+    this.setGate(id, null);
+    this.setLastOrder(id, null);
     this.getConversation(id);
     this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
       .run(`chat-fresh:${id}`, String(at));
@@ -744,8 +783,9 @@ export class DataStore {
     const row = this.getConversation(id);
     this.db.transaction(() => {
       this.db.prepare('DELETE FROM settings WHERE key = ?').run(`tool-order:${id}`);
-      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?,?)')
-        .run(`chat-notebook:${id}`, `chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`);
+      this.db.prepare('DELETE FROM settings WHERE key IN (?,?,?,?,?,?,?,?,?,?)')
+        .run(`chat-notebook:${id}`, `chat-mode:${id}`, `chat-plan:${id}`, `chat-runbook:${id}`, `chat-tasks:${id}`, `chat-fresh:${id}`, `chat-model:${id}`,
+          `chat-ask-first:${id}`, `chat-gate:${id}`, `chat-order:${id}`);
       this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     })();
     // Remove only our known generated exports, never a user repository.

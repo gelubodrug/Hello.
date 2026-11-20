@@ -15,6 +15,7 @@ import {
   Store,
   Eraser,
   MessageCircle,
+  MessageCircleQuestion,
   MoreHorizontal,
   PanelLeft,
   BookOpen,
@@ -39,6 +40,7 @@ import type {
 import type { MarketKind, MenuAction, MessageMatch, PendingInput, PendingRequest, QueuedMessage } from "../shared/types";
 import type { FindJump } from "./chat/ChatFind";
 import { api } from './api';
+import { ownServer } from '../shared/reasoning';
 import { attentionFor, attentionLabel, newWorkerQuestions, notice as attentionNotice, requestKind, requestNotice, strongest, type AttentionKind, type Seen } from "./attention";
 import { AttentionDialog } from "./ui/AttentionDialog";
 import { CommandPalette } from "./ui/CommandPalette";
@@ -166,6 +168,16 @@ function forgetNotebookDrafts(conversationId: string): void {
     /* Local preferences may be unavailable; the notes themselves are gone either way. */
   }
 }
+/** Ask first as the chat has it: the person's choice, or on for a model on a server of their own. */
+function askFirstOn(conversation: { askFirst?: boolean; model?: { endpointUrl: string } }, endpointUrl: string): boolean {
+  if (conversation.askFirst !== undefined) return conversation.askFirst;
+  try {
+    return ownServer(new URL(conversation.model?.endpointUrl ?? endpointUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function Application() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [shell, setShell] = useState<ShellState>(initialShell);
@@ -1127,6 +1139,22 @@ function Application() {
                               if (on && updated.id === shell.activeId) showPage(updated.id, "notebook");
                             })
                             .catch(reportError);
+                        },
+                      },
+                      // Ask first: the gate reads a request before the model starts and asks what only the
+                      // person can answer, so a local model gets a work order (user, 18.11). On by itself for a
+                      // server of the person's own, off for a provider; the person's choice, once made, stays.
+                      {
+                        id: "ask-first",
+                        label: "Ask first",
+                        icon: MessageCircleQuestion,
+                        detail: "What is unclear is asked before the model starts",
+                        toggle: true,
+                        checked: askFirstOn(conversation, boot?.settings.endpointUrl ?? ""),
+                        stayOpen: true,
+                        action: () => {
+                          const on = !askFirstOn(conversation, boot?.settings.endpointUrl ?? "");
+                          void api.conversations.update(conversation.id, { askFirst: on }).then(changeConversation).catch(reportError);
                         },
                       },
                       {
