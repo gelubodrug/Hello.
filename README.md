@@ -70,8 +70,14 @@ give it. A page is only read or acted on in a tab where you allowed it.
 
 ## Get it
 
-There is no download. Hello. is source only: you build it yourself, on macOS,
-with Node 22.19 or newer and pnpm 9.
+There is no download. Hello. is source only: you build it yourself, with Node
+22.19 or newer and pnpm 9.
+
+It has been built and run on macOS only. It is an Electron app and much of the
+code already takes Linux and Windows into account (shells, terminals, CLI
+launch), so it should build there, but nobody has tried. A few things lean on
+macOS today: Word and RTF previews, copying a picture to the clipboard, the
+packaging script, and the OpenJev helper, which needs Apple Silicon.
 
 ```sh
 git clone https://github.com/gelubodrug/Hello.
