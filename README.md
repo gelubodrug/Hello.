@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://gelubodrug.github.io/hello/"><img src="assets/readme/banner.svg" alt="Hello. Local first. Codex off. Claude off. What do you do? Use a tool made with them." width="100%"></a>
+  <a href="https://gelubodrug.github.io/Hello./"><img src="assets/readme/banner.svg" alt="Hello. Local first. Codex off. Claude off. What do you do? Use a tool made with them." width="100%"></a>
 </p>
 
 # Hello.
@@ -39,8 +39,8 @@ There is no download. Hello. is source only: you build it yourself, on macOS,
 with Node 22.19 or newer and pnpm 9.
 
 ```sh
-git clone https://github.com/gelubodrug/hello.git
-cd hello
+git clone https://github.com/gelubodrug/Hello.
+cd Hello.
 pnpm install
 pnpm dev
 ```
@@ -49,7 +49,7 @@ pnpm dev
 types and `pnpm test` runs the unit tests.
 
 Hello. is early and changes every day. Expect rough edges, and tell me about
-them in [Issues](https://github.com/gelubodrug/hello/issues).
+them in [Issues](https://github.com/gelubodrug/Hello./issues).
 
 ## Packaging
 
@@ -91,7 +91,7 @@ unpacked Pi, pnpm and esbuild behave inside `Hello.app`, whether the DSH
   and a runnable specimen; `design/CHAT-ACTIVITY-RULES.md` — the chat timeline.
 - `specs/blaizzy-nativ-hello-monitor/tasks.md` — what is still open (Spec Kit).
 - `AGENTS.md` — the rules for agents working in this repository.
-- `site/` — the page at [gelubodrug.github.io/hello](https://gelubodrug.github.io/hello/), one file, no build.
+- `site/` — the page at [gelubodrug.github.io/Hello.](https://gelubodrug.github.io/Hello./), one file, no build.
 - `docs/archive/` — history: plans, reports and research that are no longer current.
 
 ## License
