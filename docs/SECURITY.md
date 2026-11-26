@@ -20,6 +20,22 @@ tools to the model. Browser permission grants remain unchanged. The main process
 uses Electron 44's asynchronous [Clipboard API](https://www.electronjs.org/docs/latest/api/clipboard)
 so app copying does not require granting websites clipboard access.
 
+A sent message's pictures show in the transcript (26.11). The window asks
+`chat.messageAttachments` for what the message carried (names and sizes, never
+a path) and draws each picture from `chat.previewAttachment`'s data: URL.
+"Copy image" (`chat.copyAttachment`) is another write-only path: main reads the
+chat's own snapshot and puts it on the pasteboard as PNG, so no bytes come from
+the window. Electron 44's `clipboard.write` accepts an `image/png` item and writes
+nothing, so main hands the PNG to `NSPasteboard` through `osascript -l
+JavaScript` (a fixed script; the only argument is a private temporary file, mode
+0600, deleted as soon as the copy returns). "Save image…" (`chat.saveAttachment`) opens a native save dialog
+over this window, as saving a chat file does, and writes the snapshot only
+where the person picks. A picture the person draws on in its full-size view is
+the one picture whose bytes come from the window, since the window drew it:
+`chat.attachAnnotated` takes it on close through the pasted-picture path (a real
+PNG or JPEG signature, 5 MiB each, the same snapshot and totals), named after
+its source with "(annotated)".
+
 One read exists, and only the person triggers it (S209): pasting a picture into
 the composer calls `chat.attachClipboard`, and main reads the clipboard's
 `image/png` item itself. The bytes never pass through the window and are never

@@ -8,7 +8,6 @@ import {
   Copy,
   Folder,
   FileText,
-  Image as ImageIcon,
   RotateCcw,
   Square,
   Terminal,
@@ -56,6 +55,8 @@ import { MessageSources, ActivityGroup, WebToolOutput, webToolArgument, webToolI
 import { activityLayout, activityRows, liveTail, replySegments, runtimeLine, stepLabel, suppliedDuration, thinkingTitle, workDuration, type ActivityRow } from './activity';
 import { useElapsed } from './useElapsed';
 import { PendingMessages } from './PendingMessages';
+import { AttachmentThumb, MessageImages, bubbleText, rememberPicture, cachedPicture, useMessageAttachments } from './MessageImages';
+import { ImageAnnotator, type ImageAnnotatorHandle } from './ImageAnnotator';
 import { chatCopySnapshot } from './selection';
 import { isChatFolderPath } from '../../shared/chat-folder';
 import { EFFORT_LEVELS, effortHint, reasoningReach, type Effort } from '../../shared/reasoning';
@@ -392,6 +393,7 @@ function MessageRow({
   onRetry,
   onReuse,
   onAttachSelection,
+  onAttachPictures,
   sources,
 }: {
   message: Message;
@@ -400,6 +402,8 @@ function MessageRow({
   onRetry: () => void;
   onReuse: () => void;
   onAttachSelection: (text: string) => void;
+  /** An annotated picture, attached to this chat: into the message being written. */
+  onAttachPictures?: (attachments: ChatAttachment[]) => void;
   sources: readonly WebSource[];
 }) {
   const [copied, setCopied] = useState(false);
@@ -412,6 +416,8 @@ function MessageRow({
   const copyingSlow = useElapsed(copying) >= 1000;
   const keepingSlow = useElapsed(kept === "saving") >= 1000;
   const [context, setContext] = useState<({ position: { x: number; y: number } } & ReturnType<typeof chatCopySnapshot>) | null>(null);
+  const attached = useMessageAttachments(message);
+  const pictures = useMemo(() => attached?.filter(item => item.kind === "image") ?? [], [attached]);
   const copyPayload = async (payload: { text: string; html?: string }) => {
     setCopying(true);
     setCopied(false);
@@ -502,7 +508,8 @@ function MessageRow({
       )}
       {message.role === "user" ? (
         <>
-          <div className="user-bubble">{message.content}</div>
+          {!!pictures.length && <MessageImages conversationId={message.conversationId} images={pictures} onAttach={onAttachPictures} />}
+          {(!pictures.length || bubbleText(message.content, attached)) && <div className="user-bubble">{pictures.length ? bubbleText(message.content, attached) : message.content}</div>}
           <div className="message-actions user-message-actions">
             <IconButton
               label={copied ? "Message copied" : "Copy your message"}
@@ -676,13 +683,16 @@ export function ConversationView({
   const [preview, setPreview] = useState<{ item: ChatAttachment; src?: string; error?: string } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const previewRequest = useRef(0);
+  const editor = useRef<ImageAnnotatorHandle>(null);
   const openPreview = (item: ChatAttachment) => {
     if (!previewableAttachment(item)) return;
     const request = ++previewRequest.current;
-    setPreview({ item });
+    const known = cachedPicture(item.id);
+    setPreview(known ? { item, src: known } : { item });
     setPreviewOpen(true);
+    if (known) return;
     void api.chat.previewAttachment(conversation.id, item.id).then(
-      src => { if (mounted.current && request === previewRequest.current) setPreview({ item, src }); },
+      src => { rememberPicture(item.id, src); if (mounted.current && request === previewRequest.current) setPreview({ item, src }); },
       reason => { if (mounted.current && request === previewRequest.current) setPreview({ item, error: errorText(reason) }); },
     );
   };
@@ -1345,6 +1355,15 @@ export function ConversationView({
                   setDraft(current => `${current}${current ? '\n\n' : ''}${quoted}\n\n`);
                   field.current?.focus({ preventScroll: true });
                 }}
+                onAttachPictures={added => {
+                  setAttachments(current => {
+                    const fresh = added.filter(item => !current.some(kept => kept.id === item.id));
+                    const room = Math.max(0, 8 - current.length);
+                    if (fresh.length > room) setError('Attach up to 8 files per message. Remove an attachment, then close the picture again.');
+                    return fresh.length ? [...current, ...fresh.slice(0, room)] : current;
+                  });
+                  field.current?.focus({ preventScroll: true });
+                }}
               />
               </Fragment>
             )
@@ -1402,7 +1421,19 @@ export function ConversationView({
           </ul>}
           <PendingMessages items={queued} onChange={setQueued} onError={reason => setError(errorText(reason))} />
           {!!attachments.length && <div className="composer-attachments" aria-label="Message attachments">
-            {attachments.map(item => <span className="composer-attachment" key={item.id} title={item.name}
+            {attachments.map(item => item.kind === 'image' ? (
+              // A picture waits as itself, not its file name (user, 26.11): click to draw on it.
+              <span className="composer-attachment-card" key={item.id}>
+                <button type="button" className="composer-attachment-open" title={item.name}
+                  aria-label={`${item.name}: open to draw on it`} onClick={() => openPreview(item)}>
+                  <AttachmentThumb conversationId={conversation.id} item={item} large />
+                </button>
+                <IconButton label={`Remove attachment ${item.name}`} className="composer-attachment-card-remove"
+                  onClick={() => setAttachments(current => current.filter(value => value.id !== item.id))}>
+                  <X size={12} />
+                </IconButton>
+              </span>
+            ) : <span className="composer-attachment" key={item.id} title={item.name}
               {...previewableAttachment(item) ? {
                 tabIndex: 0,
                 'aria-label': `${item.name}, double-click or press Enter to preview`,
@@ -1413,7 +1444,7 @@ export function ConversationView({
                   openPreview(item);
                 },
               } : {}}>
-              {item.kind === 'image' ? <ImageIcon size={14} aria-hidden /> : <FileText size={14} aria-hidden />}
+              <FileText size={14} aria-hidden />
               <span className="truncate">{item.name}</span>
               <IconButton label={`Remove attachment ${item.name}`} onClick={() => setAttachments(current => current.filter(value => value.id !== item.id))}>
                 <X size={12} />
@@ -1421,8 +1452,21 @@ export function ConversationView({
             </span>)}
           </div>}
           <Dialog open={previewOpen} title={preview?.item.name ?? 'Attachment preview'} className="attachment-preview" dismissOnBackdrop
-            onClose={() => { previewRequest.current++; setPreviewOpen(false); }}>
-            {preview?.src ? <img src={preview.src} alt={preview.item.name} />
+            onClose={() => {
+              previewRequest.current++;
+              setPreviewOpen(false);
+              // What was drawn on a waiting picture replaces it in this message.
+              const item = preview?.item;
+              void (async () => {
+                const drawn = await editor.current?.finish();
+                if (!drawn || !item) return;
+                if (typeof api.chat.attachAnnotated !== 'function') throw new Error('Annotated pictures need the updated Hello. main process and preload. Reopen Hello. when ready.');
+                const result = await api.chat.attachAnnotated(conversation.id, item.name, drawn.bytes);
+                const replacement = result.attachments[0];
+                if (replacement && mounted.current) setAttachments(current => current.map(value => value.id === item.id ? replacement : value));
+              })().catch(reason => { if (mounted.current) setError(errorText(reason)); });
+            }}>
+            {preview?.src ? <ImageAnnotator key={preview.item.id} ref={editor} src={preview.src} alt={preview.item.name} />
               : preview?.error ? <ErrorNote error={preview.error} />
               : <p role="status">Loading preview…</p>}
           </Dialog>
@@ -1473,10 +1517,14 @@ export function ConversationView({
               const data = event.clipboardData;
               // A file copied in Finder has a path: it is attached as a drop is.
               const files = Array.from(data.files ?? []);
-              const paths = files.length ? api.system.pathsForFiles(files).filter(Boolean) : [];
-              if (paths.length) { event.preventDefault(); void importPaths(paths); return; }
               // A picture alone becomes an attachment; anything with words pastes as words.
               const picture = Array.from(data.items ?? []).some(item => item.kind === "file" && item.type.startsWith("image/"));
+              // A copied picture (a screenshot, Copy image) is a file with no path:
+              // pathsForFiles refuses it, and it goes on to be read from the clipboard.
+              let paths: string[] = [];
+              try { paths = files.length ? api.system.pathsForFiles(files).filter(Boolean) : []; }
+              catch (reason) { if (!picture) { event.preventDefault(); setError(errorText(reason)); return; } }
+              if (paths.length) { event.preventDefault(); void importPaths(paths); return; }
               if (picture && !data.types.includes("text/plain") && api.chat.attachClipboard) {
                 event.preventDefault();
                 void pastePicture();

@@ -1054,6 +1054,153 @@ svg {
   background: var(--surface-raised);
   padding: var(--sp-12) var(--sp-16);
 }
+/* A sent message's pictures, above its bubble (MessageImages): readable at a
+   glance, full size on click, Copy and Save on right-click. */
+.message-images-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-4);
+  max-width: 92%;
+  margin-bottom: var(--sp-8);
+}
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-8);
+}
+.message-image {
+  display: block;
+  padding: 0;
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--r-10);
+  overflow: hidden;
+  background: var(--surface-raised);
+  cursor: zoom-in;
+}
+.message-image img {
+  display: block;
+  max-width: min(480px, 100%);
+  max-height: 360px;
+  object-fit: contain;
+}
+.message-images .message-image:only-child img {
+  max-width: 100%;
+}
+.message-image-loading,
+.message-image-missing {
+  display: block;
+  padding: var(--sp-12) var(--sp-16);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+/* Drawing on a sent picture in its full-size view (ImageAnnotator): the marks
+   go over the picture at its own resolution; the bar has the menu material. */
+.image-annotator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-12);
+}
+.image-annotator-stage {
+  max-width: 100%;
+  line-height: 0;
+}
+.image-annotator-stage canvas {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - 220px);
+  width: auto;
+  height: auto;
+  border-radius: var(--r-8);
+  cursor: crosshair;
+  touch-action: none;
+}
+.image-annotator-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--control-lg);
+  padding: 0 var(--sp-8);
+  border-radius: var(--r-pill);
+  background: var(--menu-fill);
+  color: var(--menu-muted);
+  box-shadow: 0 0 0 1px var(--menu-edge);
+}
+.image-annotator-bar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: inherit;
+}
+.image-annotator-bar button:hover:not(:disabled) { background: var(--menu-hover); color: var(--menu-ink); }
+.image-annotator-bar button.is-active { background: var(--menu-hover); color: var(--menu-ink); }
+.image-annotator-bar button:disabled { opacity: 0.4; cursor: default; }
+.image-annotator-color > span {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 25%);
+}
+.image-annotator-bar .image-annotator-color.is-active { background: transparent; box-shadow: 0 0 0 2px var(--menu-ink); }
+.image-annotator-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--sp-4);
+  background: var(--menu-edge);
+}
+/* A picture waiting in the composer is shown as itself, no name; click opens the editor. */
+.composer-attachment-card {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+.composer-attachment-open {
+  display: block;
+  padding: 0;
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--r-10);
+  overflow: hidden;
+  background: var(--surface-hover);
+  cursor: pointer;
+}
+.composer-attachment-card-img {
+  display: block;
+  max-width: 280px;
+  max-height: 180px;
+  min-width: 64px;
+  min-height: 64px;
+  object-fit: cover;
+}
+.composer-attachment-card-remove {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  background: var(--menu-fill);
+  box-shadow: 0 0 0 1px var(--menu-edge);
+  opacity: 0;
+}
+.composer-attachment-card:hover .composer-attachment-card-remove,
+.composer-attachment-card:focus-within .composer-attachment-card-remove { opacity: 1; }
+@media (hover: none) { .composer-attachment-card-remove { opacity: 1; } }
+/* A picture's chip in the composer shows the picture, small. */
+.composer-attachment-thumb {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 4px;
+  object-fit: cover;
+}
 .user-bubble--editing {
   padding: var(--sp-8);
 }

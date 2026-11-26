@@ -226,8 +226,47 @@ export class ChatAttachments {
     return result;
   }
 
-  /** One validated snapshot of this chat; `mimeType` is set only for an image whose bytes still match it. */
-  private async snapshot(conversationId: string, parent: string, id: string): Promise<{ metadata: Snapshot; bytes: Buffer; snapshotPath: string; mimeType?: string }> {
+  /**
+   * What a sent message carried, for its bubble to show: the attachments bound
+   * to it, metadata only (no bytes, never a path). A message without a binding —
+   * sent without attachments, or imported — has none; a snapshot that has gone
+   * or no longer reads is left out rather than failing the rest.
+   */
+  listForMessage(conversationId: string, messageId: string): Promise<ChatAttachment[]> {
+    if (!UUID.test(messageId)) return Promise.resolve([]);
+    return this.operation(conversationId, async current => {
+      let parent: string;
+      let selected: string[];
+      try {
+        parent = await this.folder(conversationId, false);
+        await this.privateDirectory(join(parent, 'messages'));
+        const bytes = await this.readFile(join(parent, 'messages', `${messageId}.json`), 4096, true);
+        selected = ids(JSON.parse(bytes.toString('utf8')));
+      } catch (error) { if (missing(error)) return []; throw error; }
+      const listed: ChatAttachment[] = [];
+      for (const id of selected) {
+        current();
+        try { listed.push(publicMetadata(await this.metadata(conversationId, parent, id))); }
+        catch { /* gone or unreadable: the bubble keeps its name in words */ }
+      }
+      return listed;
+    });
+  }
+
+  /** One of this chat's image snapshots, for main to copy or save on the person's request; never sent to the window. */
+  image(conversationId: string, attachmentId: unknown): Promise<{ name: string; bytes: Buffer; mimeType: string }> {
+    let id: string;
+    try { [id] = ids([attachmentId]); } catch (error) { return Promise.reject(error); }
+    return this.operation(conversationId, async current => {
+      const { metadata, bytes, mimeType } = await this.snapshot(conversationId, await this.folder(conversationId, false), id);
+      current();
+      if (!mimeType) throw new Error('Only image attachments can be copied or saved as images.');
+      return { name: metadata.name, bytes, mimeType };
+    });
+  }
+
+  /** A snapshot's validated metadata, without reading its content. */
+  private async metadata(conversationId: string, parent: string, id: string): Promise<Snapshot> {
     await this.folder(conversationId, false);
     const directory = join(parent, id);
     await this.privateDirectory(directory);
@@ -236,6 +275,13 @@ export class ChatAttachments {
         typeof metadata.sourcePath !== 'string' || (metadata.sourcePath !== PASTED && !isAbsolute(metadata.sourcePath)) || metadata.sourcePath.includes('\0') || metadata.sourcePath.length > 8192 ||
         !['text', 'image'].includes(metadata.kind) || !Number.isInteger(metadata.size) || metadata.size < 0)
       throw new Error('This attachment has invalid metadata. Drop the file again.');
+    return metadata;
+  }
+
+  /** One validated snapshot of this chat; `mimeType` is set only for an image whose bytes still match it. */
+  private async snapshot(conversationId: string, parent: string, id: string): Promise<{ metadata: Snapshot; bytes: Buffer; snapshotPath: string; mimeType?: string }> {
+    const metadata = await this.metadata(conversationId, parent, id);
+    const directory = join(parent, id);
     const snapshotPath = join(directory, 'content');
     const bytes = await this.readFile(snapshotPath, metadata.kind === 'image' ? ATTACHMENT_LIMITS.imageFile : ATTACHMENT_LIMITS.textFile, true);
     if (bytes.length !== metadata.size) throw new Error('This attachment changed on disk. Drop the file again.');

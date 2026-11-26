@@ -1,10 +1,11 @@
-import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, Notification, systemPreferences, type BrowserWindow } from 'electron';
+import { app, ipcMain, dialog, shell, clipboard, ClipboardItem, nativeImage, Notification, systemPreferences, type BrowserWindow } from 'electron';
 import { applyAppearance } from './appearance';
-import { copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { chatFolderOf, keptFile } from './chat/chat-folder';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { voicePatch, type DataStore } from './data/store';
 import type { ChatService } from './chat/service';
 import type { MainTerminalService } from './terminal/service';
@@ -231,6 +232,44 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
     return chat.attachData(str(id),[{name:`Pasted image ${new Date().toISOString()}.png`,bytes:Buffer.from(await picture.arrayBuffer())}]);
   });
   handle('chat.previewAttachment',(id,attachmentId)=>chat.previewAttachment(str(id),str(attachmentId)));
+  // A sent message's pictures (the bubble shows them): metadata here, the picture through chat.previewAttachment.
+  handle('chat.messageAttachments',(id,messageId)=>chat.messageAttachments(str(id),str(messageId)));
+  // Copy image: write-only, as system.copy; main reads the snapshot itself, the bytes never come from the window.
+  // Electron 44's clipboard.write takes an image/png item and writes nothing (measured 26.11: it resolves, the
+  // pasteboard keeps its text), so the PNG goes to NSPasteboard through JXA from a private temporary file.
+  handle('chat.copyAttachment',async(id,attachmentId)=>{
+    if(process.platform!=='darwin')throw new Error('Copying pictures works on macOS only. Save it instead.');
+    const {bytes,mimeType}=await chat.attachmentImage(str(id),str(attachmentId));
+    const png=mimeType==='image/png'?bytes:nativeImage.createFromBuffer(bytes).toPNG();
+    if(!png.length)throw new Error('This picture cannot be copied (its format is not one the clipboard takes). Save it instead.');
+    const dir=mkdtempSync(join(tmpdir(),'hello-copy-'));
+    try{
+      const file=join(dir,'picture.png');
+      writeFileSync(file,png,{mode:0o600});
+      const script="function run(argv){ObjC.import('AppKit');const data=$.NSData.dataWithContentsOfFile(argv[0]);if(data.isNil())throw new Error('unreadable');const board=$.NSPasteboard.generalPasteboard;board.clearContents;if(!board.setDataForType(data,$.NSPasteboardTypePNG))throw new Error('refused');return 'ok';}";
+      await new Promise<void>((resolveCopy,reject)=>execFile('/usr/bin/osascript',['-l','JavaScript','-e',script,file],{timeout:10000},error=>error?reject(new Error('The picture could not be put on the clipboard.')):resolveCopy()));
+    }finally{rmSync(dir,{recursive:true,force:true});}
+  });
+  // A sent picture with marks drawn on it (the full-size view): the one picture that comes from the window, since the
+  // window drew it. Same checks and limits as a pasted one (a real PNG or JPEG signature, 5 MiB), named after its source.
+  handle('chat.attachAnnotated',(id,name,bytes)=>{
+    if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>5*1024*1024)throw new Error('The annotated picture must be a PNG or JPEG of 5 MiB or less.');
+    const data=Buffer.from(bytes);
+    const png=data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])), jpeg=data[0]===255&&data[1]===216&&data[2]===255;
+    if(!png&&!jpeg)throw new Error('The annotated picture must be a PNG or JPEG of 5 MiB or less.');
+    const base=str(name,'name',255).replace(/[\\/:\x00-\x1f\x7f]/g,' ').replace(/\.[a-z0-9]{2,5}$/i,'').trim()||'Picture';
+    return chat.attachData(str(id),[{name:`${base} (annotated).${png?'png':'jpg'}`,bytes:data}]);
+  });
+  // Save image: a native save dialog over this window, as files.save; the name is the attachment's own, never a path.
+  handle('chat.saveAttachment',async(id,attachmentId)=>{
+    const {name,bytes}=await chat.attachmentImage(str(id),str(attachmentId));
+    const safe=name.replace(/[\\/:\x00-\x1f\x7f]/g,' ').trim()||'Image';
+    const picked=await dialog.showSaveDialog(window,{title:'Save image',defaultPath:join(app.getPath('downloads'),safe)});
+    if(picked.canceled||!picked.filePath)return null;
+    writeFileSync(picked.filePath,bytes);
+    shell.showItemInFolder(picked.filePath);
+    return {saved:picked.filePath};
+  });
   handle('chat.send',(id,text,attachmentIds)=>{
     if(typeof text!=='string'||text.length>200000)throw new Error('Invalid message.');
     if(attachmentIds!==undefined&&(!Array.isArray(attachmentIds)||attachmentIds.length>8||attachmentIds.some(value=>typeof value!=='string'||value.length>100)))throw new Error('Invalid attachments.');

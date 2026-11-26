@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import type {
+  ChatAttachment,
   ModelChoice,
   AppSettings,
   ConnectionModels,
@@ -984,6 +985,20 @@ export class ChatService {
       pending.delete(controller);
       if (!pending.size) this.preparations.delete(conversationId);
     }
+  }
+
+  /** The attachments a sent message carried, metadata only, for its bubble to show. */
+  messageAttachments(conversationId: string, messageId: string): Promise<ChatAttachment[]> {
+    if (this.disposed) throw new Error('Chat service is closed.');
+    this.store.getConversation(conversationId);
+    return this.attachments.listForMessage(conversationId, messageId);
+  }
+
+  /** One of this chat's image snapshots, for main to copy or save when the person asks. */
+  attachmentImage(conversationId: string, attachmentId: unknown): Promise<{ name: string; bytes: Buffer; mimeType: string }> {
+    if (this.disposed) throw new Error('Chat service is closed.');
+    this.store.getConversation(conversationId);
+    return this.attachments.image(conversationId, attachmentId);
   }
 
   /** A composer chip's picture, read back only from this chat's own snapshots. */
