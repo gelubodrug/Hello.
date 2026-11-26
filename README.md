@@ -33,6 +33,24 @@ there: it runs on the models on your own machine, or on any endpoint you choose.
 - **Yours.** Data lives in SQLite in Hello's own user-data directory. API keys
   are encrypted with the system keychain and never reach the window.
 
+## Things to ask it
+
+- *“Open eBay, find the cheapest MacBooks with 256 GB, and mark the top three
+  on the page.”* The model opens the page in a tab, reads it, sorts and filters
+  it like a person would, and draws its marks on the live page.
+- *“Ask Codex to review this plan, then post the short version on Reddit.”*
+  The chat starts a CLI agent in a pane beside it, talks to it and reads its
+  answer, then writes the post in a tab where you are signed in.
+- *“Simulate a market of a hundred agents and let me watch it run.”* The model
+  writes an animated page — a simulation with agents that plays like a video,
+  a chart, a visual — and opens it in a tab.
+- *“Open this workbook and give me the totals by county.”* Spreadsheets are
+  worked on with scripts, and the result is a real `.xlsx` you can open.
+- *“What does page 12 of this PDF say about the warranty?”*
+
+How well each of these goes depends on the model you give it. A page is only
+read or acted on in a tab where you allowed it.
+
 ## Get it
 
 There is no download. Hello. is source only: you build it yourself, on macOS,
