@@ -35,21 +35,30 @@ there: it runs on the models on your own machine, or on any endpoint you choose.
 
 ## Things to ask it
 
-- *“Open eBay, find the cheapest MacBooks with 256 GB, and mark the top three
-  on the page.”* The model opens the page in a tab, reads it, sorts and filters
-  it like a person would, and draws its marks on the live page.
-- *“Ask Codex to review this plan, then post the short version on Reddit.”*
-  The chat starts a CLI agent in a pane beside it, talks to it and reads its
-  answer, then writes the post in a tab where you are signed in.
-- *“Simulate a market of a hundred agents and let me watch it run.”* The model
-  writes an animated page — a simulation with agents that plays like a video,
-  a chart, a visual — and opens it in a tab.
-- *“Open this workbook and give me the totals by county.”* Spreadsheets are
-  worked on with scripts, and the result is a real `.xlsx` you can open.
-- *“What does page 12 of this PDF say about the warranty?”*
+**“Find the cheapest MacBooks with 256 GB, and mark the top three on the page.”**
+The model opens the page in a tab, reads it, sorts it like a person would, and
+draws its marks on the live page.
 
-How well each of these goes depends on the model you give it. A page is only
-read or acted on in a tab where you allowed it.
+<img src="assets/readme/clip-marked-page.svg" width="100%" alt="Hello. opens a shop page, sorts it by price and marks the three cheapest laptops on the page.">
+
+**“Ask Codex to review the plan, then post the short version on Reddit.”**
+The chat opens a CLI agent in a pane beside it, talks to it and reads its
+answer, then writes the post in a tab where you are signed in.
+
+<img src="assets/readme/clip-asked-a-cli.svg" width="100%" alt="Hello. asks a CLI agent beside the chat to review a plan, then writes the post in a browser tab.">
+
+**“Read the latest posts on my Reddit and tell me what matters.”** You sign in
+in Hello's browser, let the agent read that tab, and it reads what you would.
+
+<img src="assets/readme/clip-read-my-feed.svg" width="100%" alt="In a tab where you are signed in and let it read, Hello. reads your latest posts and says which matter.">
+
+And the quieter ones: *“Open this workbook and give me the totals by county”*
+(spreadsheets are worked on with scripts, and the result is a real `.xlsx`),
+*“What does page 12 of this PDF say about the warranty?”*
+
+The clips are drawn, not recorded — four seconds each, of things the app does
+(`scripts/readme-clips.py`). How well a request goes depends on the model you
+give it. A page is only read or acted on in a tab where you allowed it.
 
 ## Get it
 
