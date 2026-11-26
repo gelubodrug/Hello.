@@ -6,7 +6,7 @@ import { basename, extname, isAbsolute, join, sep } from 'node:path';
 import { atomicWriteFileSync } from '../atomic-write';
 import {
   cellName, columnName, columnNumber, parseRange, rangeName, sheetName, MAX_SHEET_COLUMNS, MAX_SHEET_ROWS,
-  type SheetCell, type SheetChange, type SheetChart, type SheetView, type SheetGrid, type SheetRange, type SheetRecalc, type SheetSnapshot,
+  type SheetCell, type SheetChange, type SheetChart, type SheetView, type SheetGrid, type SheetPreview, type SheetRange, type SheetRecalc, type SheetSnapshot,
   type SheetStyle, type SheetValue, type SheetWorkbookInfo,
 } from '../../shared/sheets';
 import { formulaOf, recalculate } from './engine';
@@ -33,6 +33,38 @@ const NOT_CARRIED: Array<[marker: string, name: string]> = [
   ['xl/charts/', 'charts'], ['xl/pivotTables/', 'pivot tables'], ['vbaProject.bin', 'macros'],
   ['xl/slicers/', 'slicers'], ['xl/externalLinks/', 'links to other workbooks'],
 ];
+
+/** A workbook's sheets as the grid draws them: the chat's own, or a file only looked at. */
+function gridsOf(workbook: ExcelJS.Workbook): SheetGrid[] {
+  return workbook.worksheets.map(sheet => {
+    const extent = extentOf(sheet);
+    const cells: SheetGrid['cells'] = [];
+    let limited = false;
+    sheet.eachRow(row => {
+      if (limited) return;
+      row.eachCell(cell => {
+        if (cells.length >= MAX_SNAPSHOT_CELLS) { limited = true; return; }
+        const data = cellOf(cell);
+        if (data) cells.push([Number(cell.row), Number(cell.col), data]);
+      });
+    });
+    const widths: Record<number, number> = {};
+    for (let column = 1; column <= Math.min(extent.columns, 500); column++) {
+      const width = sheet.getColumn(column).width;
+      if (typeof width === 'number' && width > 0) widths[column] = width;
+    }
+    const view = sheet.views?.[0];
+    const frozen = view && view.state === 'frozen' ? view : undefined;
+    const merges = ((sheet.model as { merges?: unknown }).merges as unknown[] | undefined ?? []).filter((range): range is string => typeof range === 'string').slice(0, 2000);
+    return {
+      name: sheet.name, rows: extent.rows, columns: extent.columns, cells,
+      ...(merges.length ? { merges } : {}),
+      ...(Object.keys(widths).length ? { widths } : {}),
+      ...(frozen?.ySplit ? { frozenRows: frozen.ySplit } : {}), ...(frozen?.xSplit ? { frozenColumns: frozen.xSplit } : {}),
+      ...(limited ? { limited } : {}),
+    };
+  });
+}
 
 export interface WorkbooksOptions {
   /** The app's own user-data directory. */
@@ -1077,36 +1109,38 @@ export class Workbooks {
     const key = this.key(conversationId);
     return this.queue(key, async () => {
       const book = await this.load(conversationId, key, id);
-      const grids: SheetGrid[] = book.workbook.worksheets.map(sheet => {
-        const extent = extentOf(sheet);
-        const cells: SheetGrid['cells'] = [];
-        let limited = false;
-        sheet.eachRow(row => {
-          if (limited) return;
-          row.eachCell(cell => {
-            if (cells.length >= MAX_SNAPSHOT_CELLS) { limited = true; return; }
-            const data = cellOf(cell);
-            if (data) cells.push([Number(cell.row), Number(cell.col), data]);
-          });
-        });
-        const widths: Record<number, number> = {};
-        for (let column = 1; column <= Math.min(extent.columns, 500); column++) {
-          const width = sheet.getColumn(column).width;
-          if (typeof width === 'number' && width > 0) widths[column] = width;
-        }
-        const view = sheet.views?.[0];
-        const frozen = view && view.state === 'frozen' ? view : undefined;
-        const merges = ((sheet.model as { merges?: unknown }).merges as unknown[] | undefined ?? []).filter((range): range is string => typeof range === 'string').slice(0, 2000);
-        return {
-          name: sheet.name, rows: extent.rows, columns: extent.columns, cells,
-          ...(merges.length ? { merges } : {}),
-          ...(Object.keys(widths).length ? { widths } : {}),
-          ...(frozen?.ySplit ? { frozenRows: frozen.ySplit } : {}), ...(frozen?.xSplit ? { frozenColumns: frozen.xSplit } : {}),
-          ...(limited ? { limited } : {}),
-        };
-      });
-      return { ...this.info(conversationId, book), grids };
+      return { ...this.info(conversationId, book), grids: gridsOf(book.workbook) };
     });
+  }
+
+  /**
+   * A workbook file of the chat's folder as a grid draws it, for the Files
+   * pane. Nothing is adopted: no workbook joins the chat, no meta is written,
+   * no change is announced and the model is told nothing — so the next request
+   * carries exactly what it carried before. An .xlsx in a folder added 29,084
+   * characters to every request when it was opened into a chat (a probe,
+   * 17.11), and looking at a file is not asking for that. A look, not an
+   * opening: what comes back is read and thrown away. The person's 2.1 MB,
+   * 412K-cell sheet takes 417 ms here and 2.5 MB of snapshot, capped at
+   * MAX_SNAPSHOT_CELLS like any other (a probe, 20.11); a workbook the chat
+   * already holds takes 31 ms.
+   */
+  async preview(conversationId: string, path: string): Promise<SheetPreview> {
+    const key = this.key(conversationId);
+    const target = await this.options.resolveFile(conversationId, path, false);
+    // Whether the chat is already working on this very file: then it is open after all, the model
+    // does know it, and what is drawn here is the file on disk, not the chat's copy of it.
+    const open = (await this.queue(key, () => this.metas(key)))
+      .find(meta => meta.source === 'file' && meta.path === target.relative);
+    const { workbook, lossy } = await this.readWorkbook(target.absolute);
+    return {
+      id: `preview:${target.relative}`, conversationId, title: basename(target.relative),
+      source: 'file', path: target.relative, dirty: false, revision: 0,
+      ...(lossy.length ? { lossy } : {}),
+      ...(open ? { openInChat: true } : {}),
+      sheets: workbook.worksheets.map(sheet => sheet.name),
+      grids: gridsOf(workbook),
+    };
   }
 
   /** Take a workbook out of the chat. One Hello made is deleted; a file is only no longer pointed at. */

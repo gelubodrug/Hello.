@@ -857,6 +857,24 @@ svg {
   box-shadow: 0 0 0 1.5px var(--surface-sidebar);
   pointer-events: none;
 }
+/* A chat tab's close button shows with its label: on hover, focus, or while it is the shown page. */
+.tab-pill > .chat-page-close {
+  width: 0;
+  margin-right: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    width var(--motion-tab-label) var(--ease-tab-label),
+    margin-right var(--motion-tab-label) var(--ease-tab-label),
+    opacity var(--motion-tab-label) var(--ease-tab-label);
+}
+.tab-pill:hover > .chat-page-close,
+.tab-pill:focus-within > .chat-page-close,
+.tab-pill[data-active="true"] > .chat-page-close {
+  width: var(--control-sm);
+  margin-right: 2px;
+  opacity: 1;
+}
 .tab-pill[data-active="true"] .chat-page-tab__dot {
   box-shadow: 0 0 0 1.5px var(--surface-raised);
 }
@@ -875,12 +893,20 @@ svg {
   overflow: hidden;
   white-space: nowrap;
 }
+/* Every chat page keeps its name open — Chat, Workbook and a terminal alike — as a tab in Tools does (user, 26.11). */
+.tab-pill > .chat-page-tab { min-width: 0; }
+.chat-page-tab__label > span { text-overflow: ellipsis; }
+.chat-page-tab > .chat-page-tab__label,
 .chat-page-tab[aria-selected="true"] > .chat-page-tab__label,
 .chat-page-tab:hover > .chat-page-tab__label,
 .chat-page-tab:focus-visible > .chat-page-tab__label {
   grid-template-columns: 1fr;
   margin-inline-start: var(--sp-4);
   opacity: 1;
+}
+.tab-pill > .chat-page-tab > .chat-page-tab__label {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 .tool-tabs > .tool-tab {
   position: relative;
@@ -1040,6 +1066,17 @@ svg {
 .message-user:focus-within .user-message-actions {
   opacity: 1;
   pointer-events: auto;
+}
+/* The last message sent can be taken back, and says so without being hovered
+   (user, 26.11: "am un buton… cu x să retrag ce am zis? nu-l văd"). */
+.message-user:has(.message-take-back) .user-message-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.message-take-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
 }
 @media (hover: none) {
   .message-user > .user-message-actions { opacity: 1; pointer-events: auto; }
@@ -2869,4 +2906,84 @@ svg {
 .voice-options[aria-expanded='true'] {
   color: var(--ink-primary);
   background: var(--surface-hover);
+}
+
+/* Terminals side by side in one tab (user, 26.11): each in a place of its own,
+   with its name and its X; the divider between two is dragged or arrowed. */
+.terminal-split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.terminal-split[data-dir="column"] { flex-direction: column; }
+.terminal-split-side {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.terminal-split > .terminal-split-side:first-child { flex: 0 0 var(--split-a, 50%); }
+.terminal-split > .terminal-split-side:last-child { flex: 1 1 0; }
+.terminal-split-divider {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.terminal-split[data-dir="row"] > .terminal-split-divider { width: var(--sp-8); cursor: col-resize; }
+.terminal-split[data-dir="column"] > .terminal-split-divider { height: var(--sp-8); cursor: row-resize; }
+.terminal-split-divider::after {
+  content: "";
+  background: var(--surface-edge);
+}
+.terminal-split[data-dir="row"] > .terminal-split-divider::after { width: 1px; height: 100%; }
+.terminal-split[data-dir="column"] > .terminal-split-divider::after { height: 1px; width: 100%; }
+.terminal-split-divider:hover::after,
+.terminal-split-divider:focus-visible::after { background: var(--ink-tertiary); }
+.terminal-split-divider:focus-visible { outline: none; }
+.terminal-split-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.terminal-split-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--control-sm);
+  padding: 0 2px 0 var(--sp-8);
+  color: var(--ink-tertiary);
+  font-size: var(--fs-11);
+}
+.terminal-split-pane[data-focused="true"] > .terminal-split-bar { color: var(--ink-primary); }
+.terminal-split-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.terminal-split-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: inherit;
+}
+.terminal-split-action:hover { color: var(--ink-primary); background: var(--surface-hover); }
+.terminal-split-outlet {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }

@@ -405,12 +405,27 @@ export default async function helloTools(pi: ExtensionAPI): Promise<void> {
     } };
   });
   // A compaction summarizes the tools_find results that carried each group's
-  // manual. What it did not keep is unloaded, and the next step says so.
+  // manual. A chat keeps the groups it was using: they stay loaded and their
+  // rules come back once, as a note in the transcript like the one before a
+  // reply's first step. Unloading them sent a model that was halfway through an
+  // eBay search straight into "Tool browser_read not found" — the summary said
+  // it had been reading the page, so it read it again (user, 26.11). A Pi run
+  // as a CLI keeps the old way: unloaded, and its next step is told so.
   pi.on('session_compact', async (_event, ctx) => {
     const before = new Set(loaded);
     restoreLoaded(ctx);
-    unloaded = [...before].filter(id => !loaded.has(id));
-    try { await refreshTools(); } catch { pi.setActiveTools(activeNow(allGroups())); }
+    const dropped = [...before].filter(id => !loaded.has(id));
+    try { await refreshTools(false); } catch { /* the catalog in hand decides */ }
+    const groups = allGroups();
+    const kept = cli ? [] : groups.filter(group => !group.core && dropped.includes(group.id));
+    for (const group of kept) loaded.add(group.id);
+    unloaded = dropped.filter(id => !loaded.has(id));
+    pi.setActiveTools(activeNow(groups));
+    if (kept.length)
+      pi.sendMessage({
+        customType: TOOLS_LOADED, display: false, details: { loaded: kept.map(group => group.id) },
+        content: `The conversation was just summarised. Hello kept the tools you were using loaded, with their rules again. This note is Hello’s, not a request from the human, and no tools_find call is needed for them.\n\n${announce(kept, 'your next step on')}`,
+      }, { triggerTurn: false });
   });
   // A reply keeps running across steers, and Pi snapshots the active tools for
   // each next step right after turn_end. Refreshing here is what lets a folder

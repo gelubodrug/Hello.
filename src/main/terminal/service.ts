@@ -265,9 +265,8 @@ export class MainTerminalService {
       // A chat may be deleted or its folder removed while notebooks are exported.
       if (this.disposed) throw new Error("The terminal service has closed.");
       const cwd = this.cwd(conversationId);
-      // Aider has no verified passive instruction loader in the installed version.
-      // Never replace context discovery with an automatically submitted task.
-      if (worker && worker.id !== "aider") {
+      // The connection never becomes an automatically submitted task.
+      if (worker) {
         notebookContext = await this.options.openNotebookContext?.(
           conversationId,
           cwd,
@@ -610,7 +609,7 @@ export class MainTerminalService {
     if (notebookContext) void notebookContext.close().catch(() => {
       /* Closing the bridge revokes access before asynchronous server cleanup. */
     });
-    // The worker's private home may contain its own saved sessions. Retain it.
+    // The worker's private home may contain its own saved sessions: retained.
   }
 
   close(id: string): void {

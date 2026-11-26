@@ -7,6 +7,7 @@ import { createPiToolBridge } from '../chat/pi-tool-bridge';
 import { helloToolGroups } from '../chat/tool-groups';
 import type { ToolOutput } from '../chat/tool-output';
 import { executeTool, executeToolOutput, toolDefinitions, type BrowserHooks } from '../chat/tools';
+import { sheetPythonInterpreter, sheetPythonLibraries } from '../sheets/python';
 
 /** Which notebook sections this chat has on: Plans follows Plan. */
 const pagesOf = (chat: { runbook?: boolean; tasks?: boolean; planning?: boolean }) =>
@@ -353,6 +354,15 @@ export async function createWorkerNotebookContext(input: {
       'Opening a page proves only that it opened, never that its content is right: read it or look at it before saying so.',
       '',
     ];
+    // The same sentence the chat's own model gets in its run snapshot (T193, T204), which until now
+    // went nowhere near a CLI pane: a worker built its own .venv in the human's task folder because
+    // nothing here said Hello already keeps one (a Qwen Code run, 20.11).
+    const python = await sheetPythonLibraries(input.userDataDir);
+    const pythonLines = !python ? [] : [
+      '## Python with openpyxl, already here',
+      `Hello keeps one at ${JSON.stringify(sheetPythonInterpreter(input.userDataDir))}, with openpyxl ${python.openpyxl}${python.pandas ? ` and pandas ${python.pandas}` : ''}. Use it for .xlsx work rather than python3, which on this Mac may not have openpyxl. Do not pip install them or build a venv for them, least of all inside the human’s folder.`,
+      '',
+    ];
     const instructions = [
       '# Hello workspace connection',
       'You are an interactive CLI opened by the human inside Hello. Wait for the human’s request; this connection does not assign or start work.',
@@ -360,6 +370,7 @@ export async function createWorkerNotebookContext(input: {
       'The chat’s folder may later change. Your process keeps its original folder. The info/list responses include both folders; if they differ, explain that a new CLI can be opened in the selected folder.',
       'Claude Code, Codex, Kimi, Qwen Code or OpenCode have this connection as the tools of the hello MCP server (mcp__hello__browser_read, mcp__hello__notebook_list and the like). A Pi opened from Hello starts with only tools_find of it: call tools_find to load the browser or notebook group, then use the tools it brings. Either way they are this same connection: call those. The shell commands below are for a CLI without them.',
       '',
+      ...pythonLines,
       ...notebookLines,
       ...browserLines,
       channel.instructions,

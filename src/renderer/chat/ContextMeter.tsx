@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { PI_RESERVE_TOKENS, contextBudget } from '../../shared/context-budget';
 import type { AppSettings, Message } from '../../shared/types';
 import { api } from '../api';
 import { modelName } from '../settings/presets';
 import { workDuration } from './activity';
 import { useElapsed } from './useElapsed';
 
-/** From here the runtime is close to compacting; from here it compacts soon (it decides by its own estimate). */
-export const CONTEXT_WARN = 0.75;
+/** Pi's own footer turns amber past 70% and red past 90%; here those are shares of the way to where it summarises. */
+export const CONTEXT_WARN = 0.7;
 export const CONTEXT_FULL = 0.9;
 
 export interface ContextReading {
-  /** The prompt of the latest reply's latest call: what the model holds now. */
+  /** The latest reply's latest call, prompt and answer: what the model holds now. */
   used: number;
+  /** What the model holds: the window it publishes. */
   window: number;
   share: number;
   level: 'ok' | 'warn' | 'full';
@@ -24,17 +26,24 @@ export interface ContextReading {
 
 /**
  * How full the model's window is, from the latest reply that reported its
- * prompt, against the window the chat runs with. A reply's own input adds the
- * context once per tool step, so it is its bill, never its size.
+ * usage — the number Pi's own CLI shows in its footer (user, 26.11: "să fie
+ * 1:1 cu cli-ul"): that call's prompt and answer, as a share of the window the
+ * model publishes. A reply's own input adds the context once per tool step,
+ * so it is its bill, never its size.
+ *
+ * The colour says how near the chat is to where Pi summarises it, which is
+ * `window - reserveTokens`: on a large window that is Pi's 70% and 90%, and on
+ * a small one, where the reserve is a real part of the window, the warning
+ * still comes before the summary and not after it.
  */
-export function contextReading(messages: readonly Message[], settings: Pick<AppSettings, 'contextWindow'>): ContextReading | null {
+export function contextReading(messages: readonly Message[], settings: Pick<AppSettings, 'contextWindow' | 'maxOutputTokens'>): ContextReading | null {
   const cost = messages.reduce((sum, message) => sum + (message.usage?.cost ?? 0), 0);
   const last = [...messages].reverse().find(message => message.role === 'assistant' && message.usage?.context);
-  const window = settings.contextWindow ?? 0;
-  if (!last?.usage?.context || !(window > 0)) return null;
+  if (!last?.usage?.context || !settings.contextWindow) return null;
+  const { window, usable } = contextBudget(settings);
   const used = last.usage.context;
-  const share = used / window;
-  return { used, window, share, level: share >= CONTEXT_FULL ? 'full' : share >= CONTEXT_WARN ? 'warn' : 'ok', model: last.model, cost };
+  const near = used / usable;
+  return { used, window, share: used / window, level: near >= CONTEXT_FULL ? 'full' : near >= CONTEXT_WARN ? 'warn' : 'ok', model: last.model, cost };
 }
 
 /** "13.1k", "205k", "1.2M". */
@@ -91,7 +100,7 @@ export function ContextMeter({ messages, settings, conversationId, busy = false 
   };
   return (
     <div className="context-meter" data-level={summary?.state === 'done' ? 'ok' : reading.level}
-      title={`The latest reply held ${reading.used.toLocaleString()} of ${reading.window.toLocaleString()} tokens${said}.`}>
+      title={`The latest reply held ${reading.used.toLocaleString()} of the ${reading.window.toLocaleString()} tokens the model holds${said}. The conversation is summarised when fewer than ${PI_RESERVE_TOKENS.toLocaleString()} are free, as in Pi's own CLI.`}>
       <span className="context-meter-bar" role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={shown}>
         <span className="context-meter-fill" style={{ width: `${shown}%` }} />
       </span>

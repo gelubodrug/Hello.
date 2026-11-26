@@ -68,6 +68,7 @@ const NAMES: ReadonlyArray<[RegExp, string]> = [
   [/lm ?studio|^lms$/i, 'LM Studio'],
   [/whisper/i, 'whisper.cpp'],
   [/kokoro/i, 'Kokoro'],
+  [/omlx/i, 'oMLX'],
   [/mlx/i, 'MLX'],
   [/vllm/i, 'vLLM'],
   [/kobold/i, 'KoboldCpp'],
@@ -105,6 +106,16 @@ export function candidates(ports: ListeningPort[]): ListeningPort[] {
 export interface FoundServers { chat: LocalServer[]; voice: VoiceServer[] }
 
 /**
+ * A model list the server refused for want of a key. oMLX started with an API
+ * key answers 401 `{"error":{"type":"authentication_error"}}` and was left out
+ * of "On this Mac" as if nothing listened (user, 26.11). Only a refusal in the
+ * OpenAI error shape counts: a web app's login wall is not a model server.
+ */
+export class ModelListingAuthError extends Error {
+  constructor(message: string, readonly status: number) { super(message); this.name = 'ModelListingAuthError'; }
+}
+
+/**
  * One look at every candidate port. A port that lists voices is a voice server
  * and stays out of the chat's list even when it also publishes /v1/models (its
  * Kokoro ids are not chat models); one with a chat model list is a chat server;
@@ -123,13 +134,18 @@ export async function detectServers(options: {
   const answered = await Promise.all(ports.map(async ({ command, port }) => {
     const baseUrl = `http://localhost:${port}`;
     const endpointUrl = `${baseUrl}/v1`;
+    let needsKey = false;
     const [speaks, models] = await Promise.all([
       options.speech?.(baseUrl).catch(() => false) ?? false,
-      options.list(endpointUrl).catch(() => [] as ModelChoice[]),
+      options.list(endpointUrl).catch((error: unknown) => {
+        needsKey = error instanceof ModelListingAuthError;
+        return [] as ModelChoice[];
+      }),
     ]);
     const { label, known } = serverLabel(command);
     if (speaks) return { voice: { name: voiceServerName('speech', command, port), baseUrl, kind: 'speech' as const }, known, port };
     if (models.length) return { server: { name: `${label} · ${port}`, endpointUrl, models }, known, port };
+    if (needsKey) return { server: { name: `${label} · ${port}`, endpointUrl, models: [], needsKey: true }, known, port };
     if (await options.whisper?.(baseUrl, command).catch(() => false))
       return { voice: { name: voiceServerName('whisper.cpp', command, port), baseUrl, kind: 'whisper.cpp' as const }, known, port };
     return null;

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { atomicWriteFileSync } from '../atomic-write';
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import type { NotebookPaths, WorkerId, WorkerInfo } from "../../shared/types";
 import { augmentedPath } from "./env";
 import type { WorkerNotebookContext } from "./notebook-context";
@@ -40,9 +40,18 @@ export const WORKER_CATALOG: ReadonlyArray<
     usesActiveModel: true,
   },
   { id: "pi", label: "Pi", binary: "pi", usesActiveModel: true },
-  { id: "aider", label: "Aider", binary: "aider", usesActiveModel: true },
+  { id: "saetta", label: "Saetta Code", binary: "saetta", usesActiveModel: false },
 ];
 export const WORKER_API_KEY_ENV = "HELLO_CLI_WORKER_API_KEY";
+/**
+ * The model Saetta Code runs in its own process (`--pack`): one already on
+ * this Mac (user, 24.11): Inkling 2 Mini, the pack `saetta download inkling`
+ * names (mlx-community/Inkling-2-Mini-4bit at 9c0e296), fetched into ~/Models/MLX.
+ * The Flash-Next oMLX/Kapitsa folders end in MissingTensor in saetta 0.18.0.
+ * SAETTA_PACK names another folder.
+ */
+export const saettaPack = (env: NodeJS.ProcessEnv = process.env): string =>
+  env.SAETTA_PACK?.trim() || join(homedir(), "Models", "MLX", "Inkling-2-Mini-4bit");
 export interface EndpointCredentials {
   endpointUrl: string;
   model: string;
@@ -121,11 +130,11 @@ export interface WorkerLaunch {
  *   codex     --dangerously-bypass-approvals-and-sandbox
  *   kimi      --auto            (`--yolo` is only "Ask When Needed" since 0.40)
  *   opencode  --auto
- *   aider     --yes-always
  *   qwen      settings tools.approvalMode = "yolo" (the flag was removed in 0.20)
  *   pi        nothing: Pi exposes no approval flag. `--approve` trusts a
  *             project's own files for the run, which is a different decision
  *             and not this one.
+ *   saetta    nothing, as Pi, whose 1:1 port it is (`saetta code --help`).
  */
 export function autoMode(worker: WorkerId, launch: WorkerLaunch): void {
   const flags: Partial<Record<WorkerId, string[]>> = {
@@ -133,7 +142,6 @@ export function autoMode(worker: WorkerId, launch: WorkerLaunch): void {
     codex: ["--dangerously-bypass-approvals-and-sandbox"],
     kimi: ["--auto"],
     opencode: ["--auto"],
-    aider: ["--yes-always"],
   };
   for (const flag of flags[worker] ?? [])
     if (!launch.args.includes(flag)) launch.args.push(flag);
@@ -166,6 +174,9 @@ function claudeConversationWritten(id: string): boolean {
     return false;
   }
 }
+
+/** Where a launch keeps a client's own private configuration home. */
+export const cliWorkerHomes = (userDataDir: string): string => join(userDataDir, "cli-workers");
 
 export function prepareCliWorkerLaunch(input: {
   worker: DetectedWorker;
@@ -212,7 +223,7 @@ export function prepareCliWorkerLaunch(input: {
     : launch;
   const attachNotebookContext = (): WorkerLaunch => {
     const context = input.context;
-    if (!context || worker.id === "aider") {
+    if (!context) {
       continueSession();
       autoMode(worker.id, base);
       return finish(base);
@@ -289,6 +300,25 @@ export function prepareCliWorkerLaunch(input: {
           Object.assign(base.env, context.piExtension.env);
         }
         break;
+      case "saetta":
+        base.args.push("--append-system-prompt", context.instructionsPath);
+        // Saetta Code reads pi's mcp.json from its agent folder and hands a
+        // stdio server its own environment, the connection's included
+        // (code_mcp.c, saetta 0.18.0). A private folder, so the human's own
+        // ~/.pi/agent is left as it is.
+        if (context.mcp) {
+          const root = cliWorkerHomes(input.userDataDir);
+          mkdirSync(root, { recursive: true, mode: 0o700 });
+          const directory = mkdtempSync(join(root, "saetta-"));
+          writeFileSync(
+            join(directory, "mcp.json"),
+            JSON.stringify({ mcpServers: { hello: helloServer(context.mcp) } }, null, 2),
+            { mode: 0o600 },
+          );
+          base.configurationDirectory = directory;
+          base.env.PI_CODING_AGENT_DIR = directory;
+        }
+        break;
     }
     continueSession();
     base.notebookContext = true;
@@ -306,6 +336,8 @@ export function prepareCliWorkerLaunch(input: {
   // a pane nobody is watching. The flags differ per client, and each is the
   // one that client actually honours; where a client has none, it has none and
   // that is said rather than papered over.
+  // Saetta runs the model inside the agent, from a pack on this Mac: no endpoint.
+  if (worker.id === "saetta") base.args = ["code", "--pack", saettaPack()];
   if (!worker.usesActiveModel) return attachNotebookContext();
   const selected = input.endpoint;
   if (!selected?.model.trim() || !selected.endpointUrl.trim()) {
@@ -332,7 +364,7 @@ export function prepareCliWorkerLaunch(input: {
   const qwenThinking = usesQwenThinkingSwitch(endpoint, model, selected.modelCompatibility ?? "auto");
   const thinkingFields = { chat_template_kwargs: { enable_thinking: effort !== "off" } };
   const privateConfig = (name?: string, value?: unknown): string => {
-    const root = join(input.userDataDir, "cli-workers");
+    const root = cliWorkerHomes(input.userDataDir);
     mkdirSync(root, { recursive: true, mode: 0o700 });
     const directory = mkdtempSync(join(root, `${worker.id}-`));
     base.configurationDirectory = directory;
@@ -393,7 +425,18 @@ export function prepareCliWorkerLaunch(input: {
         break;
       case "opencode": {
         const provider = "hello-active";
-        base.args = ["--model", `${provider}/${model}`];
+        // No --model: OpenCode's root command dropped it, and v2.2.5 refuses to start on an
+        // unrecognized flag ("Unrecognized flag: --model in command opencode", user, 20.11).
+        // The config below names the model anyway, as it always did.
+        //
+        // --standalone, because OpenCode's root command otherwise attaches to one background
+        // service shared by every pane, and that service holds whichever OPENCODE_CONFIG_CONTENT
+        // started it. Measured on v2.2.5: with a service already running on one config, a second
+        // process carrying a different one still reported the first's model, and the same call
+        // with --standalone reported its own. Every pane's model, instructions file and `hello`
+        // MCP server — its chat's bridge token — live in that config, so a shared service would
+        // give a worker in one chat another chat's connection.
+        base.args = ["--standalone"];
         Object.assign(base.env, {
           OPENCODE_CONFIG_CONTENT: JSON.stringify({
             $schema: "https://opencode.ai/config.json",
@@ -440,24 +483,6 @@ export function prepareCliWorkerLaunch(input: {
         });
         break;
       }
-      case "aider":
-        base.args = [
-          "--model",
-          `openai/${model}`,
-          "--openai-api-base",
-          endpoint,
-          "--no-auto-commits",
-          "--no-show-model-warnings",
-        ];
-        // Its model settings carry extra request fields (JSON is YAML).
-        if (qwenThinking) {
-          const directory = privateConfig("model-settings.yml", [
-            { name: `openai/${model}`, extra_params: { extra_body: thinkingFields } },
-          ]);
-          base.args.push("--model-settings-file", join(directory, "model-settings.yml"));
-        }
-        base.env.OPENAI_API_KEY = key;
-        break;
     }
     return attachNotebookContext();
   } catch (error) {

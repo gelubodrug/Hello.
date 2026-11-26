@@ -237,6 +237,8 @@ export function SettingsDialog({
       ? server.models[0].id
       : server.models.some(item => item.id === draft.model) ? draft.model : "";
     const { apiKey: _key, contextWindow: _context, maxOutputTokens: _output, ...rest } = patch();
+    // A server that refused its list for want of a key is used by giving it one.
+    if (server.needsKey) setKeyOpen(true);
     void run(() => api.settings.save({ ...rest, endpointUrl: server.endpointUrl, model }));
   };
   const show = (next: Section) => {
@@ -475,7 +477,7 @@ export function SettingsDialog({
                 >
                   <span className="settings-server-dot" aria-hidden />
                   <span className="settings-server-name">{server.name}</span>
-                  <span className="settings-server-models">{served(server.models)}</span>
+                  <span className="settings-server-models">{server.needsKey ? "Needs an API key" : served(server.models)}</span>
                   <span className="settings-server-action">
                     {inUse(server) ? <Check size={14} aria-label="In use" /> : "Use"}
                   </span>

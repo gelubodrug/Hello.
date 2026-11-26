@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PiRpcEvent, PiRpcProcessOptions } from '../src/main/chat/pi-rpc';
@@ -321,6 +321,28 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(store.getLastOrder(conversationId)).toBe('A report from gps.xlsx for October.\nAssumed: openpyxl');
   });
 
+  // "ultimele 24h" alone reached Pi and was searched for as the day's news (user, 26.11): an answer to the
+  // gate's questions is never the whole request, whatever the gate calls it or if it cannot answer.
+  it('never hands Pi an answer without the request it answers', async () => {
+    store.updateConversation(conversationId, { askFirst: true });
+    const gateAnswers = [
+      '{"work":true,"understood":"Open Reddit and check for new comments.","assumptions":[],"questions":["New since when?"]}',
+      '{"work":false,"understood":"The last 24 hours.","assumptions":[],"questions":[]}',
+    ];
+    const chat = create({ fetch: async url => String(url).endsWith('/chat/completions')
+      ? new Response(JSON.stringify({ choices: [{ message: { content: gateAnswers.shift() } }] }), { status: 200 })
+      : new Response(JSON.stringify({ data: [{ id: store.getSettings().model }] })) });
+    await chat.send(conversationId, 'deschide reddit și vezi dacă am vreun comment nou', [], { gate: true });
+    const running = chat.send(conversationId, 'ultimele 24h', [], { gate: true });
+    const { rpc } = await runtime();
+    settle(rpc, 'Done.');
+    await running;
+    const [order] = rpc.prompt.mock.calls[0];
+    expect(order).toContain('WORK ORDER');
+    expect(order).toContain('deschide reddit și vezi dacă am vreun comment nou');
+    expect(order).toContain('- New since when?\n  ultimele 24h');
+  });
+
   it('lets a message through untouched when the gate is off, is not the person\'s, or cannot answer', async () => {
     const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/chat/completions')
       ? new Response('busy', { status: 503 })
@@ -539,24 +561,45 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
    * data for a library Hello already had (a run, 17.11).
    */
   it('names the Python it keeps with openpyxl, once there is one, and says nothing before', async () => {
-    const interpreter = path.join(directory, 'sheets', 'python', 'venv', 'bin', 'python');
+    const root = path.join(directory, 'sheets', 'python');
+    const interpreter = path.join(root, 'venv', 'bin', 'python');
     const first = create().send(conversationId, 'Read the workbook');
     const before = await runtime();
     expect(await before.bridge.options.getContext!()).not.toMatch(/openpyxl/);
     settle(before.rpc, 'Done.');
     await first;
 
+    // An interpreter with no receipt beside it says nothing: Hello does not know what is in it.
     mkdirSync(path.dirname(interpreter), { recursive: true });
     writeFileSync(interpreter, '');
-    const second = create().send(conversationId, 'Read it again');
-    const current = await runtime(1);
+    const bare = create().send(conversationId, 'Read it again');
+    const without = await runtime(1);
+    expect(await without.bridge.options.getContext!()).not.toMatch(/openpyxl/);
+    settle(without.rpc, 'Done.');
+    await bare;
+
+    // The versions, from the receipt the build wrote: five bash calls in four chats print
+    // openpyxl.__version__ from this interpreter, and pandas sits beside it unmentioned (20.11 — T204).
+    writeFileSync(path.join(root, 'ready.json'), JSON.stringify({ openpyxl: '3.1.5', pandas: '3.1.1', python: '3.15.0' }));
+    const second = create().send(conversationId, 'And again');
+    const current = await runtime(2);
     const context = await current.bridge.options.getContext!();
-    expect(context).toContain('A Python with openpyxl is ready');
+    expect(context).toContain('A Python with openpyxl 3.1.5 and pandas 3.1.1 is ready');
     expect(context).toContain(JSON.stringify(interpreter));
     expect(context).toMatch(/rather than python3, which may not have openpyxl/);
     expect(context).toMatch(/Never pip install it or build a venv for it/);
     settle(current.rpc, 'Done.');
     await second;
+
+    // Where pandas did not install, it is not claimed.
+    writeFileSync(path.join(root, 'ready.json'), JSON.stringify({ openpyxl: '3.1.5', pandas: null, python: '3.15.0' }));
+    const third = create().send(conversationId, 'Once more');
+    const last = await runtime(3);
+    const alone = await last.bridge.options.getContext!();
+    expect(alone).toContain('A Python with openpyxl 3.1.5 is ready');
+    expect(alone).not.toMatch(/pandas/);
+    settle(last.rpc, 'Done.');
+    await third;
   });
 
   it('keeps per-tab browser permissions even when another tab grants Full control', async () => {
@@ -724,6 +767,103 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(assistant().status).toBe('complete');
   });
 
+  // User, 26.11: "să pot șterge din istoric dacă i-am zis o tâmpenie unui model,
+  // nu vreau s-o aibă ca și context… ultimul send of chat, să îl pot retrage",
+  // then "fă varianta de mijloc, taie doar coada": Pi's session is cut back to
+  // where it ended before that message, not rebuilt.
+  describe('taking back the last message sent', () => {
+    // What the real Pi does and the in-memory one does not: append each entry to its session file.
+    let wrote = 0;
+    const piWrote = (entry: Record<string, unknown>) =>
+      appendFileSync(path.join(piConversationDir(directory, conversationId), 'session.jsonl'), `${JSON.stringify({ id: `e${wrote += 1}`, ...entry })}\n`);
+    const piSaid = (role: 'user' | 'assistant', text: string) => piWrote({ type: 'message', message: { role, content: [{ type: 'text', text }] } });
+    const session = () => readFileSync(path.join(piConversationDir(directory, conversationId), 'session.jsonl'), 'utf8');
+
+    it('cuts the turn off the model’s session: it and its reply are gone from chat and context, and what came before — a summary included — stays as it was', async () => {
+      const chat = create();
+      const first = chat.send(conversationId, 'Download the invoices');
+      const current = await runtime();
+      piSaid('user', 'Download the invoices');
+      piSaid('assistant', 'Working on it.');
+      settle(current.rpc, 'Working on it.');
+      await first;
+      // Pi summarised the chat between the two turns: the summary is part of what the model knew.
+      piWrote({ type: 'compaction', summary: 'SUMMARY: the person wants the invoices', firstKeptEntryId: 'e1', tokensBefore: 9000 });
+      const before = session();
+      const second = chat.send(conversationId, 'Forget that, you are useless');
+      const warm = await runtime(0, 2);
+      piSaid('user', 'Forget that, you are useless');
+      piSaid('assistant', 'I am sorry you feel that way.');
+      settle(warm.rpc, 'I am sorry you feel that way.');
+      await second;
+      expect(session()).toContain('you are useless');
+
+      const left = await chat.retract(conversationId);
+      expect(left.map(message => message.content)).toEqual(['Download the invoices', 'Working on it.']);
+      expect(store.listMessages(conversationId).map(message => message.content)).toEqual(['Download the invoices', 'Working on it.']);
+      // The Pi that heard it is closed; its session is byte for byte what it was before the message.
+      expect(current.rpc.dispose).toHaveBeenCalled();
+      expect(session()).toBe(before);
+      expect(session()).toContain('SUMMARY: the person wants the invoices');
+      expect(session()).not.toContain('you are useless');
+      expect(session()).not.toContain('sorry you feel');
+
+      // The next turn runs on a new Pi over that same session.
+      const after = chat.send(conversationId, 'Carry on with the invoices');
+      const fresh = await runtime(1);
+      expect(session()).toBe(before);
+      expect(fresh.rpc.prompt.mock.calls[0][0]).toBe('Carry on with the invoices');
+      piSaid('user', 'Carry on with the invoices');
+      settle(fresh.rpc, 'Three downloaded.');
+      await after;
+      expect(store.listMessages(conversationId).map(message => message.content)).toEqual(
+        ['Download the invoices', 'Working on it.', 'Carry on with the invoices', 'Three downloaded.']);
+      // And that one can be taken back in turn, down to the same place.
+      await chat.retract(conversationId);
+      expect(session()).toBe(before);
+    });
+
+    it('rebuilds the session from the chat when its mark can no longer be trusted', async () => {
+      const chat = create();
+      const first = chat.send(conversationId, 'Download the invoices');
+      const current = await runtime();
+      piSaid('user', 'Download the invoices');
+      settle(current.rpc, 'Working on it.');
+      await first;
+      const second = chat.send(conversationId, 'Forget that, you are useless');
+      const warm = await runtime(0, 2);
+      settle(warm.rpc, 'I am sorry you feel that way.');
+      await second;
+      // Something rewrote the file: the entry that ended the session before the message is not where it was.
+      const root = piConversationDir(directory, conversationId);
+      writeFileSync(path.join(root, 'session.jsonl'), `${JSON.stringify({ type: 'session', version: 3, id: 'another' })}\n${JSON.stringify({ id: 'x1', type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'you are useless, rewritten' }] } })}\n`);
+
+      await chat.retract(conversationId);
+      expect(existsSync(root)).toBe(false);
+      const after = chat.send(conversationId, 'Carry on with the invoices');
+      const fresh = await runtime(1);
+      const seeded = session();
+      expect(seeded).toContain('Download the invoices');
+      expect(seeded).toContain('Working on it.');
+      expect(seeded).not.toContain('you are useless');
+      settle(fresh.rpc, 'Three downloaded.');
+      await after;
+    });
+
+    it('takes a message back while it is being answered, and has nothing to take back in an empty chat', async () => {
+      const chat = create();
+      await expect(chat.retract(conversationId)).rejects.toThrow('There is no message to take back.');
+      const running = chat.send(conversationId, 'Delete everything in the folder');
+      await runtime();
+      piSaid('user', 'Delete everything in the folder');
+      const left = await chat.retract(conversationId);
+      await running.catch(() => undefined);
+      expect(left).toEqual([]);
+      expect(store.listMessages(conversationId)).toEqual([]);
+      expect(session()).not.toContain('Delete everything');
+    });
+  });
+
   it('reset empties the chat — messages, queue, attachments, Pi session — and the next turn starts with nothing', async () => {
     const chat = create();
     const first = chat.send(conversationId, 'Download the invoices');
@@ -871,13 +1011,13 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(chat.listQueued(conversationId)).toHaveLength(1);
   });
 
-  it('shrinks the window it hands the runtime when the provider reports an overflow', async () => {
+  // Hello used to scale the window down after such a turn; Pi's own CLI does not, and neither does the chat now (user, 26.11: "1:1 cu cli-ul").
+  it('leaves the window as the model publishes it even when the provider reports an overflow', async () => {
     store.saveSettings({ contextWindow: 512_000, maxOutputTokens: 32_768 });
     const chat = create();
     const send = chat.send(conversationId, 'a long one');
     const current = await runtime();
-    // The provider counted more input than the model holds: the runtime never
-    // compacted, so it is told less next time.
+    // The provider counted more input than the model holds. Recovering from that is Pi's, by summarising.
     current.rpc.emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
     current.rpc.emit({ type: 'message_end', message: {
       role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop',
@@ -885,15 +1025,13 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     } });
     current.rpc.emit({ type: 'agent_settled' });
     await send;
-    expect(store.getSettings().contextScale).toBe(0.7);
-    // The published window itself is untouched — that is a fact about the model.
+    expect(store.getSettings().contextScale).toBeUndefined();
     expect(store.getSettings().contextWindow).toBe(512_000);
   });
 
-  // The reply's input adds the context once per tool step; the window is about
-  // one call. Three steps of 200k each on a 512k window fit, and the window
-  // must stay as it is — before, their 600k total shrank it every such turn.
-  it('keeps the window when only the reply’s total, not one call, is over it — and records size, cost and model', async () => {
+  // The reply's input adds the context once per tool step; its size is the
+  // latest call's prompt and answer, which is what Pi's footer counts.
+  it('records a reply’s size as its latest call — prompt and answer — beside its bill, cost and model', async () => {
     store.saveSettings({ contextWindow: 512_000, maxOutputTokens: 32_768, model: 'qwen3.6-27b' });
     const chat = create();
     const send = chat.send(conversationId, 'three steps');
@@ -910,10 +1048,10 @@ describe('Pi-backed chat lifecycle with in-memory transport', () => {
     expect(store.getSettings().contextScale).toBeUndefined();
     const reply = assistant();
     expect(reply.model).toBe('qwen3.6-27b');
-    expect(reply.usage).toMatchObject({ input: 583_000, output: 150, context: 206_000 });
+    expect(reply.usage).toMatchObject({ input: 583_000, output: 150, context: 206_050 });
     expect(reply.usage?.cost).toBeCloseTo(0.006, 6);
     // Read back from the database with it.
-    expect(store.listMessages(conversationId).at(-1)).toMatchObject({ model: 'qwen3.6-27b', usage: { context: 206_000 } });
+    expect(store.listMessages(conversationId).at(-1)).toMatchObject({ model: 'qwen3.6-27b', usage: { context: 206_050 } });
   });
 
   it('leaves the window alone when the reported usage fits', async () => {
@@ -988,6 +1126,14 @@ describe('endpoint discovery and legacy-history import helpers', () => {
     expect(await create({ fetch: fetcher }).models()).toEqual([{ id: 'loaded', contextWindow: 8192 }]);
   });
 
+  it('reads the window oMLX and vLLM publish as max_model_len', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      object: 'list', data: [{ id: 'Inkling-2-Mini-4bit', object: 'model', owned_by: 'omlx', max_model_len: 1048576 }],
+    }), { headers: { 'content-type': 'application/json' } }));
+    // User, 26.11: unread, the chat ran on the 131,072 another model had published and summarised at 72k.
+    expect((await create({ fetch: fetcher }).models())[0]).toMatchObject({ id: 'Inkling-2-Mini-4bit', contextWindow: 1048576 });
+  });
+
   it('carries each model’s published image capability through the existing catalog', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [
       { id: 'image', architecture: { input_modalities: ['text', 'image'] } },
@@ -1032,13 +1178,16 @@ describe('endpoint discovery and legacy-history import helpers', () => {
     await create({ fetch: silent }).settleModelLimits();
     expect(store.getSettings().contextWindow).toBe(32768);
     expect(store.getSettings().maxOutputTokens).toBe(4096);
+    // Nothing published claims nothing: the numbers in force are another
+    // model's, and a figure the server publishes later is still adopted (26.11).
+    expect(store.getSettings().limitsFor ?? '').not.toContain('plain');
     store.saveSettings({ model: 'offline-model' });
     const failing = vi.fn<typeof fetch>(async () => { throw new Error('ECONNREFUSED'); });
     await expect(create({ fetch: failing }).settleModelLimits()).resolves.toBeUndefined();
     expect(store.getSettings().contextWindow).toBe(32768);
     // The claim never reaches this model, so a server that was merely starting
     // up is asked again on the next attempt rather than written off.
-    expect(store.getSettings().limitsFor).not.toContain('offline-model');
+    expect(store.getSettings().limitsFor ?? '').not.toContain('offline-model');
   });
 
   it('redacts discovery errors and leaves local endpoints without an Authorization header', async () => {
@@ -1061,6 +1210,9 @@ describe('endpoint discovery and legacy-history import helpers', () => {
   it('uses consistent completion and model URLs', () => {
     expect(completionURL('http://localhost:1234/v1/')).toBe('http://localhost:1234/v1/chat/completions');
     expect(modelsURL('http://localhost:1234/v1/chat/completions')).toBe('http://localhost:1234/v1/models');
+    // OpenRouter keeps images, speech, embeddings and the rest out of a plain /models answer
+    expect(modelsURL('https://openrouter.ai/api/v1')).toBe('https://openrouter.ai/api/v1/models?output_modalities=all');
+    expect(modelsURL('https://not-openrouter.ai/v1')).toBe('https://not-openrouter.ai/v1/models');
   });
 
   it('imports observed tool exchanges in order without hidden thinking or replayed actions', () => {
@@ -1240,17 +1392,39 @@ describe('servers running on this Mac', () => {
       { id: 'anthropic/claude-sonnet-4.5', pricing: { prompt: '0.000003', completion: '0.000015' } },
       { id: 'openrouter/auto', pricing: { prompt: '-1', completion: '-1' } },
       { id: 'vendor/unpriced', pricing: { prompt: '', completion: '' } },
+      // prompt and completion at zero, but the music it writes is paid by the second
+      { id: 'google/lyria-3-pro-preview', pricing: { prompt: '0', completion: '0' },
+        architecture: { output_modalities: ['text', 'audio'] } },
+      // a price of its own that is not zero: the whole list has to be zero
+      { id: 'vendor/zero-tokens-paid-images', pricing: { prompt: '0', completion: '0', image: '0.004' },
+        architecture: { output_modalities: ['text'] } },
     ] })));
     const ollama = { name: 'Ollama · 11434', endpointUrl: 'http://localhost:11434/v1', models: [{ id: 'gemma4:12b' }] };
     const [cloud, local] = await create({ fetch: fetcher, localServers: async () => [ollama] }).catalog();
     expect(cloud.models).toEqual([
       { id: 'anthropic/claude-sonnet-4.5' },
+      { id: 'google/lyria-3-pro-preview' },
       { id: 'openrouter/auto' },
       { id: 'openrouter/sonoma-sky-alpha', free: true },
       { id: 'qwen/qwen3-coder:free', free: true },
       { id: 'vendor/unpriced' },
+      { id: 'vendor/zero-tokens-paid-images' },
     ]);
     expect(local.models).toEqual([{ id: 'gemma4:12b', free: true }]);
+  });
+
+  it('leaves out what cannot answer a chat: another kind of model, or a provider that takes no tools', async () => {
+    store.saveSettings({ endpointUrl: 'https://openrouter.ai/api/v1', model: 'm', apiKey: 'key' });
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [
+      { id: 'recraft/recraft-v4.1-flash-v2:free', architecture: { output_modalities: ['image'] } },
+      { id: 'nvidia/nemotron-3.5-embed-1b:free', architecture: { output_modalities: ['embeddings'] } },
+      { id: 'moondream/moondream3-preview', architecture: { output_modalities: ['text'] }, supported_parameters: ['temperature'] },
+      { id: 'particle-ai/particle-1:free', architecture: { output_modalities: ['text'] }, supported_parameters: ['tools', 'temperature'] },
+      // a server that says nothing about either is taken at its word, as every local one is
+      { id: 'gemma4:12b' },
+    ] })));
+    const [cloud] = await create({ fetch: fetcher, localServers: async () => [] }).catalog();
+    expect(cloud.models.map(model => model.id)).toEqual(['gemma4:12b', 'particle-ai/particle-1:free']);
   });
 
   it('answers from the last look, however old, and looks afresh only when asked', async () => {

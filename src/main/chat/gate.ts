@@ -155,6 +155,28 @@ export function workOrder(verdict: Extract<GateVerdict, { kind: 'ready' }>, stat
   return lines.join('\n');
 }
 
+/**
+ * A request whose questions were answered, when there is no order to send:
+ * the gate failed, or called the answer a conversation. An answer alone is not
+ * a request — "ultimele 24h" sent bare was searched for as the news of the day
+ * (user, 26.11) — so the agent is given the request, the questions and the
+ * answers together.
+ */
+export function answeredRequest(state: Pick<GateState, 'request' | 'questions' | 'answers'>): string {
+  return [
+    'The human’s request:',
+    clip(state.request, GATE_REQUEST_CHARS),
+    '',
+    'Hello asked them:',
+    ...state.questions.map((question, index) => `${index + 1}. ${question}`),
+    '',
+    'They answered:',
+    ...state.answers.map(answer => clip(answer, 2_000)),
+    '',
+    'Do what the request asks, with these answers.',
+  ].join('\n');
+}
+
 /** The order as the next gate call is told it: what was understood and what was assumed, in a few lines. */
 export function orderSummary(verdict: Extract<GateVerdict, { kind: 'ready' }>): string {
   return [verdict.understood, ...verdict.assumptions.map(item => `Assumed: ${item}`)].join('\n');

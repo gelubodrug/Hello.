@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   skillsList: vi.fn(),
   pathsForFiles: vi.fn(),
   conversationUpdate: vi.fn(),
+  retract: vi.fn(),
   stop: vi.fn(),
   retry: vi.fn(),
   approve: vi.fn(),
@@ -60,6 +61,8 @@ vi.mock("../src/renderer/api", () => ({
   api: {
     chat: {
       attach: mocks.attach,
+      // A waiting picture is a card that shows itself (user, 26.11): its thumbnail is read through main.
+      previewAttachment: async () => "data:image/png;base64,iVBORw0KGgo=",
       attachClipboard: mocks.attachClipboard,
       send: mocks.send,
       queue: mocks.queue,
@@ -85,7 +88,7 @@ vi.mock("../src/renderer/api", () => ({
       onChange: mocks.notebookOnChange,
     },
     system: { pathsForFiles: mocks.pathsForFiles, chooseFiles: mocks.chooseFiles, openExternal: vi.fn().mockResolvedValue(undefined), copy: mocks.copy },
-    conversations: { update: mocks.conversationUpdate },
+    conversations: { update: mocks.conversationUpdate, retract: mocks.retract },
     files: { list: mocks.filesList, resolvePaths: mocks.resolvePaths },
     skills: { list: mocks.skillsList, search: vi.fn(), use: vi.fn() },
     extensions: {
@@ -301,7 +304,8 @@ describe("real conversation controls", () => {
     await drop();
     expect(mocks.attach).toHaveBeenCalledWith(conversation.id, ['/drops/diagram.png']);
     expect(mocks.send).not.toHaveBeenCalled();
-    expect(document.querySelector('.composer-attachments')?.textContent).toContain('diagram.png');
+    // A waiting picture is a card of itself, named by its title, not its text (user, 26.11).
+    expect(document.querySelector('.composer-attachments .composer-attachment-open[title="diagram.png"]')).not.toBeNull();
     await click(button('Remove attachment diagram.png'));
     expect(document.querySelector('.composer-attachments')).toBeNull();
     await drop();
@@ -385,7 +389,8 @@ describe("real conversation controls", () => {
     // Restoring is the person's own act: both texts land, the attachment with them.
     await click(row);
     expect(field.value).toBe("Message A\n\nMessage B");
-    expect(document.querySelector('.composer-attachments')?.textContent).toContain('diagram.png');
+    // A waiting picture is a card of itself, named by its title, not its text (user, 26.11).
+    expect(document.querySelector('.composer-attachments .composer-attachment-open[title="diagram.png"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="Messages that failed to send"]')).toBeNull();
     expect(localStorage.getItem("hello.draft.test-chat.unsent")).toBeNull();
   });
@@ -895,7 +900,7 @@ describe("attaching by paste and by the picker", () => {
     mocks.pathsForFiles.mockReturnValue([""]);
     await paste(picture("image.png"));
     expect(mocks.attachClipboard).toHaveBeenCalledWith(conversation.id);
-    expect(host.textContent).toContain("Pasted image.png");
+    expect(host.querySelector('.composer-attachment-open[title="Pasted image.png"]')).not.toBeNull();
     mocks.attach.mockClear();
     mocks.attachClipboard.mockClear();
     const words = await paste({ items: [{ kind: "string", type: "text/plain" }], types: ["text/plain"] });
@@ -1477,6 +1482,50 @@ describe("the model a chat runs on", () => {
   });
 });
 
+// User, 26.11: Settings ran oMLX's Inkling on :8000 while the picker kept the
+// models of the server that had that port before, and the chat its own model.
+describe("a selection made in Settings", () => {
+  it("is the open chat's model too, and the picker reads the models again", async () => {
+    mocks.catalog.mockResolvedValue([
+      { name: "oMLX", endpointUrl: "http://localhost:8000/v1", active: true, models: [{ id: "inkling-2-mini-nvfp4-96902d", free: true }] },
+    ]);
+    const onFolderChange = vi.fn();
+    const own = { ...conversation, model: { endpointUrl: "http://localhost:8000/v1", id: "inkling-2-mini-nvfp4-96902d" } };
+    const props = { ...view().props, conversation: own, onFolderChange };
+    await render(createElement(ConversationView, props));
+    await vi.waitFor(() => expect(mocks.catalog).toHaveBeenCalledTimes(1));
+    mocks.catalog.mockResolvedValue([
+      { name: "oMLX", endpointUrl: "http://localhost:8000/v1", active: true, models: [{ id: "Inkling-2-Mini-4bit", free: true }] },
+    ]);
+    await render(createElement(ConversationView, { ...props, settings: { ...settings, endpointUrl: "http://localhost:8000/v1", model: "Inkling-2-Mini-4bit" } }));
+    await vi.waitFor(() => expect(mocks.catalog).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.conversationUpdate).toHaveBeenCalledWith(own.id, { model: { endpointUrl: "http://localhost:8000/v1", id: "Inkling-2-Mini-4bit" } }));
+  });
+});
+
+// User, 26.11: "ultimul send of chat… să îl pot retrage" — said to a model by
+// mistake, it should leave the chat and the model's context.
+describe("taking back the last message sent", () => {
+  const said = (id: string, role: "user" | "assistant", content: string): Message =>
+    ({ id, conversationId: conversation.id, role, content, status: "complete", createdAt: 1 });
+  it("is offered on the last message sent only, asks once, and puts back what the chat still holds", async () => {
+    const before = [said("u1", "user", "First question"), said("a1", "assistant", "First answer")];
+    mocks.retract.mockResolvedValue(before);
+    const onMessages = vi.fn();
+    await render(createElement(ConversationView, { ...view([...before, said("u2", "user", "A silly thing"), said("a2", "assistant", "A reply to it")]).props, onMessages }));
+    const offers = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label="Take back this message"]')];
+    expect(offers).toHaveLength(1);
+    expect(offers[0].closest("[data-message-id]")?.getAttribute("data-message-id")).toBe("u2");
+    // One click asks; nothing is taken back yet.
+    await click(offers[0]);
+    expect(mocks.retract).not.toHaveBeenCalled();
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent === "Take it back, with its reply")!;
+    await click(confirm);
+    expect(mocks.retract).toHaveBeenCalledWith(conversation.id);
+    await vi.waitFor(() => expect(onMessages).toHaveBeenCalledWith(before));
+  });
+});
+
 // Free first (user, 01.10): the picker opens on the models that cost nothing —
 // the person's own servers and those priced at zero — and the rest come back
 // with the pill switched off.
@@ -1629,6 +1678,7 @@ describe("the model per reply and the context meter", () => {
     const usage = document.querySelector(".message-usage");
     expect(usage?.textContent).toBe("qwen3.6-27b.gguf · 84,863 in · 717 out · $0.0040");
     const meter = document.querySelector(".composer-wrap .context-meter");
+    // Of the window the model holds, as Pi's own CLI shows it (26.11).
     expect(meter?.textContent).toContain("30% of 32k");
   });
 });

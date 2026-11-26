@@ -642,7 +642,7 @@ describe('what a chat’s earlier visits learned about a site', () => {
     expect(store.listBrowserTabs()).toMatchObject([{ id: 'kept', control: 'read' }]);
     expect(store.getDomainNote(chat, 'shared.example')).toBeUndefined();
     const check = new Database(store.databasePath, { readonly: true });
-    expect(check.pragma('user_version', { simple: true }) as number).toBe(17);
+    expect(check.pragma('user_version', { simple: true }) as number).toBe(18);
     expect((check.prepare('SELECT COUNT(*) AS rows FROM browser_domain_notes').get() as { rows: number }).rows).toBe(0);
     check.close();
     // And the new shape works on that same file.

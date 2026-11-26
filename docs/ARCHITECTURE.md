@@ -328,6 +328,7 @@ The default macOS data directory is:
     tasks.md
     plan.md
   cli-workers/                  app-created private configuration homes for applicable clients
+  openjev/                      Unclutter: the port and log of an OpenJev helper Hello started
   …                             Electron-managed browser storage and renderer local storage
 ```
 
@@ -398,6 +399,147 @@ with `file_edit`, never named after a module, and checked in one pass at the
 end. They sit in `modeGuidance`, not in `CODING_MANUAL`: the `coding` group is
 `core`, and every path in the Pi extension filters `!group.core`, so that
 manual is never delivered.
+
+**The script rule names the re-send, not one way of writing a file (T203).**
+The first of those three began "A script you will run more than once", which
+nobody knows at the first send, and named `cat > file <<EOF` as the thing to
+avoid — but that is how a script reaches a file from the shell at all. The run
+on 20.11 avoided it and piped the script into the interpreter on stdin,
+`python - <<'PY'`; when the model did reach for `file_edit` there was nothing
+there: "_build.py does not exist. Create it with file_write." It then sent an
+8.4K script four times — 37,381 of its 49,487 command characters. Across eleven
+runs of that prompt in the chat store, six re-sent a build script whole at
+least twice, in both shapes: `cat > build.py <<'EOF'` twice in one run, the
+interpreter's stdin in another. What costs is the re-send; the run that sent
+once spent 8,378 characters in all, and writing the file first is not what
+makes a run fast (one that did: 11,888 characters, 326 s) — it is what makes
+the mend cheap. The rule is now unconditional and names both shapes: a script
+of more than a few lines is created once with `file_write`, run by name, and
+mended with `file_edit`.
+
+**The run snapshot names the versions, not just the path (T204).** Five bash
+calls in four chats print `openpyxl.__version__` from the very interpreter the
+snapshot had already named — three of them ask nothing else — and nothing has
+ever told a model that pandas is installed in the same environment. The
+snapshot line now reads the receipt `prepare()` writes, `ready.json`, through
+`sheetPythonLibraries(dataDir)`, and says "A Python with openpyxl 3.1.5 and
+pandas 3.1.1 is ready" — pandas only where it actually installed, since it is
+left out when there is no ready-made build. With no receipt beside the
+interpreter Hello does not know what is in it and says nothing at all, where
+before it claimed openpyxl from the file's existence alone. The text stays
+constant, so it costs no prefix cache. It names what is there; it does not stop
+a model guessing a class name openpyxl has never had.
+
+**Files shows a workbook and a document, not a refusal (T206).** Clicking
+`gps_tracking_3months.xlsx` in the file tree gave "This file is larger than
+2 MB. Open it in its default app" — the viewer reads UTF-8 text and an .xlsx is
+neither text nor small. Two previews now sit in front of that message.
+
+A workbook is drawn by the same grid the Sheets pane uses.
+`Workbooks.preview(conversationId, path)` resolves the file through the chat's
+own `resolveFile`, reads it with the existing `readWorkbook` — chart-stripping
+fallback and all — and returns a `SheetSnapshot` built by `gridsOf`, the sheet
+builder lifted out of `snapshot()` so both callers draw identically. It adopts
+nothing: no meta is written, no `SheetChange` is announced, the workbook does
+not join `list()`, and the model is told nothing. That is the point. An .xlsx
+the chat holds added 29,084 characters to every request (a probe, 17.11), and
+clicking a file in a tree is not a request for that. `WorkbookPreview` is
+therefore read-only, and has to be: what is typed there reaches no one, so
+typing and double-click are stopped before the grid sees them while moving,
+selecting and copying are not.
+
+The pane says which of two things is true, because only one of them always is.
+`preview` looks the file up among the chat's own metas first — the lookup
+`openFile` already does — and sets `openInChat`. Without it the notice says
+looking here opens nothing and the model has not been told; with it that would
+be a lie, so the notice says instead that the chat is working on the file in
+Sheets, where any unsaved change is, and that what is drawn here is the file as
+saved. The person's 2.1 MB, 412K-cell sheet costs 417 ms and a 2.5 MB snapshot
+on the click that opens it, capped at `MAX_SNAPSHOT_CELLS` like any other; the
+report it built, 31 ms (a probe, 20.11). Nothing is cached, and nothing is read
+again until another file is clicked.
+
+A Word, RTF or ODT document goes through the Mac's own `textutil`, the same
+bargain as poppler for PDFs: no library in Hello, and what macOS already reads,
+Hello shows. `documentText` in `files/service.ts` spawns it with `execFile`, so
+the path is an argument and never passes through a shell, and the file is only
+read. textutil is forgiving to a fault — a file holding NUL came back as
+`abc\u0000\u0001\u0002def` (a probe, 20.11) — so text with a NUL in it is refused rather
+than shown. `FileDocument.converted` marks what came out, and the pane says the
+formatting, images and tables are not in it.
+
+**A CLI pane hears about that Python too (T207).** The sentence T193 added went
+into the chat model's run snapshot and nowhere else, so a Qwen Code worker
+opened in a chat built its own `.venv` inside the human's task folder (20.11).
+The worker guide `notebook-context.ts` writes, `HELLO.md`, now carries its own
+short section from the same receipt: where the interpreter is, which versions
+are in it, and not to pip install them or build a venv for them, least of all
+in the human's folder. It appears only when the interpreter is really there.
+
+**OpenCode starts again, and in its own server (T208).** Hello passed
+`--model hello-active/<model>` on OpenCode's command line. Its root command has
+no such flag any more — v2.2.5 lists `--standalone`, `--server`, `--auto`,
+`--continue`, `--session` and `--prompt`, and exits 1 on anything else — so
+every OpenCode pane died with "Unrecognized flag: --model in command opencode"
+before it drew anything. The flag is gone; `OPENCODE_CONFIG_CONTENT` already
+named the model as `model: "hello-active/<model>"`, which is how OpenCode is
+meant to be told, and `opencode debug config` confirms it reads that variable.
+
+Removing the flag alone would have replaced one failure with a worse one. The
+root command attaches to **one background service shared by every pane**, and
+that service keeps whichever `OPENCODE_CONFIG_CONTENT` started it. Measured on
+v2.2.5: with a service already running on one config, a second process carrying
+a different one still reported the first's model, and the same call with
+`--standalone` reported its own. Everything that makes a pane this chat's lives
+in that variable — the model, the instructions file, and the `hello` MCP server
+with this conversation's bridge token — so a shared service would hand a worker
+in one chat another chat's connection. Hello now launches
+`opencode --standalone --auto`.
+
+**Aider is handed its folder, because nothing else ever reaches it (T209).** A
+run on 20.11 opened Aider in a task folder holding `gps_tracking_3months.xlsx`
+and `prompt.doc`, and it answered that it had no files — 620 tokens sent, not
+one file name among them. Three facts in the installed 0.86.2 explain it, and
+together they decide the design. Aider takes no MCP server, so the connection
+every other CLI gets has no channel here. It has no shell either, in Hello:
+`io.py` answers `"n"` when `self.yes is True` and the question required an
+explicit one, and running a shell command is asked exactly that way, so the
+`--yes-always` that makes every pane never-ask is what takes Aider's shell
+away. And it cannot fetch a file by naming one, because
+`get_addable_relative_files` offers only what git tracks — a task folder tracks
+nothing, and Aider had just created the empty repository itself.
+
+So the argv is the whole channel, and `aider-folder.ts` fills it before the PTY
+starts. It reads the top of the launch folder through the same `WorkspaceFiles`
+the Files pane uses — inside the folder, links not followed, credential files
+excluded — and hands back three things: a guide, the text files, and the
+documents. The guide goes in as `--read`: it names the folder, says there is no
+shell and no connection so the model stops writing commands that will never
+run and stops hunting the disk for task files, and lists every entry with its
+size and whether it is in the chat. The folder's own UTF-8 text files go in as
+`--file`, which Aider edits in place — but only where `git ls-files` finds
+nothing, because in a repository Aider is not blind and its own map already
+covers them; the test for that is what git tracks, never whether `.git` is
+there, since Aider makes an empty one itself. A Word, RTF or ODT document goes
+through the same `textutil` the Files pane uses (T206) and in as `--read`,
+because what Hello writes is a copy and an edit to a copy reaches no original.
+Everything is bounded, since Aider sends its whole chat with every request:
+32 KB a file, 64 KB in all, twelve files, 200 entries named, and the budget is
+asked before a read as well as after, so a full chat never spends fifteen
+seconds of textutil on a document it will leave out. What does not fit is named
+in the guide instead, which is the point — a file Aider is told about and
+cannot open is one it can say it cannot open, rather than one it invents. There
+is no `--message` and no `--load`: this is context, never a task to start.
+
+On the folder that started this, Hello hands over 1,459 bytes of guide and
+`prompt.doc` as 2,141 characters of read-only text, names the 2.1 MB
+spreadsheet it cannot open, and passes no `--file` at all, because there is no
+text file there (a probe, 20.11). That directory is the one private home Hello
+fills itself rather than the client, and it holds the human's own words, so
+unlike the CLI homes that keep their own transcripts it is removed when the
+session ends — not before, since Aider re-reads its `--read` files with every
+message. A crash ends no session, so the next start sweeps whatever is left of
+an `aider-*` home, and only those.
 
 **The Python Hello keeps is named in the snapshot (T193).** The Mac's own
 `python3` need not have openpyxl — on the owner's it is Homebrew 3.15, which
@@ -498,13 +640,40 @@ task success. No thinking content is invented.
 
 The configured starting limits are **32,768 context / 4,096 output tokens** and
 must match the server. Compatibility is explicit: `auto`, `openai`, or
-`qwen-chat-template`. Pi owns retries and automatic compaction against the
-configured context window minus `reserve = max(16384, output + 4096)` tokens.
-The defaults trigger above 16,384 estimated context tokens (50% in this profile).
-Recent retained context is `min(20000, floor(context / 4), floor((context - reserve) / 2))`.
-Configuration must leave enough history beyond that reserve. This is not a universal compaction percentage, a
-measured server capability, a second Hello compactor, or a guarantee of correct
-answers. Same-model/same-prompt validation is still required.
+`qwen-chat-template`. Pi owns retries and automatic compaction, and
+`contextBudget` in `src/shared/context-budget.ts` is the one arithmetic that
+decides what it is told: the scaled window, the output budget, the reserve,
+and how much a summary keeps. The launch writes it into Pi's settings and the
+meter under the composer draws it, because two copies of this drift and the
+person reads the one that is wrong.
+
+Pi compacts when `tokens > window - reserveTokens`, counting with the last
+assistant reply's provider-reported usage plus a characters/3.5 estimate of
+everything after it (`estimateContextTokens`) — mostly measured, with the
+newest tool results guessed. The reserve is
+`max(16384, maxTokens + 4096, floor(window × 0.45))`; below a 36,409 window the
+flat 16,384 binds, above it the proportion does, and it is there because what
+Pi has not counted yet arrives all at once — a page it reads is twelve
+thousand tokens, and the check happens before that result exists.
+`contextScale` catches a model where even the anchored count ran low. This is
+not a universal compaction percentage, a measured server capability, a second
+Hello compactor, or a guarantee of correct answers. Same-model/same-prompt
+validation is still required.
+
+**An output budget is a ceiling, not a floor (T210).** Saved as 32,768 on a
+65,536 window it made the reserve 36,864 — more than half the window — so a
+chat summarised itself at 28,672 while the meter, dividing by 65,536, read
+37%: two compactions inside one reply, 2m14s apart, and the person asked what
+threshold that was meant to be (user, 24.11). The declared output budget is
+now capped at a quarter of the window, so it never decides the reserve again
+(above 20,480 the proportional term always wins), and the setting itself is
+still never rewritten — the same bargain as nativ#684, where a learned scale
+shrank the window and a chat that answers shorter beat one that refuses to
+start. What a summary keeps went from half of what is usable to a third,
+because the summary, the system prompt and the tool schemas sit on top of it,
+uncounted: 10.8k of the 25,160 that first compaction left. On that window the
+usable context goes 28,672 → 36,045 and the room left after a summary goes
+about 3.5k → about 16k.
 The first profile requires at least 20,480 actual server context tokens;
 the output cap can raise this minimum. Smaller profiles need separate tuning.
 
@@ -939,7 +1108,13 @@ What the audits asked for and the code lacked, done in Hello's own terms:
 - **Summarise now.** From amber, the context meter offers Pi's own compaction
   (`ChatService.compact`, RPC `compact`), on the chat's warm Pi or one started
   for it; nothing is sent into the chat meanwhile, and the meter then reads what
-  the summary freed until the next reply reads the window again.
+  the summary freed until the next reply reads the window again. The meter's
+  denominator is `contextBudget().usable`, what the conversation may fill, not
+  the window the model holds — amber at three quarters of that and red at nine
+  tenths mean the summary is actually near. It is close, not exact: the bar is
+  the provider's count of the last finished call, while Pi adds that reply's
+  own output and estimates the tool results since, so it can cross the line
+  first. Hovering names both numbers.
 - **Keys.** The app menu holds ⌘N (New Chat) and ⌘B (Toggle Sidebar), so they
   work with a page or a terminal focused; a page that takes ⌘B for itself (bold
   in an editor) keeps it. In the transcript, ↑/↓/Home/End move between messages
@@ -1214,6 +1389,16 @@ restart, the chat shown is given its CLIs again and they continue: Pi by the sam
 id, Claude Code by `--resume` once it has written the conversation. Other CLIs
 come back in the same place with a new conversation.
 
+A terminal tab can hold several terminals side by side (Split right / Split
+down: the tab's menu or the pane's header buttons). The arrangement is a binary
+tree in the workspace preferences (`terminalSplits`, keyed by the tab's own
+terminal; `workspace/terminal-splits.ts`) and goes wherever its tab goes, Tools
+or the chat pane. A split adds a plain shell, never a CLI. Each terminal keeps
+its one node and is moved into its place, never built again. A pane's X ends
+that terminal; closing the tab's own terminal hands the tab to the next one in
+it; the tab's X ends them all, confirmed once. Only the tab's own CLI comes back
+after a restart; the terminals split beside it do not.
+
 Settings' Reasoning reaches a local Qwen server from the CLIs on Hello's
 connection as it does from the chat (`chat/qwen-thinking.ts`: chosen in
 Settings, or on Auto a Qwen model on the person's own server): Qwen Code by
@@ -1258,8 +1443,9 @@ Empty notebooks remain valid. Six locally inspected loaders are used:
 
 Codex's session override may replace an independently configured
 `developer_instructions` value; project AGENTS loading and global files are not
-changed. The installed Aider version has no verified passive loader and gets
-no connection claim or automatically submitted message.
+changed. Aider takes none of this: it has no loader and no shell to reach a
+connection with, so it is given its launch folder in the argv instead (T209) —
+still no connection claim and no automatically submitted message.
 
 Existing PTYs keep their launch folder; selecting another chat folder does not
 move or restart them. The worker context row shows the difference and offers a
@@ -1277,6 +1463,46 @@ derived read-only snapshots, not a write-back channel. Their automatic refresh
 does not invalidate a committed database change; explicit path/export requests
 still report export failures. This is shared notebook access, not a scheduler,
 worker orchestration protocol or automatic task-completion detector.
+
+## Unclutter — the browser pane's ad and slop blocker (26.11)
+
+The person's own cleaner for web pages (user, 26.11, after kitze/unclutter):
+ads, cookie/consent banners, upsells, newsletter and social nags are hidden by
+rules learned once per *page type* of a site, classified by OpenJev on this Mac.
+
+- **Page side** ([`unclutter/page.ts`](../src/main/unclutter/page.ts)): one
+  self-contained function main injects with `executeJavaScriptInIsolatedWorld`
+  into world 1209 (page modes are 1207, agent input 1208). It computes the page type (origin,
+  page kind and a hash of the route family and main shell), lists up to 60
+  candidate blocks with their text redacted, and hides the blocks a rule names
+  with a scoped attribute and inline `display:none !important`, reversibly. A
+  `MutationObserver` re-applies the rules it holds; an address that is another
+  page type drops them until main sends that type's own.
+- **Main** ([`unclutter/service.ts`](../src/main/unclutter/service.ts)) observes
+  the browser's pages and, a moment after each change, installs the cleaner and
+  hands it the saved rules (none when Unclutter or the type is off). Analysing
+  lists the page's candidates and asks OpenJev in batches of six; each request's
+  state holds only that batch's elements, because OpenJev's MLX helper answers
+  one question at a time with no prefix cache and re-reads the whole state for
+  every question. One analysis runs at a time, app-wide. Rules need OpenJev's
+  probability and confidence both at 0.9 or more; an incomplete answer keeps the
+  old rules. Auto (off by default) analyses a page type of the tab on screen the
+  first time it is seen in a run.
+- **OpenJev** ([`unclutter/openjev.ts`](../src/main/unclutter/openjev.ts)): a
+  helper already answering `/v1/version` (on 3000 or the port Hello saved) is
+  used as it is and never stopped. Otherwise Hello starts one from the helper
+  environment in `openjev/` of its data folder (its `mlx` and `api` folders, or
+  links to them) over the `openjev-MLX` folder (oMLX's model
+  folders, then `~/Models/MLX`), with the model card's calibration, on 127.0.0.1
+  and a free port from 3000, logging to `openjev/helper.log` in Hello's data
+  folder, and stops it with the app or from the menu. Nothing is installed.
+- **Storage**: `unclutter_profiles` (schema 18) keeps one row per page type — the
+  person's browsing, so app-wide rather than per chat; the switches are the
+  `unclutter` settings row.
+- **Window**: an Eraser button on the browser toolbar counts the blocks hidden
+  and opens the menu (analyse, this type on/off, forget, Unclutter on/off, Auto,
+  OpenJev's state and Stop). Generated documents, previewed files and local
+  servers are never cleaned.
 
 ## DSH hosted launch
 

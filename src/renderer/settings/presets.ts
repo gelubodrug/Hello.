@@ -97,6 +97,14 @@ export const ENDPOINT_PRESETS: readonly EndpointPreset[] = [
     exampleModel: 'qwen2.5-7b-instruct',
   },
   {
+    id: 'omlx',
+    name: 'oMLX',
+    baseUrl: 'http://localhost:8000/v1',
+    requiresApiKey: false,
+    hint: 'Runs on this Mac from the oMLX menu bar app. If you set an API key in its Settings, add the same key here.',
+    exampleModel: 'mlx-community/Qwen3-8B-4bit',
+  },
+  {
     id: 'llamacpp',
     name: 'llama.cpp server',
     baseUrl: 'http://localhost:8080/v1',

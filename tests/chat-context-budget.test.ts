@@ -30,49 +30,55 @@ async function launch(contextWindow: number, maxOutputTokens: number, contextSca
   return { ...settingsFile, told: models.providers.hello.models[0].contextWindow, maxTokens: models.providers.hello.models[0].maxTokens, settings };
 }
 
+// User, 26.11: the context in the chat was "calculat aleatoriu… față de pi nativ
+// cli; aș vrea… să fie 1:1 cu cli-ul". Hello held 45% of the window free and
+// scaled the window down after an overflow; now Pi is handed its own defaults.
 describe('how much room Pi is told to keep', () => {
-  it('keeps a large window compacting well before the provider sees it', async () => {
-    // Pi decides when to compact from its own characters/4 estimate, which read
-    // 28.3k for 41,349 real tokens in this app's traffic. A flat 16k reserve on
-    // a 512,000 window means it compacts at an estimated 475k — past 700k in
-    // fact, which is where the turn actually died.
-    const big = await launch(512_000, 32_768);
-    expect(big.compaction.reserveTokens).toBe(230_400);
-    expect(512_000 - big.compaction.reserveTokens).toBeLessThan(300_000);
+  it('is Pi’s own: the published window, its 16,384 reserve and its 20,000 kept, on any window with room', async () => {
+    for (const window of [131_072, 512_000, 1_048_576]) {
+      const launched = await launch(window, 32_768);
+      expect(launched.told).toBe(window);
+      expect(launched.compaction).toMatchObject({ reserveTokens: 16_384, keepRecentTokens: 20_000 });
+    }
   });
 
-  it('hands the runtime a smaller window once the provider says the estimate ran low', async () => {
-    // The provider counts; the runtime guesses. When a finished turn reported
-    // more input than the model holds, the guess was low and the runtime never
-    // compacted — so it is told a smaller number rather than argued with.
-    const scaled = await launch(512_000, 32_768, 0.7);
-    expect(scaled.told).toBe(358_400);
-    expect(scaled.compaction.reserveTokens).toBe(161_280);
-    // Never below the profile's own minimum, however often it overflows.
-    const floored = await launch(32_768, 4_096, 0.2);
-    expect(floored.told).toBe(20_480);
+  it('no longer shrinks the window by what an older Hello learned', async () => {
+    expect((await launch(512_000, 32_768, 0.7)).told).toBe(512_000);
+    expect((await launch(32_768, 4_096, 0.2)).told).toBe(32_768);
   });
 
-  it('leaves a small window exactly as it was', async () => {
-    // A server loaded with 32k has no estimator headroom to give away.
+  it('leaves a small window the same reserve, and keeps less than 20,000 only where 20,000 would not fit', async () => {
     const small = await launch(32_768, 4_096);
     expect(small.compaction.reserveTokens).toBe(16_384);
+    // 16,384 usable: a summary that kept 20,000 would be over the line at once.
+    expect(small.compaction.keepRecentTokens).toBe(5_461);
   });
 
-  it('answers shorter rather than refusing to start once a learned scale shrinks the window', async () => {
-    // Saved as 32,768 / 16,384 — a pair Settings accepts — then one overflow
-    // teaches a scale of 0.7: 22,937 tokens left no room for that output and
-    // every message in the chat failed to start (nativ#684).
-    const shrunk = await launch(32_768, 16_384, 0.7);
-    expect(shrunk.told).toBe(22_937);
-    expect(shrunk.maxTokens).toBe(14_745);
-    expect(shrunk.maxTokens + 4096).toBeLessThanOrEqual(shrunk.compaction.reserveTokens);
-    expect(shrunk.told - shrunk.compaction.reserveTokens).toBeGreaterThanOrEqual(4096);
-    expect(shrunk.compaction.keepRecentTokens).toBeGreaterThanOrEqual(1);
-    // Only this launch is shortened: the person's setting stays as saved.
-    expect(shrunk.settings.maxOutputTokens).toBe(16_384);
-    // A pair that still fits keeps its output budget whole.
-    expect((await launch(512_000, 32_768, 0.7)).maxTokens).toBe(32_768);
+  /**
+   * An output budget is a ceiling for one answer, not a floor held free for
+   * every turn (24.11): saved as 32,768 on a 65,536 window it is a quarter of
+   * the window for this launch, and the reserve stays Pi's.
+   */
+  it('does not let an output budget hold back the window', async () => {
+    const theirs = await launch(65_536, 32_768);
+    expect(theirs.maxTokens).toBe(16_384);
+    expect(theirs.compaction.reserveTokens).toBe(16_384);
+    expect(theirs.told - theirs.compaction.reserveTokens).toBe(49_152);
+    expect(theirs.compaction.keepRecentTokens).toBe(16_384);
+    expect(theirs.compaction.keepRecentTokens).toBeLessThan((theirs.told - theirs.compaction.reserveTokens) / 2);
+    // The person's setting is never rewritten; only this launch is shortened.
+    expect(theirs.settings.maxOutputTokens).toBe(32_768);
+  });
+
+  it('answers shorter rather than refusing to start on a small window', async () => {
+    // Saved as 32,768 / 16,384 — a pair Settings accepts (nativ#684).
+    const small = await launch(32_768, 16_384);
+    expect(small.told).toBe(32_768);
+    expect(small.maxTokens).toBe(8_192);
+    expect(small.told - small.compaction.reserveTokens).toBeGreaterThanOrEqual(4096);
+    expect(small.settings.maxOutputTokens).toBe(16_384);
+    // A pair that fits keeps its output budget whole.
+    expect((await launch(512_000, 32_768)).maxTokens).toBe(32_768);
   });
 });
 

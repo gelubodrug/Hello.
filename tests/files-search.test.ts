@@ -116,3 +116,44 @@ describe('searching the contents of a chat folder', () => {
     await expect(new WorkspaceFiles(() => null).searchContents('chat', 'r', 'needle')).rejects.toThrow(/Choose a folder/);
   });
 });
+
+/**
+ * A Word or RTF document in the Files pane. Hello carries no library for them;
+ * macOS ships textutil, as poppler does the same job for PDFs. The test uses
+ * the real one, like the PDF and openpyxl tests do.
+ */
+describe('reading a document the Mac converts', () => {
+  const rtf = (text: string) => `{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0 Helvetica;}}\n\\f0\\fs24 ${text}\\par\n}`;
+
+  it.skipIf(process.platform !== 'darwin')('hands over the words, marked as converted', async () => {
+    writeFileSync(join(root, 'brief.rtf'), rtf('Raport flota \\u537?i ma\\u537?ini'));
+    const read = await files().read('chat', 'brief.rtf');
+    expect(read.converted).toBe(true);
+    expect(read.reason).toBeUndefined();
+    expect(read.content).toContain('Raport flota');
+    expect(read.content).not.toContain('rtf1');
+  });
+
+  // textutil is forgiving: a .doc that is really plain text comes back as its text.
+  it.skipIf(process.platform !== 'darwin')('hands over a .doc that is really plain text', async () => {
+    writeFileSync(join(root, 'plain.doc'), 'not a document at all');
+    const read = await files().read('chat', 'plain.doc');
+    expect(read.content).toBe('not a document at all');
+    expect(read.converted).toBe(true);
+  });
+
+  // It is forgiving with bytes too, so the viewer refuses what is not text.
+  it.skipIf(process.platform !== 'darwin')('refuses a document that converts to bytes', async () => {
+    writeFileSync(join(root, 'binary.doc'), Buffer.from([0x61, 0x62, 0x00, 0x01, 0x02, 0x63]));
+    const read = await files().read('chat', 'binary.doc');
+    expect(read.content).toBe(null);
+    expect(read.reason).toMatch(/could not be converted/);
+  });
+
+  it('leaves plain text alone', async () => {
+    writeFileSync(join(root, 'plain.txt'), 'just words');
+    const read = await files().read('chat', 'plain.txt');
+    expect(read.content).toBe('just words');
+    expect(read.converted).toBeUndefined();
+  });
+});

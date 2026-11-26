@@ -38,15 +38,19 @@ const terminal = (id: string, title: string, kind: TerminalSession['kind']): Ter
   ({ id, conversationId: 'c1', title, kind, cwd: '/tmp', status: 'running', ...(kind === 'worker' ? { workerId: 'kimi' as const } : {}) });
 const terminals = [terminal('kimi', 'Kimi Code', 'worker'), terminal('shell', 'Terminal', 'terminal')];
 const onCloseTool = vi.fn();
+const onLaunch = vi.fn();
+const onSplit = vi.fn();
+let setUI: (patch: WorkspaceUpdate) => void;
 let ui: WorkspacePrefs;
 
 function Harness() {
   const [prefs, setPrefs] = useState<WorkspacePrefs>({ ...defaultWorkspacePrefs(), toolsOpen: true, toolId: 'kimi', focus: 'tools' });
   useEffect(() => { ui = prefs; });
   const onUI = (patch: WorkspaceUpdate) => setPrefs(current => ({ ...current, ...(typeof patch === 'function' ? patch(current) : patch) }));
+  setUI = onUI;
   return createElement(Workspace, {
     active: true, conversation, messages: [], ui: prefs, settings: {} as AppSettings, workers: [], terminals, browsers: [],
-    sidebarVisible: true, compact: false, onUI, onSettingsChange: vi.fn(), onConversationChange: vi.fn(), onLaunch: vi.fn(),
+    sidebarVisible: true, compact: false, onUI, onSettingsChange: vi.fn(), onConversationChange: vi.fn(), onLaunch, onSplit,
     onCloseTool, onBrowserChange: vi.fn(), quote: null, onQuote: vi.fn(), onQuoteConsumed: vi.fn(), reportError: vi.fn(),
   });
 }
@@ -68,6 +72,8 @@ beforeEach(async () => {
   panes.mounts = 0;
   panes.shown.clear();
   onCloseTool.mockClear();
+  onLaunch.mockClear();
+  onSplit.mockClear();
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -119,6 +125,43 @@ describe('a CLI as a chat tab', () => {
     await rightClick(pill.parentElement!);
     await click(menuItem('Close tab')!);
     expect(onCloseTool).toHaveBeenCalledWith(terminals[1]);
+    // Its own X closes it too, and does not send it back to Tools.
+    onCloseTool.mockClear();
+    await click(pill.parentElement!.querySelector('.chat-page-close')!);
+    expect(onCloseTool).toHaveBeenCalledWith(terminals[1]);
+    expect(host.querySelector('[data-tool-id="shell"]')).toBeNull();
+  });
+
+  // User, 26.11: with more tabs than the strip shows, the rest could not be
+  // reached ("o listă verticală under a '...'"). The strip has no scrollbar.
+  it('lists every chat tab under "…" while the strip holds more than it shows', async () => {
+    await rightClick(host.querySelector('[data-tool-id="kimi"]')!);
+    await click(menuItem('Set as chat tab')!);
+    const all = () => host.querySelector<HTMLButtonElement>('.chat-card button[aria-label="All chat tabs"]');
+    // Everything fits: no button.
+    expect(all()).toBeNull();
+    const strip = host.querySelector<HTMLElement>('.chat-card [role="tablist"]')!;
+    Object.defineProperty(strip, 'scrollWidth', { value: 900, configurable: true });
+    Object.defineProperty(strip, 'clientWidth', { value: 300, configurable: true });
+    await click(host.querySelector('.chat-card [role="tab"][aria-label="Chat"]')!);
+    expect(all()).not.toBeNull();
+    await click(all()!);
+    const row = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]')].find(item => item.textContent?.includes(label))!;
+    // The tab on screen is the checked one; picking another shows it.
+    expect(row('Chat').getAttribute('aria-checked')).toBe('true');
+    expect(row('Kimi Code').getAttribute('aria-checked')).toBe('false');
+    await click(row('Kimi Code'));
+    expect(ui.chatTerminal).toBe('kimi');
+    expect(panes.shown.get('kimi')).toEqual({ visible: true, placement: 'chat' });
+  });
+
+  // The chat's + offers what runs in a chat tab, and opens it there (user, 26.11).
+  it('starts a terminal from the chat pane as a chat tab', async () => {
+    await click(host.querySelector('.chat-card [aria-label="Add chat tab"]')!);
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.map(item => item.textContent?.trim())).toEqual(['Terminal', 'CLI worker…']);
+    await click(items[0]);
+    expect(onLaunch).toHaveBeenCalledWith('terminal', undefined, 'chat');
   });
 });
 
@@ -141,5 +184,55 @@ describe('the Workbook page of a chat', () => {
     await act(async () => { root.render(createElement(Harness, { key: 'on' })); });
     expect(tabs()).not.toContain('Workbook');
     expect(host.querySelector('.tab-pill[data-active="true"] .chat-page-tab')?.getAttribute('aria-label')).toBe('Chat');
+  });
+});
+
+// Terminals side by side in one tab (user, 26.11): the same terminals, never built again.
+describe('a split terminal tab', () => {
+  const split = async () => {
+    // Alone in its tab, a terminal has its own bar with its split commands, and no X but the tab's.
+    expect(host.querySelector('[data-split-pane="kimi"] [aria-label="Close Kimi Code"]')).toBeNull();
+    await click(host.querySelector('[data-split-pane="kimi"] [aria-label="Split right"]')!);
+    expect(onSplit).toHaveBeenCalledWith('kimi', 'kimi', 'row');
+    // What App does with it: the new terminal joins the tab's tree.
+    await act(async () => { setUI({ terminalSplits: { kimi: { dir: 'row', ratio: 0.5, a: 'kimi', b: 'shell' } } }); });
+  };
+
+  it('shows both terminals in the one tab, each with its own X', async () => {
+    await split();
+    expect(host.querySelector('[data-tool-id="shell"]')).toBeNull();
+    expect(stub('kimi').closest('[data-split-pane]')?.getAttribute('data-split-pane')).toBe('kimi');
+    expect(stub('shell').closest('[data-split-pane]')?.getAttribute('data-split-pane')).toBe('shell');
+    expect(stub('shell').closest('.tool-host')?.getAttribute('data-tool-host')).toBe('kimi');
+    expect(panes.shown.get('kimi')?.visible).toBe(true);
+    expect(panes.shown.get('shell')?.visible).toBe(true);
+    expect(panes.mounts).toBe(2);
+
+    // A pane's own button splits that pane; the tab's menu splits the one clicked in last.
+    await click(host.querySelector('[data-split-pane="shell"] [aria-label="Split down"]')!);
+    expect(onSplit).toHaveBeenLastCalledWith('kimi', 'shell', 'column');
+    await act(async () => { stub('kimi').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })); });
+    await rightClick(host.querySelector('[data-tool-id="kimi"]')!);
+    await click(menuItem('Split down')!);
+    expect(onSplit).toHaveBeenLastCalledWith('kimi', 'kimi', 'column');
+
+    await click(host.querySelector('[data-split-pane="shell"] [aria-label="Close Terminal"]')!);
+    expect(onCloseTool).toHaveBeenLastCalledWith(terminals[1]);
+    await click(host.querySelector('[data-tool-id="kimi"] .pill-close')!);
+    expect(onCloseTool).toHaveBeenLastCalledWith(terminals[0], [terminals[1]]);
+  });
+
+  it('goes into the chat pane whole, and comes apart without a new terminal', async () => {
+    await split();
+    await rightClick(host.querySelector('[data-tool-id="kimi"]')!);
+    await click(menuItem('Set as chat tab')!);
+    expect(stub('kimi').closest('.chat-page')?.getAttribute('data-tool-host')).toBe('kimi');
+    expect(stub('shell').closest('.chat-page')?.getAttribute('data-tool-host')).toBe('kimi');
+    expect(panes.shown.get('shell')).toEqual({ visible: true, placement: 'chat' });
+
+    await act(async () => { setUI({ terminalSplits: {} }); });
+    expect(stub('kimi').closest('.chat-page')?.getAttribute('data-tool-host')).toBe('kimi');
+    expect(stub('shell').closest('.tool-host')?.getAttribute('data-tool-host')).toBe('shell');
+    expect(panes.mounts).toBe(2);
   });
 });

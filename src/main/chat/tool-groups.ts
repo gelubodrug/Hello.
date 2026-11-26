@@ -58,6 +58,10 @@ export function browserWork(text: string): boolean {
   if (/\bhttps?:\/\/[^\s<>"']+|\bwww\.[a-z0-9-]+\.[a-z]{2,}/i.test(text)) return true;
   // A name with a web ending, which is not a file's: logo.ai and notes.md are files, claude.ai/chat is not checked further.
   if (/(?<![\p{L}\p{N}_@.\/-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|ro|org|net|io|dev|eu|gov|edu|info|co\.uk)(?![\p{L}\p{N}_-])/iu.test(text)) return true;
+  // A site by its bare name, or the person's own account on one: read where they are signed in (user, 26.11:
+  // "deschide reddit și vezi dacă am vreun comment nou, se loghează automat" went to a web search).
+  if (/(?<![\p{L}\p{N}_])(?:reddit|gmail|youtube|facebook|instagram|linkedin|github|twitter|whatsapp|outlook)(?![\p{L}\p{N}_])/iu.test(text)) return true;
+  if (/(?<![\p{L}\p{N}_])(?:logh?e[aă]z[aă]|logat|logare|log(?:ged)?[\s-]?in|sign(?:ed)?[\s-]?in|autentificat|contul\s+meu|my\s+account)(?![\p{L}\p{N}_])/iu.test(text)) return true;
   return /(?<![\p{L}\p{N}_])(?:browser(?:-?ul|-?ului)?|tab(?:-?ul|-?ului|-?uri|-?urile|s)?|site(?:-?ul|-?ului|-?uri|-?urile|s)?|web\s?(?:page|site)s?|pagin[aăi]\s+web|link(?:-?ul|-?ului|-?uri|-?urile|s)?|html)(?![\p{L}\p{N}_])/iu.test(text);
 }
 

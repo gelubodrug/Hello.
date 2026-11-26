@@ -1,16 +1,39 @@
+import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ContentMatch, ContentSearch, FileDocument, FileEntry, FileListing } from '../../shared/files';
 import { foldForSearch, originalSearchRange } from '../../shared/search-text';
 
 const MAX_ENTRIES = 10_000;
 const MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * Document formats the Mac itself reads. Hello carries no library for them;
+ * macOS ships textutil, as it ships nothing for PDFs and poppler does that
+ * job. The person sees the words; the file is never written to.
+ */
+const DOCUMENTS = new Set(['.doc', '.docx', '.rtf', '.odt', '.wordml']);
+/** A document converted to text: bigger than this and it is the default app's job. */
+const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+const MAX_DOCUMENT_TEXT = 4 * 1024 * 1024;
 const SEARCH_SKIP = new Set(['.git', 'node_modules', '.next', '.venv', 'venv', 'dist', 'out', 'build', 'coverage']);
 /** How far a search of the contents goes (audit A3b): starting limits, not measurements. */
 export const CONTENT_SEARCH_LIMITS = { results: 200, entries: MAX_ENTRIES, depth: 24, bytes: 20 * 1024 * 1024, ms: 4000, fileBytes: MAX_BYTES, fileLines: 20_000 } as const;
 /** A line longer than this is shown as a piece around its match. */
 const SNIPPET = 160;
+/**
+ * Credential files no automatic reader touches: the chat's file tools exclude
+ * them, and so does what Hello hands a CLI at launch (T209). Lives here, with
+ * the reader that takes it, so neither side pulls the other's dependencies in.
+ */
+export function secretPath(file: string): boolean {
+  return (
+    file.split(sep).some(part => /^\.env(?:\.|$)/i.test(part) && !/\.example$/i.test(part)) ||
+    /(?:^|\/)(?:id_rsa|id_ed25519|credentials(?:\.json)?|secrets(?:\.json)?)$/i.test(file) ||
+    /\.(?:pem|p12|pfx|key)$/i.test(file)
+  );
+}
+
 const inside = (root: string, target: string) => { const path = relative(root, target); return !path || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)); };
 const portable = (path: string) => path.split(sep).join('/');
 
@@ -190,6 +213,7 @@ export class WorkspaceFiles {
       const stat = await handle.stat();
       if (!stat.isFile()) throw new Error('Select a regular file to preview.');
       const document: FileDocument = { path: target.path, absolutePath: target.absolute, name: basename(target.absolute), size: stat.size, modifiedAt: stat.mtimeMs, content: null };
+      if (DOCUMENTS.has(extname(target.absolute).toLowerCase())) return documentText(document, target.absolute, stat.size);
       if (stat.size > MAX_BYTES) return { ...document, reason: 'This file is larger than 2 MB. Open it in its default app or show it in Finder.' };
       // Bounded even if another process grows the file after stat.
       const buffer = Buffer.alloc(MAX_BYTES + 1);
@@ -212,6 +236,32 @@ export class WorkspaceFiles {
       return document;
     } finally { await handle.close(); }
   }
+}
+
+/**
+ * A Word, RTF or ODT document as text, through the Mac's own textutil: no
+ * library in Hello, and what macOS already reads, Hello shows. The path is
+ * passed as an argument, never through a shell, and the file is only read.
+ * What comes back is text alone — no formatting, no images, no tables — and
+ * the pane says so rather than letting it pass for the document.
+ */
+async function documentText(document: FileDocument, absolute: string, size: number): Promise<FileDocument> {
+  if (process.platform !== 'darwin')
+    return { ...document, reason: 'Word and RTF documents are converted by macOS’s own textutil, which this computer does not have. Open it in its default app.' };
+  if (size > MAX_DOCUMENT_BYTES)
+    return { ...document, reason: 'This document is larger than the 20 MB the viewer converts. Open it in its default app or show it in Finder.' };
+  const text = await new Promise<string | null>(resolve => {
+    execFile('/usr/bin/textutil', ['-convert', 'txt', '-stdout', absolute],
+      { timeout: 15_000, maxBuffer: MAX_DOCUMENT_TEXT, encoding: 'utf8', windowsHide: true },
+      (error, stdout) => resolve(error && !stdout ? null : stdout));
+  }).catch(() => null);
+  // textutil hands back whatever it cannot parse, bytes and all: a file holding NUL came
+  // through as "abc\u0000\u0001\u0002def" (a probe, 20.11). The viewer shows text or nothing.
+  if (text === null || text.includes('\0'))
+    return { ...document, reason: 'This document could not be converted to text. Open it in its default app or show it in Finder.' };
+  if (text.split('\n', 20_002).length > 20_000)
+    return { ...document, reason: 'This document converts to more than 20,000 lines. Open it in its default app to keep the viewer responsive.' };
+  return { ...document, content: text, converted: true };
 }
 
 /** A line, or the piece of it around the match, with the match's place in what is shown. */

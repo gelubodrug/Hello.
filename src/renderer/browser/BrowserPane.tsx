@@ -9,6 +9,7 @@ import { usePageMode } from './usePageMode';
 import { DesignComposer } from './design/DesignComposer';
 import { AnnotateBar } from './annotate/AnnotateBar';
 import { DownloadsMenu } from './DownloadsMenu';
+import { UnclutterMenu } from './UnclutterMenu';
 
 interface Props { tab: BrowserTab; visible: boolean; onTabChange(tab: BrowserTab): void; onQuote(text: string, extra?: ChatQuoteExtra): void; }
 const modes: {value:AgentControl;label:string;detail:string}[] = [
@@ -168,6 +169,7 @@ export function BrowserPane({tab,visible,onTabChange,onQuote}: Props): JSX.Eleme
         </div>
       </form>
       <PageModeSwitch tab={tab} mode={pageMode.mode} pending={pageMode.pending} available={pageMode.available} onToggle={kind=>void pageMode.toggle(kind)}/>
+      <UnclutterMenu tab={tab} onError={setError}/>
       <DownloadsMenu conversationId={tab.conversationId} onError={setError}/>
       <button className="browser-quote" title={tab.control==='off'?'Enable read access to add this page to chat':'Add page to chat'} aria-label="Add page to chat" disabled={quoting||tab.control==='off'||tab.url==='about:blank'} onClick={()=>void run(async()=>{setQuoting(true);try{const page=await api.browser.read(tab.id);onQuote(`Page: ${page.title}\nSource: ${page.url}\n\n${page.text}`);}finally{setQuoting(false);}})}><MessageSquarePlus size={16}/></button>
     </div>

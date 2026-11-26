@@ -3,7 +3,7 @@ import type { AnnotationShot } from './page-mode-format';
 /** A chat's notebook has three sections: Runbooks, Tasks and Plans (the steps plan_write keeps). */
 export type NotebookKind = 'runbook' | 'tasks' | 'plan';
 export type AgentControl = 'off' | 'read' | 'full';
-export type WorkerId = 'claude' | 'codex' | 'qwen' | 'kimi' | 'opencode' | 'pi' | 'aider';
+export type WorkerId = 'claude' | 'codex' | 'qwen' | 'kimi' | 'opencode' | 'pi' | 'saetta';
 export type ResourceKind = 'skill' | 'plugin' | 'mcp';
 /** ready = approved copy intact; modified = the approved files changed on disk; missing = removed. */
 export type ResourceState = 'ready' | 'modified' | 'missing';
@@ -79,7 +79,10 @@ export interface ModelChoice { id: string; contextWindow?: number; maxOutputToke
 /** One connection's models for the chat's picker: the one in use (unnamed until kept), a kept one, or a server running on this Mac. A connection that could not answer keeps its place with the reason. */
 export interface ConnectionModels { name: string; endpointUrl: string; active: boolean; models: ModelChoice[]; error?: string; }
 /** A model server found running on this Mac, named after what it is and the port it took. */
-export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[]; }
+export interface LocalServer { name: string; endpointUrl: string; models: ModelChoice[];
+  /** It answered its model list with an OpenAI-style authentication error: a
+   *  server Hello can use once it has the key (oMLX started with one). */
+  needsKey?: boolean; }
 /** A discovered voice server on this Mac: OpenAI-shaped speech or whisper.cpp. Discovery never takes ownership of the process. */
 export interface VoiceServer { name: string; baseUrl: string; kind: 'speech' | 'whisper.cpp'; }
 export interface McpServerStatus { id: string; name: string; connected: boolean; tools: string[]; error?: string | null;
@@ -326,10 +329,24 @@ export interface HelloAPI {
     /** Stops the chat's search of the contents, if one runs. */
     cancelSearch?(conversationId: string): Promise<void>;
   };
+  /** Unclutter: the person's ad and slop blocker for the browser pane (shared/unclutter.ts). Optional for an older preload. */
+  unclutter?: {
+    overview(tabId: string): Promise<import('./unclutter').UnclutterOverview>;
+    /** Learn this page type's rules with OpenJev on this Mac, then apply them. */
+    analyze(tabId: string): Promise<import('./unclutter').UnclutterTabState>;
+    setTypeEnabled(tabId: string, enabled: boolean): Promise<import('./unclutter').UnclutterTabState>;
+    forgetType(tabId: string): Promise<import('./unclutter').UnclutterTabState>;
+    setSwitches(switches: Partial<import('./unclutter').UnclutterSwitches>): Promise<import('./unclutter').UnclutterSwitches>;
+    /** Stops the OpenJev helper Hello started; one started elsewhere keeps running. */
+    stopOpenJev(): Promise<boolean>;
+    onChange(listener: (state: import('./unclutter').UnclutterTabState) => void): () => void;
+  };
   /** A chat's workbooks (shared/sheets.ts). Optional for an older preload. */
   sheets?: {
     list(conversationId: string): Promise<import('./sheets').SheetWorkbookInfo[]>;
     snapshot(conversationId: string, workbookId: string): Promise<import('./sheets').SheetSnapshot>;
+    /** A workbook file of the chat's folder as the grid draws it, without opening it in the chat. Optional for an older preload. */
+    preview?(conversationId: string, path: string): Promise<import('./sheets').SheetPreview>;
     create(conversationId: string, title: string): Promise<import('./sheets').SheetWorkbookInfo>;
     /** A native picker. A file of the chat's folder is worked on in place; any other is copied in. Null when cancelled. */
     open(conversationId: string): Promise<import('./sheets').SheetWorkbookInfo | null>;
@@ -353,6 +370,8 @@ export interface HelloAPI {
     delete(id: string): Promise<void>;
     /** The model starts fresh from now; messages, tabs, terminals, notes and the folder stay. */
     restart(id: string): Promise<Conversation>;
+    /** The last message sent, and what answered it, out of the chat and out of the model's memory; the messages that remain. Optional for an older preload. */
+    retract?(id: string): Promise<Message[]>;
     /** Messages of every chat that have these words, newest first, a few per chat. Optional for an older preload. */
     search?(query: string): Promise<MessageMatch[]>;
     /** The chat empty as new — messages, queue, attachments and, with notes, its Runbook and Tasks go; tabs, terminals, downloads and the folder stay. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PORT_LIMIT, detectLocalServers, parseListening, serverLabel } from '../src/main/chat/local-servers';
+import { ModelListingAuthError, PORT_LIMIT, detectLocalServers, parseListening, serverLabel } from '../src/main/chat/local-servers';
 
 // Exactly the shape `lsof -nP -iTCP -sTCP:LISTEN +c 0 -F pcn` printed on the
 // Mac this was written on: llama-server on 8081, Ollama on 11434, and the
@@ -85,5 +85,23 @@ describe('which ports are asked', () => {
     const ranked = candidates([...helpers, { pid: 9999, command: 'llama-server', port: 8081 }]);
     expect(ranked).toHaveLength(PORT_LIMIT);
     expect(ranked[0]).toEqual({ pid: 9999, command: 'llama-server', port: 8081 });
+  });
+
+  // oMLX started with an API key answered 401 on :8000 and Settings said
+  // nothing listened there (user, 26.11): a key-refusing model server is shown,
+  // named for what it is, and asks for its key.
+  it('keeps a server that refuses its model list for want of a key', async () => {
+    expect(serverLabel('omlx-server')).toEqual({ label: 'oMLX', known: true });
+    const servers = await detectLocalServers({
+      ports: async () => [
+        { pid: 1, command: 'omlx-server', port: 8000 },
+        { pid: 2, command: 'node', port: 3000 },
+      ],
+      list: async (endpointUrl: string) => {
+        if (endpointUrl.includes(':8000/')) throw new ModelListingAuthError('Model listing returned HTTP 401', 401);
+        throw new Error('Model listing returned HTTP 401: login');
+      },
+    });
+    expect(servers).toEqual([{ name: 'oMLX · 8000', endpointUrl: 'http://localhost:8000/v1', models: [], needsKey: true }]);
   });
 });

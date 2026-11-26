@@ -8,6 +8,7 @@ import { CodeBlock, Markdown } from '../chat/Markdown';
 import { ContextMenu, ErrorNote, IconButton, MenuButton, Truncated, errorText } from '../ui/primitives';
 import { FileTypeIcon } from './FileTypeIcon';
 import { ContentResults, contentNotice } from './ContentResults';
+import { WorkbookPreview } from '../sheets/WorkbookPreview';
 import { QUOTE_LIMIT, fileSelection, hasSelectionIn, selectionQuote, type FileSelection } from './selection';
 import { setInternalFileDrop } from '../drop';
 import { captureFileView, restoreFileView, type FileViewState } from './view-state';
@@ -218,6 +219,8 @@ export function FilesPane({ conversation, visible, request, onChooseFolder, onQu
     if (selected && !selected.isSelected) tree.current.select(selected, { focus: false });
   }, [document?.path, data]);
   const markdown = !!document && /\.(?:md|markdown|mdx)$/i.test(document.name);
+  // A workbook is drawn by the grid, not read as text — the file's own size says nothing about that.
+  const workbook = !!document && /\.xlsx$/i.test(document.name) && Boolean(api.sheets?.preview);
   const preview = markdown && mode === 'preview' && (document?.content?.length ?? 0) <= 200_000;
   // Whether words are selected in the viewer, for "Add selection to chat".
   useEffect(() => {
@@ -308,7 +311,7 @@ export function FilesPane({ conversation, visible, request, onChooseFolder, onQu
     <ErrorNote error={error} />
     {!conversation.folder ? <div className="files-empty"><FolderOpen size={28} /><h2>Files from this conversation</h2><p>Choose a working folder to browse documents and source code. Files stay on your computer.</p><button className="pill" onClick={onChooseFolder}>Choose folder</button></div>
       : <div className="files-body">
-        <div className="files-document" ref={viewport} aria-label="File contents" aria-busy={reading} tabIndex={0}
+        <div className="files-document" ref={viewport} aria-label="File contents" aria-busy={reading} tabIndex={0} data-grid={workbook || undefined}
           onContextMenu={event => {
             if (!document || document.content == null || reading) return;
             event.preventDefault();
@@ -317,11 +320,13 @@ export function FilesPane({ conversation, visible, request, onChooseFolder, onQu
             setMenu({ position: { x: event.clientX || bounds.left + 16, y: event.clientY || bounds.top + 16 }, selected: fileSelection(event.currentTarget, document, !preview), file: document });
           }}>
           {reading ? <div className="files-empty" role="status">Reading file…</div>
-            : document ? document.content == null ? <div className="files-empty"><File size={28} /><h2>{document.name}</h2><p>{document.reason}</p><button className="pill" onClick={() => void external()}>Open in default app</button></div>
-              : <>{markdown && document.content.length > 200_000 && <p className="files-notice">Large Markdown document — showing source to keep the viewer responsive.</p>}
+            : document ? workbook ? <WorkbookPreview conversationId={conversation.id} path={document.path} visible={visible} />
+              : document.content == null ? <div className="files-empty"><File size={28} /><h2>{document.name}</h2><p>{document.reason}</p><button className="pill" onClick={() => void external()}>Open in default app</button></div>
+              : <>{document.converted && <p className="files-notice">Converted to text by macOS. Formatting, images and tables are not shown — open it in its default app for the document itself.</p>}
+                {markdown && document.content.length > 200_000 && <p className="files-notice">Large Markdown document — showing source to keep the viewer responsive.</p>}
                 {preview ? <Markdown text={document.content} filePath={document.path} onOpenFile={target => { setQuery(''); void readFile(target); }} />
                   : <CodeBlock code={document.content} language={fileLanguage(document.name)} lineNumbers />}</>
-              : <div className="files-empty"><FileText size={28} /><h2>Choose a file</h2><p>Preview Markdown or read highlighted source. File links in chat open here too.</p></div>}
+              : <div className="files-empty"><FileText size={28} /><h2>Choose a file</h2><p>Preview Markdown, a workbook or a Word document, or read highlighted source. File links in chat open here too.</p></div>}
         </div>
         <aside className="files-tree" aria-label="Conversation files">
           <div className="files-root"><Folder size={16} /><Truncated title={conversation.folder}>{conversation.folder.replace(/\/$/, '').split('/').pop() || conversation.folder}</Truncated>

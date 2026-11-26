@@ -297,3 +297,58 @@ describe('workbooks', () => {
     expect((await readdir(join(root, 'data', 'sheets'))).filter(name => name !== 'scratch')).toEqual([]);
   });
 });
+
+/**
+ * Looking at a workbook file in the Files pane. The 17.11 measurement is why
+ * this opens nothing: an .xlsx the chat holds added 29,084 characters to every
+ * request, and clicking a file in a tree is not a request for that.
+ */
+describe('previewing a workbook file without opening it', () => {
+  const sample = async (name = 'book.xlsx') => {
+    const made = new ExcelJS.Workbook();
+    const sheet = made.addWorksheet('Data');
+    sheet.getCell('A1').value = 'name';
+    sheet.getCell('B1').value = 'count';
+    sheet.getCell('A2').value = 'first';
+    sheet.getCell('B2').value = 7;
+    sheet.getCell('B1').font = { bold: true };
+    sheet.getColumn(1).width = 18;
+    made.addWorksheet('Notes').getCell('A1').value = 'kept';
+    await made.xlsx.writeFile(join(folder, name));
+    return name;
+  };
+
+  it('draws every sheet of the file and adopts nothing', async () => {
+    const name = await sample();
+    const preview = await books.preview(chat, name);
+    expect(preview.grids.map(grid => grid.name)).toEqual(['Data', 'Notes']);
+    expect(preview.sheets).toEqual(['Data', 'Notes']);
+    expect(preview.grids[0].cells).toContainEqual([1, 1, { v: 'name' }]);
+    expect(preview.grids[0].cells).toContainEqual([2, 2, { v: 7 }]);
+    expect(preview.grids[0].cells).toContainEqual([1, 2, { v: 'count', bold: true }]);
+    expect(preview.grids[0].widths).toMatchObject({ 1: 18 });
+    expect(preview).toMatchObject({ source: 'file', path: name, dirty: false, revision: 0 });
+    // Nothing joined the chat, nothing was written, and the model was told nothing.
+    expect(await books.list(chat)).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('draws the same cells an open workbook would, and says once the chat holds it', async () => {
+    const name = await sample('same.xlsx');
+    const preview = await books.preview(chat, name);
+    expect(preview.openInChat).toBeUndefined();
+    const opened = await books.openFile(chat, name);
+    const snapshot = await books.snapshot(chat, opened.id);
+    expect(preview.grids).toEqual(snapshot.grids);
+    // Now the chat is working on this very file: the preview shows the file as saved, not that copy.
+    expect((await books.preview(chat, name)).openInChat).toBe(true);
+    expect((await books.preview('other-chat', name)).openInChat).toBeUndefined();
+  });
+
+  it('stays inside the chat’s folder and reads only an .xlsx', async () => {
+    await writeFile(join(folder, 'notes.txt'), 'hello');
+    await expect(books.preview(chat, '../escape.xlsx')).rejects.toThrow(/outside/);
+    await expect(books.preview(chat, 'notes.txt')).rejects.toThrow(/Only .xlsx workbooks/);
+    await expect(books.preview(chat, 'missing.xlsx')).rejects.toThrow();
+  });
+});

@@ -488,7 +488,9 @@ export class PiEventMapper {
     this.ensureActive().usage = usage;
     this.hasUsage = true;
     const prompt = promptOf(usage);
-    if (prompt > 0) { this.lastPrompt = prompt; this.peakPrompt = Math.max(this.peakPrompt, prompt); }
+    // What the model holds after this call, as Pi's own footer counts it
+    // (calculateContextTokens): the prompt and the answer it just wrote.
+    if (prompt > 0) { this.lastPrompt = prompt + usage.output; this.peakPrompt = Math.max(this.peakPrompt, prompt); }
   }
   private commitActiveUsage(): void {
     if (this.active?.usage) { this.committedUsage = addUsage(this.committedUsage, this.active.usage); this.active.usage = undefined; }

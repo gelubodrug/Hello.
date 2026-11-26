@@ -20,6 +20,9 @@ import { LocalPreviewServer } from './browser/local-preview';
 import { HtmlArtifacts } from './browser/html-artifacts';
 import { Workbooks } from './sheets/workbooks';
 import { registerSheetsIPC } from './sheets/ipc';
+import { OpenJev } from './unclutter/openjev';
+import { UnclutterService } from './unclutter/service';
+import { registerUnclutterIPC } from './unclutter/ipc';
 import { scopedPath } from './chat/tools';
 import { relative as relativePath } from 'node:path';
 import { realpath } from 'node:fs/promises';
@@ -198,6 +201,7 @@ else {
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params)||dshSurface.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>{if(!dshSurface.adoptGuest(guest))browser.adoptGuest(guest);});
     const pageModes=new PageModeController({pages:browser,dataDir,kinds:['design','annotate'],emit:event=>emit('hello:browser-mode',event)});
+    const unclutter=new UnclutterService({pages:browser,store,openjev:new OpenJev({dataDir,log:line=>console.warn(line)}),emit:state=>emit('hello:unclutter',state)});
     const previews=new LocalPreviewServer();
     const artifactPreviews=new LocalPreviewServer();
     const artifacts=new HtmlArtifacts(dataDir);
@@ -294,6 +298,7 @@ else {
     },()=>emit('hello:extensions-changed',{}),pageModes,voice);
     const unregisterPiEngine=registerPiEngineIPC(window,piEngine);
     const unregisterSheets=registerSheetsIPC(window,sheets,id=>store.getConversation(id).folder);
+    const unregisterUnclutter=registerUnclutterIPC(window,unclutter);
     // Newer Pi and dsh releases, asked of npm a moment after start and every few hours.
     const lookForUpdates=()=>{void piEngine.checkLatest().catch(()=>{});void dsh.checkLatest().catch(()=>{});};
     const firstUpdateLook=setTimeout(lookForUpdates,5_000);
@@ -320,6 +325,7 @@ else {
         {name:'chat',dispose:()=>chat.dispose()},
         {name:'terminals',dispose:()=>terminal.dispose()},
         {name:'page modes',dispose:()=>pageModes.dispose()},
+        {name:'unclutter',dispose:()=>{unregisterUnclutter();unclutter.dispose();}},
         {name:'browser',dispose:()=>browser.dispose()},
         {name:'previews',dispose:()=>previews.dispose()},
         {name:'artifact previews',dispose:()=>artifactPreviews.dispose()},

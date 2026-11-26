@@ -136,6 +136,7 @@ export function registerIPC(window: BrowserWindow, store: DataStore, chat: ChatS
   });
   handle('conversations.delete',async(id)=>{id=str(id);await chat.deleteSession(id);for(const item of terminal.list())if(item.conversationId===id)terminal.close(item.id);browser.closeConversation(id);revokePreviews(id);await deleteArtifacts(id);store.deleteConversation(id);});
   handle('conversations.restart',(id)=>chat.restart(str(id)));
+  handle('conversations.retract',(id)=>chat.retract(str(id)));
   handle('conversations.search',(query)=>store.searchMessages(typeof query==='string'?query.slice(0,200):''));
   handle('conversations.reset',(id,options)=>{const input=options===undefined||options===null?{}:record(options);if(input.notes!==undefined&&typeof input.notes!=='boolean')throw new Error('notes must be true or false.');return chat.reset(str(id),{notes:input.notes!==false});});
   handle('conversations.messages',(id)=>store.listMessages(str(id)));

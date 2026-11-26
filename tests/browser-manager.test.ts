@@ -330,6 +330,10 @@ describe("native browser lifecycle and grants", () => {
     const check = partition.setPermissionCheckHandler.mock.calls.at(-1)?.[0] as (contents: unknown, permission: string) => boolean;
     expect(ask(guestAt(0), "fullscreen")).toBe(true);
     expect(check(guestAt(0), "fullscreen")).toBe(true);
+    // A page's Copy button writes the clipboard; reading it stays refused (user, 24.11).
+    expect(ask(guestAt(0), "clipboard-sanitized-write")).toBe(true);
+    expect(check(guestAt(0), "clipboard-sanitized-write")).toBe(true);
+    expect(ask(guestAt(1), "clipboard-sanitized-write")).toBe(false);
     expect(ask(guestAt(1), "fullscreen")).toBe(false);
     expect(ask({ id: "stranger" }, "fullscreen")).toBe(false);
     for (const permission of ["camera", "media", "notifications", "geolocation", "pointerLock", "clipboard-read"])

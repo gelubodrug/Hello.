@@ -43,6 +43,24 @@ const RUNNER = [
 /** Where Hello keeps the Python a chat's scripts run in, and the interpreter itself. */
 export const sheetPythonRoot = (dataDir: string) => join(dataDir, 'sheets', 'python');
 export const sheetPythonInterpreter = (dataDir: string) => join(sheetPythonRoot(dataDir), 'venv', 'bin', 'python');
+/**
+ * What that Python actually has, from the receipt its build wrote — read without
+ * a SheetPython, so the run snapshot can name the versions. Five bash calls in four
+ * chats print openpyxl.__version__ from this very interpreter, and nothing has ever
+ * said that pandas is installed beside it (20.11). Null when the receipt or the
+ * interpreter is missing: then Hello does not know, and says nothing.
+ */
+export const sheetPythonLibraries = (dataDir: string): Promise<SheetPythonStatus | null> =>
+  receiptStatus(join(sheetPythonRoot(dataDir), 'ready.json'), sheetPythonInterpreter(dataDir));
+
+/** The receipt a finished build leaves, and the interpreter it describes — both, or nothing. */
+async function receiptStatus(receipt: string, interpreter: string): Promise<SheetPythonStatus | null> {
+  try {
+    const status = JSON.parse(await readFile(receipt, 'utf8')) as SheetPythonStatus;
+    if (typeof status?.openpyxl !== 'string' || !(await stat(interpreter)).isFile()) return null;
+    return status;
+  } catch { return null; }
+}
 
 export class SheetPython {
   private readonly venv: string;
@@ -56,13 +74,7 @@ export class SheetPython {
 
   get interpreter(): string { return join(this.venv, 'bin', 'python'); }
 
-  async status(): Promise<SheetPythonStatus | null> {
-    try {
-      const status = JSON.parse(await readFile(this.receipt, 'utf8')) as SheetPythonStatus;
-      if (typeof status?.openpyxl !== 'string' || !(await stat(this.interpreter)).isFile()) return null;
-      return status;
-    } catch { return null; }
-  }
+  status(): Promise<SheetPythonStatus | null> { return receiptStatus(this.receipt, this.interpreter); }
 
   /** Builds the environment once. openpyxl must install; pandas may not have a build for this Python, and is then left out. */
   prepare(signal: AbortSignal): Promise<SheetPythonStatus> {

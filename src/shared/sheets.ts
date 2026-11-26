@@ -63,6 +63,12 @@ export interface SheetSnapshot extends SheetWorkbookInfo {
   grids: SheetGrid[];
 }
 
+/** A workbook file only looked at, never adopted: the Files pane's preview. */
+export interface SheetPreview extends SheetSnapshot {
+  /** The chat is already working on this very file, so the model knows it and may hold changes this preview does not show. */
+  openInChat?: boolean;
+}
+
 /** A chart a workbook's file holds: where it is and which cells it draws. */
 export interface SheetChart { sheet: string; type: string; title?: string; anchor?: string; values: string[]; categories: string[];
   /** Its labels are read as text or as numbers. Text labels read as numbers show as 1, 2, 3 in some viewers. */

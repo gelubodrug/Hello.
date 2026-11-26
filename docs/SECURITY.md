@@ -757,6 +757,31 @@ a secure-erasure operation: SQLite/WAL pages, backups, renderer recovery state o
 third-party CLI state can retain prior content. Terminal replay is memory-only
 within Hello.; independently launched clients may keep their own transcripts.
 
+## Unclutter
+
+Unclutter is the person's switch, like an ad blocker, and not an agent grant:
+a tab's AI Mode does not gate it, because it gives the agent nothing. Its
+isolated world (1209) shares only the DOM with the page; the page can neither
+read its rules nor turn it off, and nothing it reads reaches the chat model,
+Pi, a CLI or any agent tool. What it sends leaves the Mac for nowhere: the
+candidates go to OpenJev on `127.0.0.1`, as the page kind and, per block, its
+tag, identifying attributes, visible text with URLs, e-mail addresses and long
+numbers redacted, its position and count — never the URL, the title, the
+article's text or a form's values.
+
+The original's safety core is kept verbatim. Only selectors of a fixed shape
+are ever applied, and a selector that matches more than twenty elements, or any
+element that holds main content, a heading, a form, a credential or payment
+field, a paywall, a sign-in or a captcha, is refused as a whole. A consent
+dialog is hidden, never answered: nothing is clicked and no cookie is written.
+A scroll lock is released only behind a hidden overlay and never behind
+another visible modal. Everything it changes is restored when its rules go.
+Generated documents, previewed files and local servers are never touched.
+
+Hello runs OpenJev's helper only after checking both helper files against
+their pinned SHA-256, binds it to 127.0.0.1, never writes into the helper environment, and
+stops only a helper it started itself. OpenJev's weights are CC BY-NC 4.0.
+
 ## DSH hosted launch
 
 Owner decision, 2026-10-09: Hello only hosts and launches DSH and upgrades its

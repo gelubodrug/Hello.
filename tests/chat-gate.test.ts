@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GATE_MAX_QUESTIONS, GATE_MAX_ROUNDS, gateQuestionsText, gateRequestBody, parseGateAnswer, runGate, workOrder } from '../src/main/chat/gate';
+import { GATE_MAX_QUESTIONS, GATE_MAX_ROUNDS, answeredRequest, gateQuestionsText, gateRequestBody, parseGateAnswer, runGate, workOrder } from '../src/main/chat/gate';
 import type { AppSettings } from '../src/shared/types';
 
 // The gate (user, 18.11): a local model given a conversation guesses, loops and
@@ -125,5 +125,10 @@ describe('the call itself', () => {
     const pending = runGate({ ...call(fetcher), signal: controller.signal }, fresh);
     controller.abort(new Error('Stopped by you.'));
     await expect(pending).rejects.toThrow('Stopped by you.');
+  });
+
+  it('gives an answer with its request and its questions when there is no order', () => {
+    const text = answeredRequest({ request: 'deschide reddit', questions: ['New since when?'], answers: ['ultimele 24h'] });
+    expect(text).toBe('The human’s request:\ndeschide reddit\n\nHello asked them:\n1. New since when?\n\nThey answered:\nultimele 24h\n\nDo what the request asks, with these answers.');
   });
 });

@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Script } from 'node:vm';
@@ -28,10 +28,17 @@ interface BridgeReply {
   error?: string;
 }
 
-async function fixture(options: { folder?: string | null; runbook?: boolean; tasks?: boolean; browser?: BrowserHooks; piExtension?: string } = {}) {
+async function fixture(options: { folder?: string | null; runbook?: boolean; tasks?: boolean; browser?: BrowserHooks; piExtension?: string; python?: boolean } = {}) {
   const folder = options.folder;
   const root = mkdtempSync(join(tmpdir(), 'hello-cli-notebooks-test-'));
   roots.push(root);
+  // The environment Hello builds for spreadsheet scripts, as `prepare()` leaves it.
+  if (options.python) {
+    const python = join(root, 'sheets', 'python');
+    mkdirSync(join(python, 'venv', 'bin'), { recursive: true });
+    writeFileSync(join(python, 'venv', 'bin', 'python'), '');
+    writeFileSync(join(python, 'ready.json'), JSON.stringify({ openpyxl: '3.1.5', pandas: '3.1.1', python: '3.15.2' }));
+  }
   const cwd = folder ?? join(root, 'home');
   const chat: Conversation = {
     id: 'chat-a', title: 'Selected chat', folder: folder === null ? null : cwd,
@@ -458,5 +465,27 @@ describe('Hello’s browser over the CLI connection', () => {
     const f = await fixture();
     expect((await f.request('/tools')).body.tools?.map(tool => tool.function.name).sort()).toEqual(['notebook_list', 'notebook_task_status']);
     expect(readFileSync(f.context.instructionsPath, 'utf8')).not.toContain('The browser in Hello');
+  });
+});
+
+/**
+ * A CLI pane is told about the Python Hello already keeps. Before this, nothing
+ * here said so, and a worker built its own .venv inside the human's task folder
+ * (a Qwen Code run, 20.11 — T207); the chat's own model has had the sentence
+ * since T193.
+ */
+describe('the Python a worker is told about', () => {
+  it('names it with its versions, and where it is', async () => {
+    const f = await fixture({ python: true });
+    const instructions = readFileSync(f.context.instructionsPath, 'utf8');
+    expect(instructions).toContain('Python with openpyxl, already here');
+    expect(instructions).toContain('openpyxl 3.1.5 and pandas 3.1.1');
+    expect(instructions).toContain(JSON.stringify(join(f.root, 'sheets', 'python', 'venv', 'bin', 'python')));
+    expect(instructions).toMatch(/Do not pip install them or build a venv for them/);
+  });
+
+  it('says nothing at all when there is no such Python', async () => {
+    const f = await fixture();
+    expect(readFileSync(f.context.instructionsPath, 'utf8')).not.toMatch(/openpyxl/);
   });
 });

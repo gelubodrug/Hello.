@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// Composer attachment chips: double-click (or Enter) on a picture opens it in a
-// dialog read back through main. API mocks mirror tests/page-mode-annotate-composer.test.tsx.
+// Composer attachments: a waiting picture is a card of itself (user, 26.11, "Chat pictures"); a click opens it
+// full size in the drawing editor, read back through main. Any other file is a chip with its name, which opens
+// nothing. API mocks mirror tests/page-mode-annotate-composer.test.tsx.
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,6 +86,9 @@ const conversation: Conversation = { id: "preview-chat", title: "Preview", folde
 const settings: AppSettings = { endpointUrl: "http://localhost:1234/v1", model: "test-model", apiKeySet: false, temperature: 0.7, systemPrompt: "", connections: [] };
 const PICTURE_URL = "data:image/png;base64,iVBORw0KGgo=";
 const picture: ChatAttachment = { id: "ff7aa255-0000-4000-8000-000000000001", name: "ff7aa255-capture.png", kind: "image", size: 10 };
+// Each test that opens a picture uses its own id: a picture once read is remembered for the app's run.
+const fresh: ChatAttachment = { id: "ff7aa255-0000-4000-8000-000000000004", name: "fresh.png", kind: "image", size: 10 };
+const refused: ChatAttachment = { id: "ff7aa255-0000-4000-8000-000000000003", name: "refused.png", kind: "image", size: 10 };
 const notes: ChatAttachment = { id: "ff7aa255-0000-4000-8000-000000000002", name: "notes.txt", kind: "text", size: 4 };
 const view = () =>
   createElement(ConversationView, {
@@ -93,6 +97,10 @@ const view = () =>
     quote: null, onQuoteConsumed: vi.fn(), reportError: vi.fn(),
   });
 const chip = (name: string) => [...document.querySelectorAll<HTMLElement>(".composer-attachment")].find(item => item.title === name)!;
+const card = (name: string) => [...document.querySelectorAll<HTMLButtonElement>(".composer-attachment-open")].find(item => item.title === name)!;
+const click = async (target: Element) => {
+  await act(async () => { (target as HTMLElement).click(); });
+};
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 const dblclick = async (target: Element) => {
   await act(async () => { target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
@@ -145,19 +153,21 @@ describe("composer attachment preview", () => {
     await render([picture]);
     expect(host.textContent).toContain('This model is text-only and cannot read images or screenshots.');
   });
-  it("double-clicking an image chip opens its picture in a dialog; Escape closes it", async () => {
-    await render([picture, notes]);
-    await dblclick(chip(picture.name));
-    expect(mocks.previewAttachment).toHaveBeenCalledWith(conversation.id, picture.id);
+  it("a waiting picture is a card of itself; a click opens it in the editor, Escape closes it", async () => {
+    await render([fresh, notes]);
+    // The card shows the picture, not its name; the name is its title and its label.
+    expect(chip(fresh.name)).toBeUndefined();
+    expect(card(fresh.name).getAttribute("aria-label")).toBe(`${fresh.name}: open to draw on it`);
+    await click(card(fresh.name));
+    expect(mocks.previewAttachment).toHaveBeenCalledWith(conversation.id, fresh.id);
     expect(dialog()?.getAttribute("aria-labelledby")).toBeTruthy();
-    expect(document.getElementById(dialog()!.getAttribute("aria-labelledby")!)?.textContent).toBe(picture.name);
-    const image = dialog()!.querySelector("img")!;
-    expect(image.getAttribute("src")).toBe(PICTURE_URL);
-    expect(image.alt).toBe(picture.name);
+    expect(document.getElementById(dialog()!.getAttribute("aria-labelledby")!)?.textContent).toBe(fresh.name);
+    expect(dialog()!.querySelector(".image-annotator")).not.toBeNull();
+    expect(dialog()!.querySelector('[role="toolbar"]')?.getAttribute("aria-label")).toBe("Draw on the picture; closing adds it to your message");
     await key(document.activeElement ?? dialog()!, "Escape");
     expect(dialog()).toBeNull();
-    // Closing is only closing: the chip is still there to send.
-    expect(chip(picture.name)).toBeTruthy();
+    // Closing without drawing is only closing: the card is still there to send.
+    expect(card(fresh.name)).toBeTruthy();
   });
 
   it("a non-image chip does not open a preview and is not a focus stop", async () => {
@@ -169,36 +179,33 @@ describe("composer attachment preview", () => {
     expect(dialog()).toBeNull();
   });
 
-  it("Enter on a focused image chip opens it; the backdrop and the close button close it", async () => {
+  it("the backdrop and the close button close the editor; a click inside it does not", async () => {
     await render([picture]);
-    const target = chip(picture.name);
-    expect(target.tabIndex).toBe(0);
-    await key(target, "Enter");
+    await click(card(picture.name));
     expect(dialog()).not.toBeNull();
     await act(async () => { document.querySelector<HTMLElement>(".dialog-backdrop")!.click(); });
     expect(dialog()).toBeNull();
-    await dblclick(chip(picture.name));
-    // A click inside the picture is not a click on the backdrop.
-    await act(async () => { dialog()!.querySelector("img")!.click(); });
+    await click(card(picture.name));
+    // A click on the drawing tools is not a click on the backdrop.
+    await act(async () => { dialog()!.querySelector<HTMLElement>('[role="toolbar"] button')!.click(); });
     expect(dialog()).not.toBeNull();
     await act(async () => { dialog()!.querySelector<HTMLElement>(`button[aria-label="Close ${picture.name}"]`)!.click(); });
     expect(dialog()).toBeNull();
   });
 
-  it("a picture main refuses shows the reason instead of an image", async () => {
-    mocks.previewAttachment.mockRejectedValueOnce(new Error("This attachment changed on disk. Drop the file again."));
-    await render([picture]);
-    await dblclick(chip(picture.name));
-    expect(dialog()?.querySelector("img")).toBeNull();
+  it("a picture main refuses shows the reason instead of the editor", async () => {
+    mocks.previewAttachment.mockRejectedValue(new Error("This attachment changed on disk. Drop the file again."));
+    await render([refused]);
+    await click(card(refused.name));
+    expect(dialog()?.querySelector(".image-annotator")).toBeNull();
     expect(dialog()?.textContent).toContain("This attachment changed on disk.");
   });
 
-  it("clicking the remove button still removes the chip without opening a preview", async () => {
+  it("clicking the remove button still removes the card without opening the editor", async () => {
     await render([picture]);
     const remove = document.querySelector<HTMLElement>(`button[aria-label="Remove attachment ${picture.name}"]`)!;
     await act(async () => { remove.click(); });
     expect(document.querySelector(".composer-attachments")).toBeNull();
-    expect(mocks.previewAttachment).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
   });
 });

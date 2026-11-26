@@ -403,10 +403,16 @@ export class BrowserManager {
    * refusal left every video's full-screen button dead (user, 26.09: "de ce
    * full screen la video nu face nimic?"). Only the page of the tab on screen
    * gets it: a tab out of sight never takes over the window.
+   * Writing to the clipboard is the other: a page's own Copy button calls
+   * navigator.clipboard.writeText, and the flat refusal left every one of them
+   * dead, so nothing copied in a page reached a CLI (user, 24.11). Write only —
+   * Chromium still wants the click that asked for it — never reading.
    */
   private securePartition(partition: Session): void {
-    partition.setPermissionCheckHandler((contents, permission) => permission === "fullscreen" && this.isShown(contents));
-    partition.setPermissionRequestHandler((contents, permission, callback) => callback(permission === "fullscreen" && this.isShown(contents)));
+    const allowed = (contents: WebContents | null | undefined, permission: string) =>
+      (permission === "fullscreen" || permission === "clipboard-sanitized-write") && this.isShown(contents);
+    partition.setPermissionCheckHandler((contents, permission) => allowed(contents, permission));
+    partition.setPermissionRequestHandler((contents, permission, callback) => callback(allowed(contents, permission)));
     partition.on("will-download", this.onDownload);
   }
   /** Whether a page is the one the window is showing now. */

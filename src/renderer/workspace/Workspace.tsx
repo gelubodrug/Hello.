@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowRightToLine,
@@ -13,7 +13,9 @@ import {
   MessageCircle,
   Minimize2,
   Minus,
+  MoreVertical,
   Plus,
+  Rows2,
   Terminal,
   X,
 } from "lucide-react";
@@ -49,6 +51,9 @@ import {
   type MenuItem,
 } from "../ui/primitives";
 import { api } from '../api';
+import {
+  clampRatio, leaves, liveSplits, setRatio, splitChildren, type SplitDirection, type SplitNode, type TerminalSplits,
+} from './terminal-splits';
 
 /**
  * A chat has two pages: the conversation and its notebook — one pill beside
@@ -98,6 +103,12 @@ export interface WorkspacePrefs {
   chatTerminals?: ChatTerminalTab[];
   /** Which of them the chat pane shows now; unset, it shows `chatTab`. Never a list of its own. */
   chatTerminal?: string | null;
+  /**
+   * Terminals side by side in one tab (user, 26.11), by the id of the tab's own
+   * terminal: the others in its tree have no tab of their own. In Tools or as a
+   * chat tab alike, the tree goes where its tab goes.
+   */
+  terminalSplits?: TerminalSplits;
   // Retained for saved-preference compatibility; notebook sections are permanent.
   notebookTabs: Array<"runbook" | "tasks">;
   toolId: string | null;
@@ -125,6 +136,8 @@ export interface WorkspaceProps {
   active: boolean;
   conversation: Conversation;
   messages: Message[];
+  /** The chat's messages, replaced: one was taken back. */
+  onMessages?: (messages: Message[]) => void;
   ui: WorkspacePrefs;
   settings: AppSettings;
   workers: WorkerInfo[];
@@ -135,8 +148,12 @@ export interface WorkspaceProps {
   onUI: (patch: WorkspaceUpdate) => void;
   onSettingsChange: (settings: AppSettings) => void;
   onConversationChange: (conversation: Conversation) => void;
-  onLaunch: (kind: "browser" | "terminal", workerId?: WorkerId) => void;
-  onCloseTool: (tool: BrowserTab | TerminalSession) => void;
+  /** `chat`: what starts opens as a chat tab, not in Tools. */
+  onLaunch: (kind: "browser" | "terminal", workerId?: WorkerId, place?: "chat") => void;
+  /** `group`: the other terminals of a split tab, closed with it. */
+  onCloseTool: (tool: BrowserTab | TerminalSession, group?: TerminalSession[]) => void;
+  /** A new terminal in `lead`'s tab, beside (row) or below (column) `target`. */
+  onSplit: (lead: string, target: string, dir: SplitDirection) => void;
   onBrowserChange: (tab: BrowserTab) => void;
   /** A search result chosen in the sidebar, for this chat's find. */
   jump?: FindJump | null;
@@ -186,16 +203,69 @@ export function Workspace(props: WorkspaceProps) {
   const dragSplit = useRef<number | null>(null);
   const filesTool: FilesTab = { id: filesTabId(conversation.id), conversationId: conversation.id, kind: 'files', title: 'Files' };
   const sheetsTool: SheetsTab = { id: sheetsTabId(conversation.id), conversationId: conversation.id, kind: 'sheets', title: 'Sheets' };
+  // A terminal shown inside another's tab has no tab of its own.
+  const splits = liveSplits(ui.terminalSplits, new Set(props.terminals.map(session => session.id)));
+  const inSplit = splitChildren(splits);
+  const tabTerminals = props.terminals.filter(session => !inSplit.has(session.id));
+  const sessionById = new Map(props.terminals.map(session => [session.id, session]));
+  /** Which terminal of a split tab is in use: the last one focused, else the tab's own. */
+  const [paneFocus, setPaneFocus] = useState<Record<string, string>>({});
+  const focusedLeaf = (lead: string) => splits[lead] && leaves(splits[lead]).includes(paneFocus[lead]) ? paneFocus[lead] : lead;
+  /** The tab a terminal is shown in: its own, or the one whose split holds it. */
+  const tabOf = new Map<string, string>();
+  for (const [lead, node] of Object.entries(splits)) for (const id of leaves(node)) tabOf.set(id, lead);
+  // The terminal clicked or typed in is the one a split splits. Its events reach React through its portal, not
+  // through the pane it sits in, so the pane is found from the page itself (user, 26.11).
+  const tabOfRef = useRef(tabOf);
+  tabOfRef.current = tabOf;
+  useEffect(() => {
+    const choose = (event: Event) => {
+      const pane = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-split-pane]') : null;
+      const id = pane?.dataset.splitPane;
+      const lead = id ? tabOfRef.current.get(id) : undefined;
+      if (id && lead) setPaneFocus(current => current[lead] === id ? current : { ...current, [lead]: id });
+    };
+    document.addEventListener('pointerdown', choose, true);
+    document.addEventListener('focusin', choose, true);
+    return () => {
+      document.removeEventListener('pointerdown', choose, true);
+      document.removeEventListener('focusin', choose, true);
+    };
+  }, []);
   // A terminal is in one pane at a time: a chat tab has left the Tools strip.
-  const docked = (ui.chatTerminals ?? []).flatMap(tab => props.terminals.filter(session => session.id === tab.id));
+  const docked = (ui.chatTerminals ?? []).flatMap(tab => tabTerminals.filter(session => session.id === tab.id));
   const dockedIds = new Set(docked.map(session => session.id));
   // A Workbook switched off while it was in front leaves the chat in front.
   const shownPage: string = docked.find(session => session.id === ui.chatTerminal)?.id ?? (ui.chatTab === 'notebook' && !workbook ? 'chat' : ui.chatTab);
   const pageKeys: string[] = [...pages, ...docked.map(session => session.id)];
   const [pageMenu, setPageMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // The chat's tabs past the strip's edge (user, 26.11: "dacă am mai multe
+  // taburi nu le pot accesa… o listă verticală under a '...'"). The strip
+  // scrolls and shows no scrollbar, so the tab on screen is brought into view,
+  // and while the strip holds more than it shows, "…" lists every tab.
+  const pageStrip = useRef<HTMLDivElement>(null);
+  const [pagesOverflow, setPagesOverflow] = useState(false);
+  const pageTitles = docked.map(session => session.title).join('\n');
+  useLayoutEffect(() => {
+    const node = pageStrip.current;
+    if (!node) return;
+    const measure = () => {
+      const selected = node.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.parentElement;
+      if (selected) {
+        const bounds = node.getBoundingClientRect(), tab = selected.getBoundingClientRect();
+        if (tab.left < bounds.left) node.scrollLeft -= bounds.left - tab.left;
+        else if (tab.right > bounds.right) node.scrollLeft += tab.right - bounds.right;
+      }
+      setPagesOverflow(node.scrollWidth > node.clientWidth + 1);
+    };
+    measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(node);
+    return () => resize.disconnect();
+  }, [shownPage, pageKeys.join(' '), pageTitles]);
   const menuSession = docked.find(session => session.id === pageMenu?.id);
   const toolOrder = useToolOrder(conversation.id, props.reportError);
-  const allTools = orderedTools([...props.browsers, ...props.terminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : []), ...(ui.sheetsOpen ? [sheetsTool] : [])], toolOrder.order);
+  const allTools = orderedTools([...props.browsers, ...tabTerminals.filter(session => !dockedIds.has(session.id)), ...(ui.filesOpen ? [filesTool] : []), ...(ui.sheetsOpen ? [sheetsTool] : [])], toolOrder.order);
   /**
    * Each terminal is rendered once, into a node of its own that is moved to
    * whichever pane holds it. Rendering it in the other pane instead would
@@ -262,8 +332,106 @@ export function Workspace(props: WorkspaceProps) {
       const remaining = allTools.filter(item => item.id !== tool.id);
       onUI({ ...(tool.kind === 'files' ? { filesOpen: false } : { sheetsOpen: false }), ...(ui.toolId === tool.id ? { toolId: remaining[0]?.id ?? null } : {}),
         ...(!remaining.length ? { toolsOpen: false, toolsMinimized: false, toolsExpanded: false } : {}) });
+    } else if (!('url' in tool) && splits[tool.id]) {
+      // A split tab's X closes the tab: every terminal in it.
+      props.onCloseTool(tool, leaves(splits[tool.id]).flatMap(id => id === tool.id ? [] : sessionById.get(id) ?? []));
     } else props.onCloseTool(tool);
   };
+  const split = (lead: string, dir: SplitDirection) => props.onSplit(lead, focusedLeaf(lead), dir);
+  // A terminal just split off is the one in use: it was asked for to be typed in.
+  const known = useRef(new Map<string, string[]>());
+  const treeKey = JSON.stringify(splits);
+  useEffect(() => {
+    const next = new Map(Object.entries(splits).map(([lead, node]) => [lead, leaves(node)] as const));
+    for (const [lead, ids] of next) {
+      const before = known.current.get(lead) ?? [lead];
+      const added = ids.find(id => !before.includes(id));
+      if (added) setPaneFocus(current => ({ ...current, [lead]: added }));
+    }
+    known.current = next;
+  }, [treeKey]);
+  /** A split's divider, dragged: shown live on the node, saved once on release. */
+  const dragDivider = (lead: string, path: string, dir: SplitDirection) => (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const divider = event.currentTarget;
+    const box = divider.parentElement;
+    if (!box) return;
+    const rect = box.getBoundingClientRect();
+    const before = box.style.getPropertyValue('--split-a');
+    let ratio: number | null = null;
+    divider.setPointerCapture?.(event.pointerId);
+    const move = (next: PointerEvent) => {
+      ratio = clampRatio(dir === 'row' ? (next.clientX - rect.left) / (rect.width || 1) : (next.clientY - rect.top) / (rect.height || 1));
+      box.style.setProperty('--split-a', `${ratio * 100}%`);
+    };
+    const end = (last: PointerEvent) => {
+      divider.removeEventListener('pointermove', move);
+      divider.removeEventListener('pointerup', end);
+      divider.removeEventListener('pointercancel', end);
+      if (last.type === 'pointerup' && ratio !== null) resizeSplit(lead, path, ratio);
+      else box.style.setProperty('--split-a', before);
+    };
+    divider.addEventListener('pointermove', move);
+    divider.addEventListener('pointerup', end);
+    divider.addEventListener('pointercancel', end);
+  };
+  const resizeSplit = (lead: string, path: string, ratio: number) => onUI(current => {
+    const node = current.terminalSplits?.[lead];
+    return node ? { terminalSplits: { ...current.terminalSplits, [lead]: setRatio(node, path, ratio) } } : {};
+  });
+  /** A split tab's terminals, each in a place of its own with its name and its X. */
+  const splitView = (lead: string, node: SplitNode, path = ''): JSX.Element => {
+    if (typeof node === 'string') {
+      const session = sessionById.get(node);
+      const title = session?.title || 'Terminal';
+      return (
+        <div className="terminal-split-pane" data-split-pane={node} data-focused={focusedLeaf(lead) === node}
+>
+          <div className="terminal-split-bar">
+            {session?.kind === 'worker' ? <Bot size={12} aria-hidden /> : <Terminal size={12} aria-hidden />}
+            <span className="terminal-split-title" title={title}>{title}</span>
+            {/* The terminal's own commands, on its own bar: split this one (user, 26.11). */}
+            <button type="button" className="terminal-split-action" aria-label="Split right" title="Split right"
+              onClick={() => props.onSplit(lead, node, 'row')}>
+              <Columns2 size={12} />
+            </button>
+            <button type="button" className="terminal-split-action" aria-label="Split down" title="Split down"
+              onClick={() => props.onSplit(lead, node, 'column')}>
+              <Rows2 size={12} />
+            </button>
+            {/* Alone in its tab, the tab's X is its X. */}
+            {splits[lead] && (
+              <button type="button" className="terminal-split-action" aria-label={`Close ${title}`} title={`Close ${title}`}
+                onClick={() => session && props.onCloseTool(session)}>
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <div className="terminal-split-outlet" ref={outlet(node)} />
+        </div>
+      );
+    }
+    const percent = Math.round(node.ratio * 100);
+    return (
+      <div className="terminal-split" data-dir={node.dir} style={{ '--split-a': `${node.ratio * 100}%` } as CSSProperties}>
+        <div className="terminal-split-side">{splitView(lead, node.a, `${path}a`)}</div>
+        <div className="terminal-split-divider" role="separator" tabIndex={0}
+          aria-orientation={node.dir === 'row' ? 'vertical' : 'horizontal'}
+          aria-label="Resize terminals" aria-valuemin={15} aria-valuemax={85} aria-valuenow={percent}
+          onPointerDown={dragDivider(lead, path, node.dir)}
+          onKeyDown={event => {
+            const back = node.dir === 'row' ? 'ArrowLeft' : 'ArrowUp', forward = node.dir === 'row' ? 'ArrowRight' : 'ArrowDown';
+            if (event.key !== back && event.key !== forward) return;
+            event.preventDefault();
+            resizeSplit(lead, path, node.ratio + (event.key === back ? -0.05 : 0.05));
+          }} />
+        <div className="terminal-split-side">{splitView(lead, node.b, `${path}b`)}</div>
+      </div>
+    );
+  };
+  /** Where a tab's terminals go: each on its own bar, alone or split. */
+  const terminalHost = (lead: string) => ({ children: splitView(lead, splits[lead] ?? lead) });
   /** A terminal becomes a chat tab, and the chat pane shows it. */
   const dock = (session: TerminalSession) => {
     const remaining = allTools.filter(tool => tool.id !== session.id);
@@ -396,6 +564,12 @@ export function Workspace(props: WorkspaceProps) {
     },
     { id: "workers", label: "CLI worker…", icon: Bot, children: workerItems },
   ];
+  /** The chat's own +: what runs in a chat tab, and it opens there (user, 26.11). Tools' + opens in Tools. */
+  const chatMenu: MenuItem[] = [
+    { id: "terminal", label: "Terminal", icon: Terminal, action: () => props.onLaunch("terminal", undefined, "chat") },
+    { id: "workers", label: "CLI worker…", icon: Bot,
+      children: workerItems.map(item => ({ ...item, action: () => props.onLaunch("terminal", item.id as WorkerId, "chat") })) },
+  ];
   const header = (
       <div className="workspace-controls">
         <div className="workspace-header-restores" role="group" aria-label="Reopen panels">
@@ -487,7 +661,7 @@ export function Workspace(props: WorkspaceProps) {
             aria-label={`${chatLabel} panel`}
           >
             <header className="panel-header pane-tab-header">
-                <div className="pills" role="tablist" aria-label={`${chatLabel} pages`}>
+                <div ref={pageStrip} className="pills" role="tablist" aria-label={`${chatLabel} pages`}>
                   {pages.map((kind) => (
                     <div
                       className="tab-pill"
@@ -528,7 +702,7 @@ export function Workspace(props: WorkspaceProps) {
                     >
                       <button
                         type="button"
-                        className="chat-page-tab"
+                        className="chat-page-tab chat-page-tab--terminal"
                         role="tab"
                         aria-label={`${session.title || 'Terminal'}${session.status === 'exited' ? ' — Session ended' : ''}`}
                         tabIndex={shownPage === session.id ? 0 : -1}
@@ -550,6 +724,11 @@ export function Workspace(props: WorkspaceProps) {
                         </span>
                         {session.status === 'exited' && <span className="session-ended" aria-hidden="true" />}
                       </button>
+                      {/* Closing a chat tab ends it, as in Tools: it does not go back there. */}
+                      <button type="button" className="pill-close chat-page-close" aria-label={`Close ${session.title || 'terminal'}`}
+                        title={`Close ${session.title || 'terminal'}`} onClick={() => closeTool(session)}>
+                        <X size={13} />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -557,12 +736,25 @@ export function Workspace(props: WorkspaceProps) {
                   ariaLabel={menuSession ? `Actions for ${menuSession.title || 'terminal'}` : 'Page actions'}
                   items={menuSession ? [
                     { id: 'undock', label: 'Move to tools', icon: ArrowRightToLine, action: () => undock(menuSession) },
-                    { id: 'close', label: 'Close tab', icon: X, action: () => props.onCloseTool(menuSession) },
+                    { id: 'split-right', label: 'Split right', icon: Columns2, action: () => split(menuSession.id, 'row') },
+                    { id: 'split-down', label: 'Split down', icon: Rows2, action: () => split(menuSession.id, 'column') },
+                    { id: 'close', label: 'Close tab', icon: X, action: () => closeTool(menuSession) },
                   ] : []}
                   onClose={() => setPageMenu(null)} />
                 <div className="pane-actions">
+                  {pagesOverflow && (
+                    <MenuButton label={`All ${chatLabel.toLowerCase()} tabs`} items={[
+                      ...pages.map((kind): MenuItem => ({ id: kind, label: pageLabels[kind], icon: kind === "chat" ? ModeIcon : BookOpen,
+                        checked: shownPage === kind, action: () => showPage(kind) })),
+                      ...docked.map((session): MenuItem => ({ id: session.id, label: session.title || 'Terminal', icon: session.kind === 'worker' ? Bot : Terminal,
+                        ...(session.status === 'exited' ? { detail: 'Session ended' } : {}),
+                        checked: shownPage === session.id, action: () => showPage(session.id) })),
+                    ]}>
+                      <MoreVertical size={17} />
+                    </MenuButton>
+                  )}
                   {controlsHost === 'chat' && header}
-                  <MenuButton label={`Add ${chatLabel.toLowerCase()} tool`} items={toolsMenu}>
+                  <MenuButton label={`Add ${chatLabel.toLowerCase()} tab`} items={chatMenu}>
                     <Plus size={17} />
                   </MenuButton>
                   <IconButton
@@ -597,12 +789,14 @@ export function Workspace(props: WorkspaceProps) {
                 <ConversationView
                   conversation={conversation}
                   messages={props.messages}
+                  onMessages={props.onMessages}
                   settings={props.settings}
                   workers={props.workers}
                   onSettingsChange={props.onSettingsChange}
                   onFolderChange={props.onConversationChange}
-                  onTerminal={() => props.onLaunch("terminal")}
-                  onWorker={(workerId) => props.onLaunch("terminal", workerId)}
+                  // Started from the chat's composer, it opens in the chat, as from the chat's + (user, 26.11).
+                  onTerminal={() => props.onLaunch("terminal", undefined, "chat")}
+                  onWorker={(workerId) => props.onLaunch("terminal", workerId, "chat")}
                   quote={props.quote}
                   onQuoteConsumed={props.onQuoteConsumed}
                   reportError={props.reportError}
@@ -631,7 +825,7 @@ export function Workspace(props: WorkspaceProps) {
                   id={`${conversation.id}-terminal-${session.id}`}
                   data-tool-host={session.id}
                   hidden={shownPage !== session.id}
-                  ref={outlet(session.id)}
+                  {...terminalHost(session.id)}
                 />
               ))}
             </div>
@@ -713,7 +907,7 @@ export function Workspace(props: WorkspaceProps) {
             <ToolTabStrip tools={allTools} selectedId={currentTool?.id}
               onReorder={toolOrder.reorder}
               onSelect={id => onUI({ toolId: id, focus: 'tools', ...(toolsMinimized ? { toolsMinimized: false } : {}) })}
-              onClose={closeTool} onDock={dock} />
+              onClose={closeTool} onDock={dock} onSplit={(session, dir) => split(session.id, dir)} />
             <div className="pane-actions">
               {controlsHost === 'tools' && header}
               <MenuButton label="Add tool" items={toolsMenu}>
@@ -768,27 +962,31 @@ export function Workspace(props: WorkspaceProps) {
                 />
               </div>
             ))}
-            {props.terminals.filter(session => !dockedIds.has(session.id)).map((session) => (
+            {tabTerminals.filter(session => !dockedIds.has(session.id)).map((session) => (
               <div
                 key={session.id}
                 className="tool-host"
                 id={`tool-host-${session.id}`}
                 data-tool-host={session.id}
                 hidden={currentTool?.id !== session.id}
-                ref={outlet(session.id)}
+                {...terminalHost(session.id)}
               />
             ))}
           </div>
         </section>
       </div>
     </section>
-    {props.terminals.map(session => createPortal(
+    {props.terminals.map(session => {
+      // A terminal in a split is shown with its tab, and takes the keys only when it is the one in use.
+      const tab = tabOf.get(session.id) ?? session.id;
+      return createPortal(
       <TerminalPane
         session={session}
-        visible={dockedIds.has(session.id)
-          ? chatVisible && !minimized && shownPage === session.id
-          : toolsVisible && !toolsMinimized && currentTool?.id === session.id}
-        placement={dockedIds.has(session.id) ? "chat" : "tools"}
+        visible={dockedIds.has(tab)
+          ? chatVisible && !minimized && shownPage === tab
+          : toolsVisible && !toolsMinimized && currentTool?.id === tab}
+        placement={dockedIds.has(tab) ? "chat" : "tools"}
+        focusOnShow={focusedLeaf(tab) === session.id}
         currentFolder={conversation.folder}
         onOpenInCurrentFolder={session.workerId
           ? () => props.onLaunch("terminal", session.workerId)
@@ -796,7 +994,8 @@ export function Workspace(props: WorkspaceProps) {
       />,
       slotFor(session.id),
       session.id,
-    ))}
+    );
+    })}
     </FileNavigation.Provider>
   );
 }

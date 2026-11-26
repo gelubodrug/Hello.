@@ -75,6 +75,7 @@ import {
   type WorkspacePrefs,
   type WorkspaceUpdate,
 } from "./workspace/Workspace";
+import { closeInSplits, leadOf, leaves, parseSplits, splitChildren, splitLeaf, type SplitDirection } from "./workspace/terminal-splits";
 import { hasExpandedPane, navigationShown, transcriptShown } from "./workspace/navigation";
 import { filesTabId } from '../shared/files';
 import { sheetsTabId } from '../shared/sheets';
@@ -114,6 +115,7 @@ function initialShell(): ShellState {
           chatTerminals: Array.isArray(value.chatTerminals)
             ? value.chatTerminals.filter((tab): tab is ChatTerminalTab => Boolean(tab) && typeof tab === "object" && typeof tab.id === "string")
             : [],
+          terminalSplits: parseSplits(value.terminalSplits),
         };
       }
       return {
@@ -219,7 +221,8 @@ function Application() {
   const [restarting, setRestarting] = useState<Conversation | null>(null);
   const [resetting, setResetting] = useState<Conversation | null>(null);
   const [resetNotes, setResetNotes] = useState(true);
-  const [ending, setEnding] = useState<TerminalSession | null>(null);
+  /** The terminals a close would end: one tab, or a split tab's every terminal. */
+  const [ending, setEnding] = useState<TerminalSession[] | null>(null);
   const [launching, setLaunching] = useState(false);
   const [width, setWidth] = useState(window.innerWidth);
   const [quotes, setQuotes] = useState<Record<string, ChatQuote | null>>({});
@@ -697,10 +700,12 @@ function Application() {
    *  tab, in Tools otherwise. Showing it never creates or relaunches it. */
   const showTool = (tool: BrowserTab | TerminalSession) => {
     select(tool.conversationId);
-    const docked = (shell.workspaces[tool.conversationId]?.chatTerminals ?? []).some(tab => tab.id === tool.id);
+    // A terminal in a split is shown by its tab.
+    const tab = ("url" in tool ? undefined : leadOf(shell.workspaces[tool.conversationId]?.terminalSplits, tool.id)) ?? tool.id;
+    const docked = (shell.workspaces[tool.conversationId]?.chatTerminals ?? []).some(item => item.id === tab);
     updateUI(tool.conversationId, docked
-      ? { chatOpen: true, minimized: false, toolsExpanded: false, chatTerminal: tool.id, focus: "chat" }
-      : { toolsOpen: true, toolsMinimized: false, expanded: false, toolId: tool.id, focus: "tools" });
+      ? { chatOpen: true, minimized: false, toolsExpanded: false, chatTerminal: tab, focus: "chat" }
+      : { toolsOpen: true, toolsMinimized: false, expanded: false, toolId: tab, focus: "tools" });
   };
   /**
    * To where a request is answered (A1): its chat's Chat page, then the
@@ -822,6 +827,7 @@ function Application() {
     conversation: Conversation,
     kind: "browser" | "terminal",
     workerId?: WorkerId,
+    place?: "chat",
   ) => {
     if (launching) return;
     setLaunching(true);
@@ -842,12 +848,45 @@ function Application() {
             : { ...current, terminals: put(current.terminals, tool) }
           : current,
       );
-      updateUI(conversation.id, {
-        toolsOpen: true,
-        toolsMinimized: false,
-        expanded: false,
-        toolId: tool.id,
-        focus: "tools",
+      // Started from the chat's +, it is a chat tab from the start and never passes through Tools.
+      if (place === "chat" && !("url" in tool))
+        updateUI(conversation.id, (current) => ({
+          chatTerminals: [
+            ...(current.chatTerminals ?? []).filter((tab) => tab.id !== tool.id),
+            { id: tool.id, ...(tool.workerId ? { workerId: tool.workerId } : {}), ...(tool.session ? { session: tool.session } : {}) },
+          ],
+          chatTerminal: tool.id,
+          chatOpen: true,
+          minimized: false,
+          toolsExpanded: false,
+          focus: "chat",
+        }));
+      else
+        updateUI(conversation.id, {
+          toolsOpen: true,
+          toolsMinimized: false,
+          expanded: false,
+          toolId: tool.id,
+          focus: "tools",
+        });
+    } catch (reason) {
+      reportError(reason);
+    } finally {
+      setLaunching(false);
+    }
+  };
+  /** Another terminal in a tab, beside or below the one in use: a shell, never a CLI started unasked. */
+  const splitTerminal = async (conversation: Conversation, lead: string, target: string, dir: SplitDirection) => {
+    if (launching) return;
+    setLaunching(true);
+    setError(null);
+    try {
+      const session = await api.terminal.create(conversation.id);
+      setBoot((current) => current ? { ...current, terminals: put(current.terminals, session) } : current);
+      updateUI(conversation.id, (current) => {
+        const node = current.terminalSplits?.[lead] ?? lead;
+        if (!leaves(node).includes(target)) return {};
+        return { terminalSplits: { ...current.terminalSplits, [lead]: splitLeaf(node, target, session.id, dir) } };
       });
     } catch (reason) {
       reportError(reason);
@@ -855,14 +894,20 @@ function Application() {
       setLaunching(false);
     }
   };
-  const closeTool = async (tool: BrowserTab | TerminalSession) => {
+  const closeTool = async (tool: BrowserTab | TerminalSession, group: TerminalSession[] = []) => {
     if (closingTools.current.has(tool.id)) return;
     closingTools.current.add(tool.id);
     const cancel: Array<() => void> = [];
     try {
+      const ids = new Set([tool.id, ...group.map((session) => session.id)]);
+      const splits = shell.workspaces[tool.conversationId]?.terminalSplits;
+      const lead = "url" in tool ? undefined : leadOf(splits, tool.id);
+      // One pane of a split tab closes: the tab stays, with what is left in it.
+      const pane = lead !== undefined && leaves(splits![lead]).some((id) => !ids.has(id));
       const foreground = [
-        ...document.querySelectorAll<HTMLElement>(
-          `[data-tool-id="${CSS.escape(tool.id)}"],[data-tool-host="${CSS.escape(tool.id)}"]`,
+        ...document.querySelectorAll<HTMLElement>(pane
+          ? `[data-split-pane="${CSS.escape(tool.id)}"]`
+          : `[data-tool-id="${CSS.escape(tool.id)}"],[data-tool-host="${CSS.escape(tool.id)}"]`,
         ),
       ].filter((node) => !node.hidden);
       await Promise.all(
@@ -873,19 +918,45 @@ function Application() {
             }),
         ),
       );
+      // A chat tab being closed is not a tab that lost its terminal. Its row
+      // leaves `boot` at once while the chat pane lets go of it only after the
+      // animation, and in between relaunchChatTabs gave it a new CLI — which the
+      // late write then put out of the chat, into Tools (user, 26.11: "în loc să
+      // închidă de tot un tab de chat îl mută în dreapta în tools").
+      for (const id of ids) relaunched.current.add(id);
       if ("url" in tool) await api.browser.close(tool.id);
-      else await api.terminal.close(tool.id);
+      else await Promise.all([tool, ...group].map((session) => api.terminal.close(session.id)));
       setBoot((current) =>
         current
           ? {
               ...current,
-              browsers: current.browsers.filter((row) => row.id !== tool.id),
-              terminals: current.terminals.filter((row) => row.id !== tool.id),
+              browsers: current.browsers.filter((row) => !ids.has(row.id)),
+              terminals: current.terminals.filter((row) => !ids.has(row.id)),
             }
           : current,
       );
+      if (pane) {
+        // A closed tab's own terminal hands the tab to the next one in it, wherever the tab is.
+        updateUI(tool.conversationId, (current) => {
+          const { splits: next, renamed } = closeInSplits(current.terminalSplits, ids);
+          const to = renamed[tool.id];
+          if (!to) return { terminalSplits: next };
+          const heir = boot?.terminals.find((row) => row.id === to);
+          return {
+            terminalSplits: next,
+            chatTerminals: (current.chatTerminals ?? []).map((tab) => tab.id === tool.id
+              ? { id: to, ...(heir?.workerId ? { workerId: heir.workerId } : {}), ...(heir?.session ? { session: heir.session } : {}) }
+              : tab),
+            ...(current.chatTerminal === tool.id ? { chatTerminal: to } : {}),
+            ...(current.toolId === tool.id ? { toolId: to } : {}),
+          };
+        });
+        setEnding(null);
+        return;
+      }
       // A chat tab leaves the chat pane; what Tools shows is not its business.
       const inChat = (shell.workspaces[tool.conversationId]?.chatTerminals ?? []).map(tab => tab.id);
+      const inSplit = splitChildren(splits);
       const remaining = [
         ...(boot?.browsers ?? []),
         ...(boot?.terminals ?? []),
@@ -893,18 +964,20 @@ function Application() {
         ...(shell.workspaces[tool.conversationId]?.sheetsOpen ? [{ id: sheetsTabId(tool.conversationId), conversationId: tool.conversationId }] : []),
       ].filter(
         (row) =>
-          row.conversationId === tool.conversationId && row.id !== tool.id && !inChat.includes(row.id),
+          row.conversationId === tool.conversationId && !ids.has(row.id) && !inChat.includes(row.id) && !inSplit.has(row.id),
       );
       updateUI(tool.conversationId, inChat.includes(tool.id)
         ? current => ({
             chatTerminals: (current.chatTerminals ?? []).filter(tab => tab.id !== tool.id),
             ...(current.chatTerminal === tool.id ? { chatTerminal: null } : {}),
+            terminalSplits: closeInSplits(current.terminalSplits, ids).splits,
           })
-        : {
+        : current => ({
             toolId: ("url" in tool && tool.openerId
               ? remaining.find(row => row.id === tool.openerId)?.id : undefined) ?? remaining[0]?.id ?? null,
             ...(remaining.length ? {} : { toolsOpen: false, toolsMinimized: false, toolsExpanded: false }),
-          });
+            terminalSplits: closeInSplits(current.terminalSplits, ids).splits,
+          }));
       setEnding(null);
     } catch (reason) {
       reportError(reason);
@@ -1253,6 +1326,7 @@ function Application() {
                   shell.workspaces[conversation.id] ?? defaultWorkspacePrefs()
                 }
                 messages={messages[conversation.id] ?? []}
+                onMessages={(list) => setMessages((current) => ({ ...current, [conversation.id]: list }))}
                 jump={jump && jump.conversationId === conversation.id ? jump : null}
                 settings={boot.settings}
                 workers={boot.workers}
@@ -1271,14 +1345,15 @@ function Application() {
                   )
                 }
                 onConversationChange={changeConversation}
-                onLaunch={(kind, workerId) =>
-                  void launch(conversation, kind, workerId)
+                onLaunch={(kind, workerId, place) =>
+                  void launch(conversation, kind, workerId, place)
                 }
-                onCloseTool={(tool) => {
-                  if ("kind" in tool && tool.status === "running")
-                    setEnding(tool);
-                  else void closeTool(tool);
+                onCloseTool={(tool, group = []) => {
+                  const running = [tool, ...group].some((item) => "kind" in item && item.status === "running");
+                  if (running && !("url" in tool)) setEnding([tool, ...group]);
+                  else void closeTool(tool, group);
                 }}
+                onSplit={(lead, target, dir) => void splitTerminal(conversation, lead, target, dir)}
                 onBrowserChange={(tab) =>
                   setBoot((current) =>
                     current
@@ -1497,8 +1572,10 @@ function Application() {
         onClose={() => setEnding(null)}
       >
         <p>
-          Closing “{ending?.title}” ends its running process. To keep it
-          running, close the Tools panel instead.
+          {ending && ending.length > 1
+            ? `Closing “${ending[0].title}” ends the ${ending.length} terminals in it and their running processes.`
+            : `Closing “${ending?.[0]?.title ?? ""}” ends its running process.`}{" "}
+          To keep it running, close the Tools panel instead.
         </p>
         <ErrorNote error={error} />
         <div className="dialog-actions">
@@ -1507,7 +1584,7 @@ function Application() {
           </button>
           <button
             className="pill danger-button"
-            onClick={() => ending && void closeTool(ending)}
+            onClick={() => ending && void closeTool(ending[0], ending.slice(1))}
           >
             End session
           </button>

@@ -33,6 +33,7 @@ export function TerminalPane({
   placement,
   currentFolder,
   onOpenInCurrentFolder,
+  focusOnShow = true,
 }: {
   session: TerminalSession;
   visible: boolean;
@@ -40,6 +41,8 @@ export function TerminalPane({
   placement?: "tools" | "chat";
   currentFolder?: string | null;
   onOpenInCurrentFolder?: () => void;
+  /** Whether being shown gives it the keys: in a split tab only the terminal in use takes them. */
+  focusOnShow?: boolean;
 }): JSX.Element {
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -52,6 +55,8 @@ export function TerminalPane({
   const inputReady = useRef(false);
   const active = useRef(visible);
   active.current = visible;
+  const takesKeys = useRef(focusOnShow);
+  takesKeys.current = focusOnShow;
   const mounted = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
   const folderChanged = currentFolder !== undefined && currentFolder !== session.cwd;
 
@@ -119,8 +124,8 @@ export function TerminalPane({
     if (!visible || !host || !mounted.current) return;
     if (host.clientWidth > 0 && host.clientHeight > 0)
       mounted.current.fit.fit();
-    mounted.current.terminal.focus();
-  }, [visible, host, placement]);
+    if (takesKeys.current) mounted.current.terminal.focus();
+  }, [visible, host, placement, focusOnShow]);
 
   useEffect(() => {
     if (!host) return;
@@ -280,7 +285,7 @@ export function TerminalPane({
       });
       cleanup.push(() => themeObserver.disconnect());
       fitVisible();
-      if (active.current) xterm.focus();
+      if (active.current && takesKeys.current) xterm.focus();
     };
     void start().catch((error: unknown) => {
       if (!stopped)
@@ -353,9 +358,7 @@ export function TerminalPane({
           {!exited && (
             <span className="hello-terminal-tasks" title={session.notebookContext === true
               ? 'Connected to this chat in Hello: its notebook (the Runbooks, Tasks and Plans sections and chapters that are on; Runbooks read-only, Tasks and Plans read and status updates) and its browser tabs, each as far as its Agent control allows.'
-              : session.workerId === 'aider'
-                ? 'This Aider version does not support the Hello connection.'
-                : 'Open a new CLI from Hello to connect it to this chat’s notebook and browser.'}>
+              : 'Open a new CLI from Hello to connect it to this chat’s notebook and browser.'}>
               {session.notebookContext === true ? 'Hello connected' : 'Not connected to Hello'}
             </span>
           )}

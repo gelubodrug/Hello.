@@ -35,6 +35,8 @@ export interface FileDocument {
   modifiedAt: number;
   content: string | null;
   reason?: string;
+  /** The text was converted from a document format (Word, RTF): formatting is not in it. */
+  converted?: boolean;
 }
 export interface FilesTab { id: string; conversationId: string; kind: 'files'; title: string; }
 export const filesTabId = (conversationId: string) => `files-${conversationId}`;

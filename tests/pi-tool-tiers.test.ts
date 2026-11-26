@@ -106,7 +106,7 @@ type Handler = (event: unknown, ctx?: unknown) => Promise<unknown>;
 interface Registered { name: string; description: string; parameters: unknown; execute: (id: string, params: unknown) => Promise<{ content: Array<{ text: string }>; details: unknown }> }
 let tools: ToolDefinition[];
 let catalog: ToolCatalog | undefined;
-let pi: { api: ExtensionAPI; handlers: Map<string, Handler>; registered: Map<string, Registered>; active: string[]; pluginTools: Array<{ name: string; description: string; sourceInfo: { path: string } }> };
+let pi: { api: ExtensionAPI; handlers: Map<string, Handler>; registered: Map<string, Registered>; active: string[]; sent: Array<{ customType: string; content: string; details: unknown }>; pluginTools: Array<{ name: string; description: string; sourceInfo: { path: string } }> };
 
 beforeEach(() => {
   tools = HELLO.map(name => tool(name));
@@ -123,7 +123,7 @@ beforeEach(() => {
   }));
   const handlers = new Map<string, Handler>();
   const registered = new Map<string, Registered>();
-  pi = { handlers, registered, active: [], pluginTools: [], api: undefined as unknown as ExtensionAPI };
+  pi = { handlers, registered, active: [], sent: [], pluginTools: [], api: undefined as unknown as ExtensionAPI };
   pi.api = {
     on: (event: string, handler: Handler) => { handlers.set(event, handler); },
     registerTool: (definition: Registered) => {
@@ -133,6 +133,7 @@ beforeEach(() => {
     },
     getActiveTools: () => [...pi.active],
     setActiveTools: (names: string[]) => { pi.active = [...names]; },
+    sendMessage: (message: { customType: string; content: string; details: unknown }) => { pi.sent.push(message); },
     // Like Pi: action methods throw until every extension has loaded.
     getAllTools: () => {
       if (!pi.handlers.has('session_start') || !started) throw new Error('Extension runtime not initialized. Action methods cannot be called during extension loading.');
@@ -259,7 +260,9 @@ describe('tools in a running chat', () => {
     expect((await find({ tool: 'TOOL_WORKER_SAY' })).details).toEqual({ loaded: ['workers'] });
   });
 
-  it('unloads what a compaction summarized away, keeps what it kept, and says so', async () => {
+  // User, 26.11: unloaded by a compaction halfway through an eBay search, the
+  // browser came back as "Tool browser_read not found" on the very next call.
+  it('keeps the groups a compaction summarized away loaded, and sends their rules again once', async () => {
     let branch: unknown[] = [];
     const ctx = { sessionManager: { getBranch: () => branch } };
     await start(ctx);
@@ -271,10 +274,14 @@ describe('tools in a running chat', () => {
       { id: 'c', type: 'compaction', firstKeptEntryId: 'b' },
     ];
     await pi.handlers.get('session_compact')!({ type: 'session_compact' }, ctx);
-    expect(pi.active).toEqual(expect.arrayContaining(['worker_list', 'worker_say']));
-    expect(pi.active).not.toContain('browser_open');
+    expect(pi.active).toEqual(expect.arrayContaining(['worker_list', 'worker_say', 'browser_open']));
+    // Only the group whose rules were summarized away is sent again.
+    expect(pi.sent).toHaveLength(1);
+    expect(pi.sent[0]).toMatchObject({ customType: TOOLS_LOADED, details: { loaded: ['browser'] } });
+    expect(pi.sent[0].content).toMatch(/^The conversation was just summarised\. Hello kept the tools you were using loaded/);
+    expect(pi.sent[0].content).toContain('(browser) is loaded.');
     const result = await pi.handlers.get('context')!({ type: 'context', messages: [{ role: 'user', content: 'x', timestamp: 1 }] }) as { messages: Array<{ content: string }> };
-    expect(result.messages[0].content).toContain('Compaction summarized away the rules of these tool groups, so they were unloaded: browser.');
+    expect(result.messages[0].content).not.toContain('unloaded');
   });
 
   it('loads what main says a reply needs before its first step, with the manual, once', async () => {
@@ -304,19 +311,22 @@ describe('tools in a running chat', () => {
     expect(shown.messages.map(message => message.customType ?? message.role)).toEqual(['user', 'assistant', TOOLS_LOADED, 'user', 'assistant']);
     expect(shown.messages[2].content).toBe('rules');
     expect(shown.messages[3].content).toBe('pivot please');
-    // A restarted Pi reads the note back like a tools_find result; a compaction that summarized it away unloads the group, and the next reply loads it again.
+    // A restarted Pi reads the note back like a tools_find result; a compaction that summarized it away keeps the group, with its rules sent again.
     branch = [{ id: 'a', type: 'custom_message', customType: TOOLS_LOADED, content: 'rules', details: { loaded: ['sheets', 'coding'] } }];
     await pi.handlers.get('session_compact')!({ type: 'session_compact' }, ctx);
     expect(pi.active).toContain('sheet_list');
     branch = [...branch, { id: 'b', type: 'message', message: { role: 'user', content: 'z' } }, { id: 'c', type: 'compaction', firstKeptEntryId: 'b' }];
     await pi.handlers.get('session_compact')!({ type: 'session_compact' }, ctx);
-    expect(pi.active).not.toContain('sheet_list');
-    expect(await pi.handlers.get('before_agent_start')!({ type: 'before_agent_start', prompt: 'again' })).toMatchObject({ message: { details: { loaded: ['sheets'] } } });
+    expect(pi.active).toContain('sheet_list');
+    expect(pi.sent.at(-1)).toMatchObject({ customType: TOOLS_LOADED, details: { loaded: expect.arrayContaining(['sheets']) } });
+    expect(await pi.handlers.get('before_agent_start')!({ type: 'before_agent_start', prompt: 'again' })).toBeUndefined();
     // Nothing asked for, nothing loaded.
     catalog = { ...catalogFor(tools), preload: [] };
     await pi.handlers.get('session_compact')!({ type: 'session_compact' }, { sessionManager: { getBranch: () => [] } });
+    const notes = pi.sent.length;
     expect(await pi.handlers.get('before_agent_start')!({ type: 'before_agent_start', prompt: 'hello' })).toBeUndefined();
-    expect(pi.active).not.toContain('sheet_list');
+    // What stays is what the chat was using, kept by the compaction; the empty preload added nothing.
+    expect(pi.sent).toHaveLength(notes);
   });
 
   it('reads spreadsheet work from what a request names, and from nothing vaguer', () => {
@@ -343,7 +353,8 @@ describe('the browser, loaded by Hello when the work is there', () => {
   it('reads browser work from an address, a site, or the thing by its name', async () => {
     const { browserWork, stoppedByBots } = await import('../src/main/chat/tool-groups');
     for (const text of ['deschide https://example.org/docs', 'ce scrie pe emag.ro despre asta', 'intră pe www.anaf.ro', 'uită-te în tabul deschis', 'citește site-ul lor',
-      'open the link and summarise it', 'fă-mi o pagină html cu graficul', 'check news.ycombinator.com', 'folosește browserul'])
+      'open the link and summarise it', 'fă-mi o pagină html cu graficul', 'check news.ycombinator.com', 'folosește browserul',
+      'deschide reddit și vezi dacă am vreun comment nou', 'se loghează automat', 'check my account notifications'])
       expect([text, browserWork(text)]).toEqual([text, true]);
     for (const text of ['fă un tabel cu vânzările', 'citește notes.md și logo.ai', 'trimite la ana@firma.ro', 'ce zici de planul ăsta?', 'rulează scripts/build.io.sh', 'comprimă plan.pdf', 'src/app.dev.ts are o eroare'])
       expect([text, browserWork(text)]).toEqual([text, false]);

@@ -392,6 +392,7 @@ function MessageRow({
   streaming,
   onRetry,
   onReuse,
+  onRetract,
   onAttachSelection,
   onAttachPictures,
   sources,
@@ -401,6 +402,8 @@ function MessageRow({
   streaming: boolean;
   onRetry: () => void;
   onReuse: () => void;
+  /** Present on the last message sent: takes it, and what answered it, out of the chat and the model's memory. */
+  onRetract?: () => Promise<void>;
   onAttachSelection: (text: string) => void;
   /** An annotated picture, attached to this chat: into the message being written. */
   onAttachPictures?: (attachments: ChatAttachment[]) => void;
@@ -409,6 +412,14 @@ function MessageRow({
   const [copied, setCopied] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
+  // Taking a message back cannot be undone, so it is asked once, in place, and
+  // the question goes away by itself (user, 26.11: "ultimul send… să îl pot retrage").
+  const [retracting, setRetracting] = useState<'ask' | 'busy' | null>(null);
+  useEffect(() => {
+    if (retracting !== 'ask') return;
+    const timer = setTimeout(() => setRetracting(null), 5000);
+    return () => clearTimeout(timer);
+  }, [retracting]);
   const [kept, setKept] = useState<"saving" | "saved" | null>(null);
   const article = useRef<HTMLElement>(null);
   // Copying and keeping are a round trip to main: past a second, the button
@@ -521,6 +532,17 @@ function MessageRow({
             <button className="text-button" onClick={onReuse}>
               Use as draft
             </button>
+            {onRetract && (retracting === null ? (
+              <button type="button" className="text-button message-take-back" aria-label="Take back this message"
+                title="Take it out of the chat and out of the model's memory" onClick={() => setRetracting('ask')}>
+                <X size={13} aria-hidden /> Take back
+              </button>
+            ) : (
+              <button className="text-button" disabled={retracting === 'busy'} title="It leaves the chat and the model's memory, with what answered it"
+                onClick={() => { setRetracting('busy'); void onRetract().finally(() => setRetracting(null)); }}>
+                {retracting === 'busy' ? 'Taking back…' : 'Take it back, with its reply'}
+              </button>
+            ))}
           </div>
         </>
       ) : (
@@ -606,6 +628,7 @@ function MessageRow({
 export function ConversationView({
   conversation,
   messages,
+  onMessages,
   settings,
   workers,
   onSettingsChange,
@@ -620,6 +643,8 @@ export function ConversationView({
 }: {
   conversation: Conversation;
   messages: Message[];
+  /** The chat's messages, replaced: the last one sent was taken back. */
+  onMessages?: (messages: Message[]) => void;
   settings: AppSettings;
   workers: WorkerInfo[];
   onSettingsChange: (settings: AppSettings) => void;
@@ -639,6 +664,8 @@ export function ConversationView({
   const draftKey = `hello.draft.${conversation.id}`;
   // Where the model's memory begins after a restart: before the first message
   // from then on, or after the last one when nothing has been said since.
+  // The last message sent is the one that can be taken back.
+  const lastSentId = [...messages].reverse().find(message => message.role === 'user')?.id;
   const restartIndex = conversation.freshFrom === undefined ? -1
     : (() => { const at = messages.findIndex(message => message.createdAt >= conversation.freshFrom!); return at < 0 ? messages.length : at; })();
   const [draft, setDraftState] = useState(() => {
@@ -1171,6 +1198,24 @@ export function ConversationView({
     return reading;
   };
   useEffect(() => { void loadModels(); }, [conversation.id]);
+  // A selection made in Settings is made for the chat on screen too, and the
+  // picker reads its models again (user, 26.11: "nu se sincronizează settings
+  // cu pickerul de chat" — Settings ran oMLX's Inkling on :8000 while the
+  // picker still offered the models a server before it had on that port, and
+  // the chat kept one oMLX does not serve). Other chats keep their own model.
+  const selection = `${endpointIdentity(settings.endpointUrl)} ${settings.model}`;
+  const lastSelection = useRef(selection);
+  useEffect(() => {
+    if (lastSelection.current === selection) return;
+    lastSelection.current = selection;
+    void loadModels(true);
+    const mine = conversation.model;
+    if (!settings.model.trim()) return;
+    if (mine && endpointIdentity(mine.endpointUrl) === endpointIdentity(settings.endpointUrl) && mine.id === settings.model) return;
+    void api.conversations.update(conversation.id, { model: { endpointUrl: settings.endpointUrl, id: settings.model } })
+      .then(onFolderChange)
+      .catch(reportError);
+  }, [selection]);
   // Every model the chat can reach, side by side: kept connections and the
   // servers running on this Mac. A preset that was kept adds its models, it
   // does not replace the others' (user, 14.09). With several connections their
@@ -1342,6 +1387,8 @@ export function ConversationView({
                 onRetry={() => {
                   void api.chat.retry(conversation.id).catch(reportError);
                 }}
+                onRetract={message.id === lastSentId && api.conversations.retract && onMessages
+                  ? () => api.conversations.retract!(conversation.id).then(onMessages).catch(reportError) : undefined}
                 onReuse={() => {
                   setDraft((current) =>
                     current

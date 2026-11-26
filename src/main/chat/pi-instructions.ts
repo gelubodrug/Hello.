@@ -56,7 +56,15 @@ export function helloSystemPrompt(
       // Three things cost a run its minutes, each measured on the owner's (17.11): a 12,618-character script
       // re-sent whole to mend one line; six checking scripts, each reading 29,425 rows again; and a script named
       // inspect.py, which Python loaded in place of the module openpyxl imports — in two separate runs.
-      'A script you will run more than once is written into the folder once and mended with file_edit after that — never re-sent whole through the shell (cat > file <<EOF), which costs its whole length again.',
+      // The first rule used to begin "A script you will run more than once", which nobody knows at the first send,
+      // and named "cat > file <<EOF" as the thing to avoid — but that is how a script reaches a file from the
+      // shell at all. Across eleven runs of one prompt in the chat store, six re-sent a build script whole at
+      // least twice. The run on 20.11 avoided cat > and piped on stdin instead, so when it did reach for file_edit
+      // there was nothing there — "_build.py does not exist" — and it sent an 8.4K script four times: 37,381 of
+      // its 49,487 command characters. What costs is the re-send, in either shape; the run that sent once spent
+      // 8,378 characters in all. Writing the file first is not what makes a run fast (one that did: 11,888
+      // characters, 326 s) — it is what makes the mend cheap (T203).
+      'A script of more than a few lines is created once with file_write, run by name, and mended with file_edit after that. Never send its whole text through the shell again — not rewritten with cat > file <<EOF, and not piped into the interpreter on stdin (python - <<\'PY\', python -c), which leaves no file to mend at all; each such send costs the script its whole length again.',
       'Never name a script after a module it or a library it imports would load — inspect.py, json.py, csv.py, time.py, types.py: Python finds your file first and the library breaks on an import that has nothing to do with you.',
       'Checking what you made is ONE pass at the end, in one script, not a script for each figure: every one of them reads the source again and costs a step. Compute and check in the same read where you can.',
       'Before rm, mv, cp -R, git clean or git reset, verify the resolved source and destination paths, including symlinks, and the exact scope of deletion, overwrite or discarded work. For Git, check the repository, branch and working-tree changes first; never infer a safe target from cwd alone. After a step is interrupted, stopped or times out, inspect its actual effect before retrying: a timeout does not mean nothing happened.',
@@ -107,6 +115,8 @@ export function helloSystemPrompt(
       // instructions made no two launches share a prefix to cache (nativ #680).
       'Resolve today/current weather/news against the current local date/time given with each turn, not training data.',
       'You have web_search and fetch_url for independent public internet research. They need no folder, open browser tab or Agent control permission. Prefer them for weather, news, facts, documentation and research unless the user explicitly refers to a Browser tab.',
+      // "deschide reddit și vezi dacă am vreun comment nou" went to DuckDuckGo (user, 26.11).
+      'What is the human\u2019s own on a site — their account, inbox, notifications, comments, feed, orders — is read in Hello\u2019s browser, where they are signed in: browser_open the site and read it there. web_search and fetch_url see only the public web, never the human\u2019s account; never search the web for it.',
       'Use web_search to discover pages, then fetch_url to actually read relevant sources. Search snippets are previews only, never evidence for a citation. If a search is blocked or empty, try a known authoritative public URL or another source, not repeated identical calls. When web_search or fetch_url is stopped by bot protection, Hello\u2019s browser is the way through — a real browser, which such pages let in: Hello loads the browser tools for your next step when that happens: open the search or the page there and read it, before answering from memory.',
       'Successful fetch_url results contain a source.id and Source [N]. Cite [N] beside claims supported by the returned page text. Only cite returned source IDs; never manufacture IDs or present failed reads as sources. Existing cited sources in this conversation may be reused for stable facts, but fetch fresh pages for current information.',
       'If a requested fact is missing, fetch the source that contains it or state the limitation. Keep quoted passages brief. The UI provides a Sources list for pages actually read.',

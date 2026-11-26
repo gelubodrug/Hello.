@@ -7,6 +7,11 @@ const id = (value: unknown, label = 'ID'): string => {
   if (typeof value !== 'string' || !value.trim() || value.length > 200) throw new Error(`Invalid ${label}.`);
   return value;
 };
+/** A path inside the chat's folder. Longer than an id, and main resolves it. */
+const filePath = (value: unknown): string => {
+  if (typeof value !== 'string' || !value.trim() || value.length > 8192) throw new Error('Invalid path.');
+  return value;
+};
 const input = (value: unknown): SheetValue => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value;
   throw new Error('Invalid cell value.');
@@ -30,6 +35,8 @@ export function registerSheetsIPC(window: BrowserWindow, books: Workbooks, folde
   };
   handle('list', conversationId => books.list(id(conversationId)));
   handle('snapshot', (conversationId, workbook) => books.snapshot(id(conversationId), id(workbook, 'workbook')));
+  // Looking at a workbook file of the folder. It opens nothing in the chat, so the model learns nothing from it.
+  handle('preview', (conversationId, path) => books.preview(id(conversationId), filePath(path)));
   handle('create', (conversationId, title) => books.create(id(conversationId), typeof title === 'string' ? title : 'Workbook'));
   handle('open', async conversationId => {
     const chat = id(conversationId);

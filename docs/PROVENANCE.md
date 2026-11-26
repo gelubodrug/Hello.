@@ -513,3 +513,39 @@ with openpyxl) that makes a real bar chart, a merged title and a frozen pane
 with openpyxl 3.1.5 on Python 3.15 and checks that Hello reads the result,
 computes it, refuses its own writer and exports the chart. The in-app first
 run — building the environment with pip over the network — was not run.
+
+## Unclutter — 2026-11-26
+
+At the owner's request ("implementeaza acest utilitar unclutter … sa foloseasca
+openjev"), kitze/unclutter (MIT, © 2026 Kitze, commit `9115ce4`) was read from
+GitHub into a scratch folder. Its MIT notice travels with the port as
+`src/main/unclutter/LICENSE.unclutter`. Ported into `src/main/unclutter/`:
+
+- `page.ts` ← `lib/dom.ts`, `lib/page-context.ts` and the loop of
+  `entrypoints/cleaner.content.ts`: candidate collection, protection, selector
+  shapes, redaction, collapse of emptied wrappers, the reversible cleaner and
+  scroll-lock release are the original's logic. Adapted: one self-contained
+  function injected into an isolated world instead of a WXT content script;
+  main drives it (`context`, `apply`, `count`, `snapshot`, `restore`) because a
+  guest has no channel back; a random token replaces `crypto.randomUUID`, which
+  a plain-http page lacks; timers are the page window's.
+  Added (26.11, zf.ro): links and buttons that float over the page (fixed or
+  sticky) are candidates too, and a floating block's `position` says its size
+  and screen corner (`fixed 70x70 bottom-left`), so a bell with no words is
+  still told apart; analysis version 3.
+- `model.ts` ← `lib/model.ts` and `lib/jev.ts`: categories, the question's
+  instructions and criteria, the 0.9 cutoff and the profile shape. Adapted:
+  zod replaced by explicit checks (no new dependency); requests go to OpenJev
+  in batches of six whose state holds only the batch, not one request over the
+  whole page; no hosted provider, key or gateway.
+- Not ported: the popup, the badge, the background worker and its storage, the
+  hosted Vercel/TypeSafe providers.
+- Tests: `tests/unclutter-page.test.ts` ports `tests/core.test.ts` and
+  `tests/v2.test.ts` case for case.
+
+OpenJev (huggingface.co/openjev/openjev; weights CC BY-NC 4.0, helper Apache
+2.0) is run, not copied: `openjev.ts` takes the pinned helper hashes, the
+calibration and the launch arguments from the model card, and runs a helper
+environment that already exists — `openjev/` in Hello's data folder holds it or
+links to it — without writing to it.
+

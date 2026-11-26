@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -465,7 +466,7 @@ describe("main terminal service", () => {
     expect(f.spawn).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined, "aider"] as const)(
+  it.each([undefined] as const)(
     "does not open a notebook bridge for %s without a supported passive loader",
     async (workerId) => {
       const f = fixture(true);

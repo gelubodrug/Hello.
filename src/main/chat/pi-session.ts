@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { access, link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { contextBudget } from '../../shared/context-budget';
 import type { AppSettings } from '../../shared/types';
 import { CHILD_PLATFORM_KEYS, shellEnvironment } from '../shell-env';
 import { normalizeEndpoint } from '../data/store';
@@ -136,29 +137,15 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
   await mkdir(cwd, { recursive: true, mode: 0o700 });
   const sessionFile = join(root, 'session.jsonl');
   await seedPiSession(sessionFile, cwd, options.history);
-  // What the model holds, and what the runtime is told it holds. Pi decides
-  // when to compact from its own characters/4 estimate; when the provider's
-  // reported usage shows that estimate ran low, main hands it a smaller number
-  // rather than arguing with it. Never below the profile's own minimum.
+  // What the runtime is told the model holds, and when it summarises: Pi's own
+  // defaults over the window the model publishes, as its CLI runs (user, 26.11:
+  // "1:1 cu cli-ul"). One arithmetic, in src/shared/context-budget.ts, because
+  // the meter under the composer draws the same numbers and a second copy of
+  // them drifts. The output budget is what the person saved, unless it would
+  // hold back more of the window than an answer may: a chat that answers
+  // shorter beats one that refuses to start. The setting is never rewritten.
   const published = settings.contextWindow ?? 32768;
-  const contextWindow = Math.max(20480, Math.floor(published * (settings.contextScale ?? 1)));
-  // The output budget is what the person saved, unless the window main hands
-  // the runtime is now too small for it: a learned scale shrinks the window
-  // behind their back, and a chat that answers shorter beats one that refuses
-  // to start (nativ#684). The setting itself is never rewritten. 8,192 = Pi's
-  // 4,096 provider-side margin plus the 4,096 the profile needs to work in.
-  const maxTokens = Math.min(settings.maxOutputTokens ?? 4096, contextWindow - 8192);
-  // Pi also keeps a 4,096-token provider-side safety margin. Preserve its
-  // native 16k reserve, increasing it for larger configured output budgets.
-  //
-  // And keep a proportion of a large window free, because Pi decides when to
-  // compact from its own estimate of characters/4, which undercounts code and
-  // non-Latin text badly: measured against this app's traffic it read 28.3k for
-  // 41,349 real tokens and 28.7k for 56,658 — low by 1.5 to 2 times. On a
-  // 512,000-token window a flat 16k reserve means it would compact at an
-  // estimated 475k, which is past 700k in fact, and the turn dies at the
-  // provider instead. A small window keeps its old behaviour untouched.
-  const reserveTokens = Math.max(16384, maxTokens + 4096, Math.floor(contextWindow * 0.45));
+  const { window: contextWindow, maxTokens, reserveTokens, keepRecentTokens } = contextBudget(settings);
   if (!Number.isInteger(contextWindow) || !Number.isInteger(maxTokens) ||
       maxTokens < 512 || contextWindow - reserveTokens < 4096)
     throw new Error('This context/output combination leaves too little room for Pi and the Hello tools. Increase the server context and match it in Settings, or lower the output budget.');
@@ -235,8 +222,7 @@ export async function preparePiLaunch(options: PiLaunchConfiguration) {
     packages: [], extensions: [], skills: [], prompts: [],
     // `/skill:name` expansion for skills the human activated in this chat.
     enableSkillCommands: true,
-    compaction: { enabled: true, reserveTokens,
-      keepRecentTokens: Math.min(20000, Math.floor(contextWindow / 4), Math.floor((contextWindow - reserveTokens) / 2)) },
+    compaction: { enabled: true, reserveTokens, keepRecentTokens },
     retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000,
       provider: { maxRetries: 0, timeoutMs: options.requestTimeoutMs, maxRetryDelayMs: 60000 } },
     httpIdleTimeoutMs: options.requestTimeoutMs,

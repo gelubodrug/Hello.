@@ -194,7 +194,12 @@ describe('what a chat is told about its tools', () => {
     // line, six checking scripts each re-reading 29,425 rows, and a script named inspect.py that Python loaded
     // in place of the module openpyxl imports — the same name chosen in two separate runs.
     expect(one).toContain('mended with file_edit after that');
-    expect(one).toContain('never re-sent whole through the shell');
+    // Unconditional, and both re-send shapes named: forbidding only "cat > file <<EOF" sent the model to
+    // python - <<'PY', where its own file_edit found nothing to mend (a run, 20.11 — T203).
+    expect(one).toContain('created once with file_write, run by name');
+    expect(one).toContain('not rewritten with cat > file <<EOF');
+    expect(one).toContain('not piped into the interpreter on stdin');
+    expect(one).not.toMatch(/A script you will run more than once/);
     expect(one).toContain('Never name a script after a module');
     expect(one).toContain('inspect.py, json.py, csv.py, time.py, types.py');
     expect(one).toContain('ONE pass at the end, in one script');

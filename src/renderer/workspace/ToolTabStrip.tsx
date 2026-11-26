@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeftToLine, Bot, FolderOpen, Globe, Sheet, Terminal, X } from 'lucide-react';
+import { ArrowLeftToLine, Bot, Columns2, FolderOpen, Globe, Rows2, Sheet, Terminal, X } from 'lucide-react';
 import type { BrowserTab, TerminalSession } from '../../shared/types';
 import type { FilesTab } from '../../shared/files';
 import type { SheetsTab } from '../../shared/sheets';
@@ -9,10 +9,12 @@ type Tool = BrowserTab | TerminalSession | FilesTab | SheetsTab;
 
 /** Tabs share the available width, down to one icon each. Only once the icon
  * budget is exhausted does the strip scroll; pane actions never shrink. */
-export function ToolTabStrip({ tools, selectedId, onSelect, onClose, onDock, onReorder }: {
+export function ToolTabStrip({ tools, selectedId, onSelect, onClose, onDock, onSplit, onReorder }: {
   tools: Tool[]; selectedId?: string; onSelect: (id: string) => void; onClose: (tool: Tool) => void;
   /** Moves a terminal into the chat pane, as a page beside Chat and Notebook. */
   onDock?: (session: TerminalSession) => void;
+  /** Another terminal in this tab, beside (row) or below (column) the one in use. */
+  onSplit?: (session: TerminalSession, dir: 'row' | 'column') => void;
   onReorder?: (ids: string[]) => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
@@ -116,6 +118,10 @@ export function ToolTabStrip({ tools, selectedId, onSelect, onClose, onDock, onR
       items={menuTool ? [
         // A CLI as the chat (user, 30.09): the same session, moved to the left.
         ...(onDock && menuTerminal ? [{ id: 'dock', label: 'Set as chat tab', icon: ArrowLeftToLine, action: () => onDock(menuTerminal) }] : []),
+        ...(onSplit && menuTerminal ? [
+          { id: 'split-right', label: 'Split right', icon: Columns2, action: () => onSplit(menuTerminal, 'row') },
+          { id: 'split-down', label: 'Split down', icon: Rows2, action: () => onSplit(menuTerminal, 'column') },
+        ] : []),
         { id: 'close', label: 'Close tab', icon: X, action: () => onClose(menuTool) },
       ] : []}
       onClose={() => setMenu(null)} />

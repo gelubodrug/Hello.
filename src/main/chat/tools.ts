@@ -32,7 +32,7 @@ import { toolOutputText, type ToolImage, type ToolOutput } from './tool-output';
 import { commandTimeout, runApprovedCommand } from './command-run';
 import { readFileRange } from './file-read';
 import type { ModelFileChange } from '../../shared/files';
-import { CONTENT_SEARCH_LIMITS, WorkspaceFiles } from '../files/service';
+import { CONTENT_SEARCH_LIMITS, secretPath, WorkspaceFiles } from '../files/service';
 import { executeSheetTool, sheetToolDefinitions, SHEET_TOOLS } from '../sheets/tools';
 import type { Workbooks } from '../sheets/workbooks';
 import { SheetPython, sheetPythonRoot } from '../sheets/python';
@@ -757,20 +757,6 @@ function kind(input: Record<string, unknown>): NotebookKind {
 function contained(root: string, target: string): boolean {
   return target === root || target.startsWith(root + path.sep);
 }
-function secretPath(file: string): boolean {
-  return (
-    file
-      .split(path.sep)
-      .some(
-        (part) => /^\.env(?:\.|$)/i.test(part) && !/\.example$/i.test(part),
-      ) ||
-    /(?:^|\/)(?:id_rsa|id_ed25519|credentials(?:\.json)?|secrets(?:\.json)?)$/i.test(
-      file,
-    ) ||
-    /\.(?:pem|p12|pfx|key)$/i.test(file)
-  );
-}
-
 export async function scopedPath(
   folder: string | null,
   requested: string,

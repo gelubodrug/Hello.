@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectCliWorkers,
   prepareCliWorkerLaunch,
+  saettaPack,
   WORKER_CATALOG,
   type DetectedWorker,
 } from "../src/main/terminal/cli-workers";
@@ -134,11 +135,11 @@ describe("reused CLI launch boundary", () => {
         apiKey: "{env:HELLO_CLI_WORKER_API_KEY}",
       },
     });
-    expect(launch.args).toEqual([
-      "--model",
-      `hello-active/${spec.endpoint.model}`,
-      "--auto",
-    ]);
+    // The model is named in the config, never on the command line: OpenCode's root command
+    // has no --model, and v2.2.5 exits on an unrecognized flag (user, 20.11). --standalone keeps
+    // that config this pane's own, instead of one background service holding another chat's.
+    expect(config.model).toBe(`hello-active/${spec.endpoint.model}`);
+    expect(launch.args).toEqual(["--standalone", "--auto"]);
     expect(launch.env.OPENCODE_CONFIG_CONTENT).not.toContain(
       "test-only-sentinel",
     );
@@ -156,7 +157,7 @@ describe("reused CLI launch boundary", () => {
       "kimi",
       "opencode",
       "pi",
-      "aider",
+      "saetta",
     ]);
     expect(
       workers.filter((worker) => worker.installed).map((worker) => worker.id),
@@ -169,10 +170,10 @@ const NEVER_ASK: Record<string, string[]> = {
   codex: ["--dangerously-bypass-approvals-and-sandbox"],
   kimi: ["--auto"],
   opencode: ["--auto"],
-  aider: ["--yes-always"],
-  // qwen-code 0.20 moved the mode into settings.json; Pi has no such flag.
+  // qwen-code 0.20 moved the mode into settings.json; Pi and its port Saetta have no such flag.
   qwen: [],
   pi: [],
+  saetta: [],
 };
 
   it.each(WORKER_CATALOG)(
@@ -187,7 +188,7 @@ const NEVER_ASK: Record<string, string[]> = {
       // (user, 20.09). Where a client has none — Pi — it carries none.
       expect(launch.args).toEqual(expect.arrayContaining(NEVER_ASK[worker.id]));
       expect(launch.args.join(" ")).not.toContain("test-only-sentinel");
-      if (worker.id === "pi")
+      if (worker.id === "pi" || worker.id === "saetta")
         expect(launch.args.join(" ")).not.toMatch(/dangerously|yolo|--auto\b|--yes-always/);
       expect(launch.env).not.toHaveProperty("OPENCODE_PERMISSION");
       if (worker.usesActiveModel) {
@@ -214,8 +215,10 @@ const NEVER_ASK: Record<string, string[]> = {
         }
       } else {
         // Claude and Codex keep their own credentials; the only thing Hello
-        // adds to their argv is the never-ask flag.
-        expect(launch.args).toEqual(NEVER_ASK[worker.id]);
+        // adds to their argv is the never-ask flag. Saetta runs a pack on this Mac.
+        expect(launch.args).toEqual(worker.id === "saetta"
+          ? ["code", "--pack", saettaPack()]
+          : NEVER_ASK[worker.id]);
         expect(Object.values(launch.env)).not.toContain("test-only-sentinel");
       }
     },
@@ -260,7 +263,7 @@ const NEVER_ASK: Record<string, string[]> = {
       expect(env).not.toHaveProperty(key);
   });
 
-  it.each(WORKER_CATALOG.filter((worker) => worker.id !== "aider"))(
+  it.each(WORKER_CATALOG)(
     "gives $id passive notebook context without submitting work or splitting special-character paths",
     (worker) => {
       const spec = input(worker);
@@ -323,7 +326,9 @@ const NEVER_ASK: Record<string, string[]> = {
           break;
         }
         case "opencode": {
-          expect(launch.args).toEqual(["--model", `hello-active/${spec.endpoint.model}`, "--auto"]);
+          // No --model on the root command: v2.2.5 refuses to start on it, and the config names the model.
+          // --standalone so the pane runs its own server: a shared one holds whichever config started it.
+          expect(launch.args).toEqual(["--standalone", "--auto"]);
           const config = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT);
           expect(config.instructions).toEqual([context.instructionsPath]);
           expect(config.provider["hello-active"].options.apiKey).toBe("{env:HELLO_CLI_WORKER_API_KEY}");
@@ -337,6 +342,13 @@ const NEVER_ASK: Record<string, string[]> = {
             "-e", context.piExtension!.path,
           ]);
           expect(launch.env).toMatchObject(context.piExtension!.env);
+          break;
+        case "saetta":
+          // Saetta Code, Pi's port: the subcommand and the local pack first, Pi's own flags after.
+          expect(launch.args).toEqual([
+            "code", "--pack", saettaPack(),
+            "--append-system-prompt", context.instructionsPath,
+          ]);
           break;
       }
       expect(context.close).not.toHaveBeenCalled();
@@ -365,7 +377,7 @@ const NEVER_ASK: Record<string, string[]> = {
       "-c", 'mcp_servers.hello.env={ ELECTRON_RUN_AS_NODE = "1" }',
       "-c", 'mcp_servers.hello.env_vars=["HELLO_NOTEBOOK_BRIDGE_URL", "HELLO_NOTEBOOK_BRIDGE_TOKEN"]',
     ]);
-    for (const id of ["claude", "codex", "qwen", "kimi", "opencode", "pi"])
+    for (const id of ["claude", "codex", "qwen", "kimi", "opencode", "pi", "saetta"])
       expect(launch(id).args.join(" ")).not.toContain("fake-bridge-secret");
     // Kimi, Qwen Code and OpenCode take it in their own config, and hand it
     // their environment — the connection's included — so no file holds the token.
@@ -378,7 +390,12 @@ const NEVER_ASK: Record<string, string[]> = {
     expect(JSON.parse(qwenSettings).mcpServers).toEqual({ hello: server });
     const opencode = JSON.parse(launch("opencode").env.OPENCODE_CONFIG_CONTENT);
     expect(opencode.mcp).toEqual({ hello: { type: "local", command: [context.mcp!.runtime, context.mcp!.server], environment: { ELECTRON_RUN_AS_NODE: "1" } } });
-    for (const text of [kimiMcp, qwenSettings, JSON.stringify(opencode)]) expect(text).not.toContain("fake-bridge-secret");
+    // Saetta Code reads Pi's mcp.json from a private agent folder.
+    const saetta = launch("saetta");
+    expect(saetta.env.PI_CODING_AGENT_DIR).toBe(saetta.configurationDirectory);
+    const saettaMcp = readFileSync(join(saetta.env.PI_CODING_AGENT_DIR, "mcp.json"), "utf8");
+    expect(JSON.parse(saettaMcp)).toEqual({ mcpServers: { hello: server } });
+    for (const text of [kimiMcp, qwenSettings, JSON.stringify(opencode), saettaMcp]) expect(text).not.toContain("fake-bridge-secret");
     expect(launch("pi").args.join(" ")).not.toContain("hello-mcp");
   });
 
@@ -394,20 +411,17 @@ const NEVER_ASK: Record<string, string[]> = {
       .toEqual({ contextWindowSize: 131072, extra_body: off, reasoning: false });
     const opencode = JSON.parse(launch("opencode").env.OPENCODE_CONFIG_CONTENT);
     expect(opencode.provider["hello-active"].models[local.model]).toEqual({ name: local.model, options: off });
+    expect(opencode.model).toBe(`hello-active/${local.model}`);
     const pi = launch("pi");
     expect(pi.args.slice(0, 4)).toEqual(["--model", `hello-active/${local.model}`, "--thinking", "off"]);
     expect(JSON.parse(readFileSync(join(pi.env.PI_CODING_AGENT_DIR, "models.json"), "utf8")).providers["hello-active"].models)
       .toEqual([{ id: local.model, reasoning: true, compat: { thinkingFormat: "qwen-chat-template" } }]);
-    const aider = launch("aider");
-    const settings = aider.args[aider.args.indexOf("--model-settings-file") + 1];
-    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual([{ name: `openai/${local.model}`, extra_params: { extra_body: off } }]);
     // Reasoning on says so; another model, or a server not the person's own, is left alone.
     expect(JSON.parse(launch("opencode", { ...local, reasoningEffort: "high" }).env.OPENCODE_CONFIG_CONTENT)
       .provider["hello-active"].models[local.model].options).toEqual({ chat_template_kwargs: { enable_thinking: true } });
     expect(JSON.parse(launch("opencode", { ...local, endpointUrl: "https://api.example.test/v1" }).env.OPENCODE_CONFIG_CONTENT)
       .provider["hello-active"].models[local.model]).toEqual({ name: local.model });
     expect(launch("pi", { ...local, model: "gemma-4-31b" }).args).not.toContain("--thinking");
-    expect(launch("aider", { ...local, model: "gemma-4-31b" }).args).not.toContain("--model-settings-file");
   });
 
   // A CLI set as a chat tab comes back after a restart and continues its
@@ -454,28 +468,5 @@ const NEVER_ASK: Record<string, string[]> = {
     const folder = launch.env.PI_CODING_AGENT_DIR;
     expect(JSON.parse(readFileSync(join(folder, "settings.json"), "utf8"))).toEqual({ theme: "hello" });
     expect(JSON.parse(readFileSync(join(folder, "themes", "hello.json"), "utf8"))).toMatchObject({ name: "hello", colors: { accent: "#82aaff", toolErrorBg: "" } });
-  });
-
-  it("does not pretend Aider supports passive notebook context or turn it into a startup prompt", () => {
-    const spec = input(WORKER_CATALOG.find((worker) => worker.id === "aider")!);
-    const launch = prepareCliWorkerLaunch({
-      ...spec,
-      context: {
-        env: {},
-        instructionsPath: join(spec.userDataDir, "HELLO.md"),
-        instructions: "Wait for the human; do not run a task at launch.",
-        close: vi.fn(async () => {}),
-        listen: vi.fn(),
-        answer: vi.fn(),
-      },
-    });
-    expect(launch.notebookContext).not.toBe(true);
-    expect(launch.args).toEqual([
-      "--model", `openai/${spec.endpoint.model}`,
-      "--openai-api-base", "http://127.0.0.1:1234/v1",
-      "--no-auto-commits", "--no-show-model-warnings",
-      "--yes-always",
-    ]);
-    expect(launch.configurationDirectory).toBeUndefined();
   });
 });

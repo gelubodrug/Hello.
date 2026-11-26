@@ -36,6 +36,8 @@ vi.mock("../src/renderer/api", () => ({
   api: {
     chat: {
       attach: mocks.attach,
+      // A waiting picture is a card that shows itself (user, 26.11): its thumbnail is read through main.
+      previewAttachment: async () => "data:image/png;base64,iVBORw0KGgo=",
       send: mocks.send,
       stop: mocks.stop,
       retry: mocks.retry,

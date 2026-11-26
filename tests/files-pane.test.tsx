@@ -12,14 +12,19 @@ const mocks = vi.hoisted(() => ({
   searchContents: vi.fn(),
   cancelSearch: vi.fn(async () => {}),
   copy: vi.fn(async () => {}),
+  preview: vi.fn(),
+  mountGrid: vi.fn(),
 }));
 vi.mock('../src/renderer/api', () => ({
   api: {
     files: { list: mocks.list, read: mocks.read, onChange: mocks.onChange, open: vi.fn(), reveal: vi.fn(), resolvePaths: vi.fn(), searchContents: mocks.searchContents, cancelSearch: mocks.cancelSearch },
+    sheets: { preview: mocks.preview },
     system: { copy: mocks.copy },
   },
   onNativeBrowserFocus: () => () => {},
 }));
+// The grid itself is Univer and draws on a canvas; what is tested here is that the pane reaches for it.
+vi.mock('../src/renderer/sheets/univer', () => ({ mountGrid: mocks.mountGrid }));
 import { FilesPane, type FileRequest } from '../src/renderer/files/FilesPane';
 import { QUOTE_LIMIT, fileSelection, selectionQuote } from '../src/renderer/files/selection';
 
@@ -71,6 +76,10 @@ beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0));
   vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id));
   mocks.list.mockResolvedValue({ root: '/work', entries: [{ path: 'notes.txt', name: 'notes.txt', kind: 'file' }], limited: false, skipped: 0 });
+  mocks.mountGrid.mockImplementation(() => ({
+    univer: { dispose: vi.fn() },
+    univerAPI: { createWorkbook: vi.fn(), disposeUnit: vi.fn(), toggleDarkMode: vi.fn(), getActiveWorkbook: () => ({ setActiveSheet: vi.fn() }) },
+  }));
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -297,5 +306,69 @@ describe('what a selection in the viewer is', () => {
       .toBe('From `src/a.ts` (lines 4–5):\n````typescript\nconst a = `x`;\n```\n````');
     expect(selectionQuote({ text: 'Two\nlines', path: 'docs/read me.md' }, 'markdown'))
       .toBe('From `docs/read me.md`:\n> Two\n> lines');
+  });
+});
+
+/**
+ * A workbook of the folder is drawn, not refused for its size: before this, a
+ * 2.1 MB .xlsx in the tree showed only "This file is larger than 2 MB" (user,
+ * 20.11). The preview opens nothing in the chat.
+ */
+describe('a workbook of the folder', () => {
+  const sheet = (name: string) => ({ name, rows: 1, columns: 1, cells: [[1, 1, { v: 'a' }]] as Array<[number, number, { v: string }]> });
+  const workbook = (path: string, grids: string[], extra: Record<string, unknown> = {}) => ({
+    id: `preview:${path}`, conversationId: chat.id, title: path, source: 'file' as const, path,
+    dirty: false, revision: 0, sheets: grids, grids: grids.map(sheet), ...extra,
+  });
+
+  it('draws the grid instead of the size refusal, and says it is not open in the chat', async () => {
+    mocks.read.mockResolvedValue({ path: 'book.xlsx', absolutePath: '/work/book.xlsx', name: 'book.xlsx', size: 2_200_000, modifiedAt: 1,
+      content: null, reason: 'This file is larger than 2 MB. Open it in its default app or show it in Finder.' });
+    mocks.preview.mockResolvedValue(workbook('book.xlsx', ['Data', 'Notes']));
+    await render({ request: { path: 'book.xlsx', nonce: 1 } });
+    await act(async () => {});
+    expect(mocks.preview).toHaveBeenCalledWith(chat.id, 'book.xlsx');
+    expect(host.querySelector('.files-workbook')).not.toBeNull();
+    expect(host.textContent).not.toContain('larger than 2 MB');
+    expect(host.textContent).toContain('it is not in this chat and the model has not been told about it');
+    expect([...host.querySelectorAll('.sheets-tab')].map(tab => tab.textContent)).toEqual(['Data', 'Notes']);
+    expect(mocks.mountGrid).toHaveBeenCalledOnce();
+  });
+
+  it('points at Sheets when the chat is already working on that file', async () => {
+    mocks.read.mockResolvedValue({ path: 'open.xlsx', absolutePath: '/work/open.xlsx', name: 'open.xlsx', size: 900, modifiedAt: 1, content: null });
+    mocks.preview.mockResolvedValue(workbook('open.xlsx', ['Data'], { openInChat: true }));
+    await render({ request: { path: 'open.xlsx', nonce: 1 } });
+    await act(async () => {});
+    expect(host.textContent).toContain('working on it in Sheets');
+    expect(host.textContent).not.toContain('has not been told about it');
+  });
+
+  it('says what the file holds that the grid does not draw', async () => {
+    mocks.read.mockResolvedValue({ path: 'charts.xlsx', absolutePath: '/work/charts.xlsx', name: 'charts.xlsx', size: 900, modifiedAt: 1, content: null });
+    mocks.preview.mockResolvedValue(workbook('charts.xlsx', ['Data'], { lossy: ['charts', 'macros'] }));
+    await render({ request: { path: 'charts.xlsx', nonce: 1 } });
+    await act(async () => {});
+    expect(host.textContent).toContain('charts, macros');
+  });
+
+  it('reports a workbook it could not read, and leaves other files alone', async () => {
+    mocks.read.mockResolvedValue({ path: 'broken.xlsx', absolutePath: '/work/broken.xlsx', name: 'broken.xlsx', size: 10, modifiedAt: 1, content: null });
+    mocks.preview.mockRejectedValue(new Error('This file could not be read as an .xlsx workbook.'));
+    await render({ request: { path: 'broken.xlsx', nonce: 1 } });
+    await act(async () => {});
+    expect(host.textContent).toContain('could not be read as an .xlsx workbook');
+
+    mocks.read.mockResolvedValue(doc('notes.txt', 'plain words'));
+    await render({ request: { path: 'notes.txt', nonce: 2 } });
+    expect(host.querySelector('.files-workbook')).toBeNull();
+    expect(host.textContent).toContain('plain words');
+  });
+
+  it('shows a converted document as text, with the formatting said to be missing', async () => {
+    mocks.read.mockResolvedValue({ ...doc('brief.doc', 'Raport flota'), converted: true });
+    await render({ request: { path: 'brief.doc', nonce: 1 } });
+    expect(host.textContent).toContain('Raport flota');
+    expect(host.textContent).toContain('Converted to text by macOS');
   });
 });

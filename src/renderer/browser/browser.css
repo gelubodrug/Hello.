@@ -26,6 +26,11 @@
 .browser-start small{font-size:11px;margin-top:18px}
 /* Downloads: the button's ring fills while a file saves, as a browser's does. */
 .browser-downloads-anchor{position:relative;flex:none;display:inline-flex}
+.browser-unclutter-anchor{position:relative;flex:none;display:inline-flex}
+.browser-unclutter-count{position:absolute;top:1px;right:0;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--surface-raised,#212225);color:var(--ink-primary,#e5e5e7);font-size:9px;line-height:14px;font-weight:600;text-align:center;pointer-events:none;font-variant-numeric:tabular-nums}
+.browser-unclutter-anchor[data-busy="true"] .browser-unclutter{color:var(--ink-primary,#e5e5e7);animation:browser-unclutter-pulse 1.4s ease-in-out infinite}
+@keyframes browser-unclutter-pulse{50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.browser-unclutter-anchor[data-busy="true"] .browser-unclutter{animation:none}}
 .browser-downloads-anchor[data-saving="true"]::after{content:"";position:absolute;inset:2px;border-radius:50%;pointer-events:none;background:conic-gradient(var(--color-focus-ring,#7aa2ff) calc(var(--download-progress,0)*360deg),transparent 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 2px))}
 .browser-downloads-anchor[data-saving="true"] .browser-downloads{color:var(--ink-primary,#e5e5e7)}
 .menu-popup.downloads-menu{width:min(360px,calc(100vw - 24px))}

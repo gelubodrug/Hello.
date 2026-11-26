@@ -278,7 +278,7 @@ export class DataStore {
 
   private migrate(): void {
     const version = Number(this.db.pragma('user_version', { simple: true }));
-    if (version > 17)
+    if (version > 18)
       throw new Error('This database belongs to a newer Hello. version.');
     if (version < 1)
       this.db.transaction(() => {
@@ -496,6 +496,19 @@ export class DataStore {
             AND (EXISTS (SELECT 1 FROM notebooks n WHERE n.conversationId = c.id)
               OR EXISTS (SELECT 1 FROM settings s WHERE s.value = 'on' AND s.key IN ('chat-plan:' || c.id, 'chat-runbook:' || c.id, 'chat-tasks:' || c.id)))`).run();
         this.db.exec('PRAGMA user_version = 17');
+      })();
+    if (version < 18)
+      this.db.transaction(() => {
+        // Unclutter (user, 26.11): what to hide on one template of a site, as
+        // OpenJev classified it. The person's browsing, not a chat's: the same
+        // site looks the same in every chat, so a profile is the app's.
+        this.db.exec(`CREATE TABLE IF NOT EXISTS unclutter_profiles (
+        key TEXT PRIMARY KEY,
+        origin TEXT NOT NULL,
+        profile TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+      PRAGMA user_version = 18;`);
       })();
   }
 
@@ -1368,6 +1381,29 @@ export class DataStore {
     this.db
       .prepare('DELETE FROM browser_domain_notes WHERE conversationId = ? AND domain = ?')
       .run(conversationId, domain);
+  }
+  /** One site template's Unclutter profile, as saved; the caller checks its shape. */
+  getUnclutterProfile(key: string): unknown {
+    const row = this.db.prepare('SELECT profile FROM unclutter_profiles WHERE key = ?').get(key) as { profile?: unknown } | undefined;
+    if (typeof row?.profile !== 'string') return null;
+    try { return JSON.parse(row.profile); } catch { return null; }
+  }
+  saveUnclutterProfile(profile: { key: string; origin: string }): void {
+    this.db
+      .prepare('INSERT INTO unclutter_profiles(key,origin,profile,updatedAt) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET origin=excluded.origin,profile=excluded.profile,updatedAt=excluded.updatedAt')
+      .run(profile.key, profile.origin, JSON.stringify(profile), Date.now());
+  }
+  deleteUnclutterProfile(key: string): void {
+    this.db.prepare('DELETE FROM unclutter_profiles WHERE key = ?').run(key);
+  }
+  /** Unclutter's switches, as saved; the caller checks their shape. */
+  getUnclutterSettings(): unknown {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('unclutter') as { value?: unknown } | undefined;
+    if (typeof row?.value !== 'string') return null;
+    try { return JSON.parse(row.value); } catch { return null; }
+  }
+  saveUnclutterSettings(settings: { enabled: boolean; auto: boolean }): void {
+    this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('unclutter', JSON.stringify(settings));
   }
   /** Every chat's downloads, oldest first. */
   listBrowserDownloads(): BrowserDownload[] {
