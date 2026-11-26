@@ -1,24 +1,55 @@
+<p align="center">
+  <a href="https://gelubodrug.github.io/hello/"><img src="assets/readme/banner.svg" alt="Hello. Local first. Codex off. Claude off. What do you do? Use a tool made with them." width="100%"></a>
+</p>
+
 # Hello.
 
-A macOS desktop app (Electron) for working with models. Each chat runs on Pi,
-headless over RPC, beside a browser, terminals and CLI workers (Claude Code,
-Codex, Kimi, Qwen Code, OpenCode, Pi), with a notebook of its own (Runbooks,
-Tasks, Plans) and a hosted DSH launch from the sidebar, with upgrades to the
-latest npm release. Plugins and add-ons belong to Hello/Pi. Models come from any
-OpenAI-compatible endpoint — a server on this Mac or a provider such as
-OpenRouter — and each chat keeps the model it last used.
+**Hello! Glad to meet you.**
 
-## Run it
+Hello. is a local-first workspace for AI models on your Mac: one conversation,
+and beside it a shared place to work — a real browser, terminals, files,
+spreadsheets and the CLI agents you already have.
+
+> Codex off. Claude off. What do you do?
+> You use a tool made with them.
+
+Hello. was built with Claude Code and Codex, for the hours when they are not
+there: it runs on the models on your own machine, or on any endpoint you choose.
+
+![The Hello. workspace: a chat beside its tools](assets/readme/workspace.webp)
+
+## What it does
+
+- **Any model you can reach.** Each chat runs on [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent),
+  headless over RPC, against any OpenAI-compatible endpoint: Ollama, LM Studio,
+  llama.cpp or oMLX on this Mac, or a provider such as OpenRouter. Servers
+  running on the Mac are found, not typed, and each chat keeps the model it last used.
+- **A browser the model can use.** A real page in a pane beside the chat. A tab
+  you open starts with agent control Off; Read lets the model read it, Full lets it act.
+- **Terminals and CLI workers.** Claude Code, Codex, Kimi, Qwen Code, OpenCode
+  and Pi run in panes of their own, next to the chat that started them.
+- **Files, spreadsheets and PDFs** of the folder a chat works in.
+- **A notebook per chat**: Runbooks, Tasks and Plans.
+- **Yours.** Data lives in SQLite in Hello's own user-data directory. API keys
+  are encrypted with the system keychain and never reach the window.
+
+## Get it
+
+There is no download. Hello. is source only: you build it yourself, on macOS,
+with Node 22.19 or newer and pnpm 9.
 
 ```sh
+git clone https://github.com/gelubodrug/hello.git
+cd hello
 pnpm install
 pnpm dev
 ```
 
-`pnpm typecheck` checks the types and `pnpm test` runs the unit tests.
-`pnpm package:mac` builds the app into `release/`. Data lives in Hello's own
-user-data directory (SQLite); API keys are encrypted with the system keychain
-and never reach the window.
+`pnpm package:mac` builds the app into `release/`. `pnpm typecheck` checks the
+types and `pnpm test` runs the unit tests.
+
+Hello. is early and changes every day. Expect rough edges, and tell me about
+them in [Issues](https://github.com/gelubodrug/hello/issues).
 
 ## Packaging
 
@@ -60,4 +91,9 @@ unpacked Pi, pnpm and esbuild behave inside `Hello.app`, whether the DSH
   and a runnable specimen; `design/CHAT-ACTIVITY-RULES.md` — the chat timeline.
 - `specs/blaizzy-nativ-hello-monitor/tasks.md` — what is still open (Spec Kit).
 - `AGENTS.md` — the rules for agents working in this repository.
+- `site/` — the page at [gelubodrug.github.io/hello](https://gelubodrug.github.io/hello/), one file, no build.
 - `docs/archive/` — history: plans, reports and research that are no longer current.
+
+## License
+
+[MIT](LICENSE). Pi and the other dependencies keep their own licenses.

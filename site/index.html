@@ -1,0 +1,2073 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Hello.</title>
+  <meta name="description" content="Hello. is a local-first workspace for AI models on your Mac. Open source: build it yourself.">
+  <meta name="theme-color" content="#02050a">
+  <meta property="og:title" content="Hello.">
+  <meta property="og:description" content="Hello. is a local-first workspace for AI models on your Mac. Open source: build it yourself.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Hello.">
+  <meta property="og:url" content="https://gelubodrug.github.io/hello/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Hello.">
+  <meta name="twitter:description" content="Hello. is a local-first workspace for AI models on your Mac. Open source: build it yourself.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2302050a'/%3E%3Ctext x='28' y='46' text-anchor='middle' font-family='Georgia,Times New Roman,serif' font-size='40' fill='%23eef7ff'%3EH%3C/text%3E%3Ccircle cx='49' cy='43.5' r='4.5' fill='%23ffd23f'/%3E%3C/svg%3E">
+  <!-- iOS ignores SVG touch icons; replace with a 180x180 PNG when one exists. -->
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2302050a'/%3E%3Ctext x='28' y='46' text-anchor='middle' font-family='Georgia,Times New Roman,serif' font-size='40' fill='%23eef7ff'%3EH%3C/text%3E%3Ccircle cx='49' cy='43.5' r='4.5' fill='%23ffd23f'/%3E%3C/svg%3E">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebPage",
+        "name": "Hello.",
+        "description": "Hello. is a local-first workspace for AI models on your Mac. Open source: build it yourself.",
+        "url": "https://gelubodrug.github.io/hello/"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "name": "Hello.",
+        "description": "Hello. is a local-first workspace for AI models on your Mac. Open source: build it yourself.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS",
+        "license": "https://opensource.org/license/mit",
+        "codeRepository": "https://github.com/gelubodrug/hello",
+        "url": "https://gelubodrug.github.io/hello/"
+      }
+    ]
+  }
+  </script>
+  <noscript>
+    <style>
+      .static-fallback { display: flex !important; }
+      canvas, .vignette, .brand, .teaser-bar, .card, .hello-center { display: none !important; }
+    </style>
+  </noscript>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #02050a;
+      --ink: #eef7ff;
+      --muted: #91a9bf;
+      --line: rgba(151, 205, 255, 0.18);
+      --panel: rgba(7, 17, 29, 0.66);
+      --accent: #9bd8ff;
+      --yellow: #ffd23f;
+      --serif: ui-serif, "New York", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 44%, rgba(23, 57, 92, 0.20), transparent 39%),
+        radial-gradient(circle at 16% 15%, rgba(53, 111, 161, 0.08), transparent 28%),
+        radial-gradient(circle at 82% 78%, rgba(35, 83, 126, 0.07), transparent 30%);
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      touch-action: none;
+      outline: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    canvas.dragging { cursor: grabbing; }
+
+    .vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(ellipse at center, transparent 42%, rgba(1, 3, 7, 0.22) 76%, rgba(1, 3, 7, 0.72) 100%),
+        linear-gradient(180deg, rgba(1, 3, 7, 0.18), transparent 22%, transparent 78%, rgba(1, 3, 7, 0.28));
+    }
+
+    /* Wordmark signature — top-left, restrained. No tagline, no explanatory copy.
+       System serif stack only (no web-font fetch); the full stop picks up the
+       marker yellow so the mark and the globe's targets read as one system. */
+    .brand {
+      position: fixed;
+      top: max(18px, env(safe-area-inset-top));
+      left: max(clamp(18px, 4vw, 40px), env(safe-area-inset-left));
+      z-index: 3;
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 23px;
+      font-weight: 500;
+      line-height: 1;
+      letter-spacing: -0.025em;
+      color: rgba(238, 247, 255, 0.9);
+      text-shadow: 0 2px 18px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .brand-dot { color: var(--yellow); }
+
+    .card {
+      position: fixed;
+      z-index: 4;
+      left: 0;
+      top: 0;
+      width: min(260px, calc(100vw - 32px));
+      padding: 15px 17px 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      /* Near-opaque surface plus a soft dark spread around the card: a local
+         scrim so bright globe dots can't bleed through or crowd the text edge. */
+      background:
+        linear-gradient(135deg, rgba(10, 25, 42, 0.90), rgba(4, 10, 19, 0.86)),
+        var(--panel);
+      box-shadow:
+        0 0 46px 20px rgba(2, 5, 10, 0.46),
+        0 18px 60px rgba(0, 0, 0, 0.30),
+        inset 0 1px 0 rgba(210, 239, 255, 0.06);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, -50%) translateY(9px) scale(0.985);
+      transition: opacity 0.26s ease, transform 0.26s ease, filter 0.26s ease;
+      -webkit-backdrop-filter: blur(14px);
+      backdrop-filter: blur(14px);
+      will-change: transform, opacity;
+    }
+
+    .card.visible {
+      opacity: 1;
+      transform: translate(-50%, -50%) translateY(0) scale(1);
+    }
+
+    /* Only the interactive (selected) card captures pointer events; the auto-tour
+       card stays transparent to taps so tapping it still reaches the globe. */
+    #city-card.visible { pointer-events: auto; }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(155, 216, 255, 0.42), transparent 35%, transparent 68%, rgba(155, 216, 255, 0.16));
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      opacity: 0.72;
+      pointer-events: none;
+    }
+
+    /* Level 3 — source citation, not a primary action: smallest, muted,
+       borderless, underlined on hover/focus, with a visible focus ring. */
+    .card-origin-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 10px;
+      padding: 1px 2px;
+      margin-left: -2px;
+      border: 0;
+      border-radius: 4px;
+      background: none;
+      color: var(--muted);
+      font: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      text-decoration: none;
+      cursor: pointer;
+      pointer-events: none;
+      transition: color 0.2s ease;
+    }
+
+    .card.visible .card-origin-btn { pointer-events: auto; }
+
+    .card-origin-btn::after { content: "\2197"; opacity: 0.6; }
+
+    .card-origin-btn:hover,
+    .card-origin-btn:focus-visible {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .card-origin-btn:focus-visible {
+      outline: 2px solid rgba(155, 216, 255, 0.7);
+      outline-offset: 3px;
+    }
+
+    /* Level 1 — native greeting + flag: largest, full contrast. The greeting's
+       size lives on .card-head, and the greeting, flag and speaker all size in em,
+       so they scale together. Items align to the top, and each is one line box
+       (1.08em) tall, so a wrapping greeting leaves the flag centred on its first
+       line. */
+    .card-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.28em;
+      min-width: 0;
+      font-size: clamp(26px, 4.4vw, 34px);
+    }
+
+    .card-head.is-long { font-size: clamp(21px, 3.5vw, 27px); }
+
+    .card-greeting {
+      display: block;
+      min-width: 0;
+      min-height: 1.08em;
+      color: #ffffff;
+      font-size: 1em;
+      font-weight: 400;
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+      overflow-wrap: break-word;
+    }
+
+    /* Level 2 — "Hello from <City>": smaller, secondary. */
+    .card-city {
+      display: block;
+      margin-top: 6px;
+      color: rgba(206, 224, 238, 0.74);
+      font-size: 12.5px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+
+    /* Country flag beside the greeting. Emoji when the platform renders flag
+       glyphs; a small ISO-code chip as an offline/cross-platform fallback. */
+    .card-flag {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 1.08em;
+      font-size: 1em;
+      line-height: 1;
+    }
+
+    /* ISO-code chip, in em of its own 0.4em font. It is 1.8em tall (about the
+       greeting's cap height), with a 0.45em top margin that centres it in the
+       2.7em (= 1.08em of the greeting) first line. */
+    .card-flag.is-code {
+      height: 1.8em;
+      margin-top: 0.45em;
+      padding: 0 0.45em;
+      border-radius: 0.3em;
+      background: rgba(155, 216, 255, 0.14);
+      color: var(--accent);
+      font-size: 0.4em;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+
+    /* Replay the greeting's pronunciation. Line-box tall like the flag. */
+    .card-speak {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.08em;
+      height: 1.08em;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: none;
+      color: var(--muted);
+      font: inherit;
+      font-size: 1em;
+      cursor: pointer;
+      pointer-events: none;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .card.visible .card-speak { pointer-events: auto; }
+    .card-speak[hidden] { display: none; }
+    .card-speak svg { width: 0.56em; height: 0.56em; min-width: 16px; min-height: 16px; }
+
+    .card-speak:hover,
+    .card-speak:focus-visible {
+      color: var(--accent);
+      background: rgba(155, 216, 255, 0.1);
+    }
+
+    .card-speak:focus-visible {
+      outline: 2px solid rgba(155, 216, 255, 0.7);
+      outline-offset: 2px;
+    }
+
+    .card-city-text { min-width: 0; }
+
+    .auto-card { width: min(228px, calc(100vw - 32px)); padding: 14px 16px 13px; }
+    .auto-card .card-head { font-size: clamp(24px, 4vw, 31px); }
+    .auto-card .card-head.is-long { font-size: clamp(20px, 3.3vw, 25px); }
+    .auto-card .card-city { margin-top: 5px; font-size: 12px; }
+
+    .hello-center {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      z-index: 5;
+      opacity: 0;
+      color: #ffffff;
+      font-family: var(--serif);
+      font-size: clamp(64px, 12vw, 142px);
+      font-weight: 400;
+      letter-spacing: -0.075em;
+      line-height: 1;
+      text-align: center;
+      text-shadow: 0 0 34px rgba(176, 222, 255, 0.32), 0 8px 40px rgba(0, 0, 0, 0.35);
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(0.86);
+      transition: opacity 0.3s ease, transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+      will-change: opacity, transform;
+    }
+
+    #connections {
+      position: fixed;
+      inset: 0;
+      z-index: 2;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    #connection-path {
+      fill: none;
+      stroke: rgba(167, 220, 255, 0.42);
+      stroke-width: 1;
+      stroke-dasharray: 2 6;
+      stroke-linecap: round;
+      opacity: 0;
+      transition: opacity 0.24s ease;
+    }
+
+    /* Non-modal source panel: no full-screen backdrop, so the globe, wordmark and
+       teaser row stay visible. positionOriginPanel() anchors it beside the card;
+       on mobile it becomes a bottom sheet (see the 640px media query). */
+    .origin-panel {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      width: min(380px, calc(100vw - 32px));
+      max-height: calc(100dvh - 48px);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background:
+        linear-gradient(140deg, rgba(12, 30, 48, 0.96), rgba(5, 13, 24, 0.96)),
+        var(--panel);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(210, 239, 255, 0.06);
+      outline: none;
+      overflow: hidden;
+    }
+
+    .origin-panel[hidden] { display: none; }
+
+    .origin-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      padding: 22px 22px 18px;
+    }
+
+    .origin-close {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 2;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(155, 216, 255, 0.22);
+      border-radius: 50%;
+      background: rgba(155, 216, 255, 0.06);
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+
+    .origin-close:hover,
+    .origin-close:focus-visible {
+      background: rgba(155, 216, 255, 0.16);
+      border-color: rgba(155, 216, 255, 0.5);
+    }
+
+    .origin-close:focus-visible {
+      outline: 2px solid rgba(155, 216, 255, 0.7);
+      outline-offset: 2px;
+    }
+
+    .origin-eyebrow {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      opacity: 0.82;
+    }
+
+    .origin-title {
+      margin: 0 40px 12px 0;
+      font-size: clamp(20px, 3.6vw, 25px);
+      font-weight: 300;
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+    }
+
+    .origin-status {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .origin-status.is-error { color: #ffb4a8; }
+    .origin-status:empty { display: none; }
+
+    .origin-extract {
+      margin: 0 0 18px;
+      color: rgba(224, 238, 250, 0.90);
+      font-size: 14px;
+      line-height: 1.62;
+      letter-spacing: 0.005em;
+    }
+
+    .origin-extract:empty { display: none; }
+
+    .origin-cached {
+      margin: -10px 0 16px;
+      color: rgba(174, 201, 220, 0.55);
+      font-size: 10.5px;
+      letter-spacing: 0.04em;
+    }
+
+    .origin-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    /* Discreet source citation, not a primary button. */
+    .origin-link {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 2px;
+      border: 0;
+      border-radius: 4px;
+      background: none;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .origin-link:hover,
+    .origin-link:focus-visible {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .origin-link:focus-visible {
+      outline: 2px solid rgba(155, 216, 255, 0.7);
+      outline-offset: 3px;
+    }
+
+    .origin-retry {
+      padding: 1px 2px;
+      border: 0;
+      border-radius: 4px;
+      background: none;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: color 0.2s ease;
+    }
+
+    .origin-retry:hover,
+    .origin-retry:focus-visible {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .origin-retry:focus-visible {
+      outline: 2px solid rgba(155, 216, 255, 0.7);
+      outline-offset: 3px;
+    }
+
+    .origin-license {
+      margin: 0;
+      padding-top: 12px;
+      border-top: 1px solid rgba(151, 205, 255, 0.12);
+      color: rgba(174, 201, 220, 0.55);
+      font-size: 10.5px;
+      line-height: 1.5;
+    }
+
+    .origin-license a { color: rgba(174, 201, 220, 0.8); }
+
+    .visually-hidden {
+      position: absolute !important;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* Source link + share row below the globe. The full-width strip lets drags pass
+       through to the globe; only the compact row itself takes pointer input. */
+    .teaser-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 6;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 0 max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+      pointer-events: none;
+    }
+
+    .teaser-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: min(392px, 100%);
+      pointer-events: auto;
+    }
+
+    .source-pill {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      height: 40px;
+      margin: 0;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(4, 10, 19, 0.74);
+      -webkit-backdrop-filter: blur(10px);
+      backdrop-filter: blur(10px);
+      transition: border-color 0.2s ease;
+    }
+
+    .source-pill:focus-within { border-color: rgba(155, 216, 255, 0.42); }
+
+    .source-pill { text-decoration: none; }
+    .source-pill:hover { border-color: rgba(155, 216, 255, 0.42); }
+
+    .source-note {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 0 12px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 14px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .source-go {
+      flex: none;
+      display: flex;
+      align-items: center;
+      height: 100%;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: rgba(155, 216, 255, 0.14);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      transition: background 0.2s ease;
+    }
+
+    .source-pill:hover .source-go { background: rgba(155, 216, 255, 0.24); }
+
+    .source-pill:focus-visible,
+    .share-btn:focus-visible {
+      outline: 2px solid rgba(155, 216, 255, 0.7);
+      outline-offset: 2px;
+    }
+
+    .share-btn {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: rgba(4, 10, 19, 0.74);
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .share-btn:hover,
+    .share-btn:focus-visible { color: var(--accent); border-color: rgba(155, 216, 255, 0.42); }
+
+    .teaser-line {
+      min-height: 16px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 16px;
+      text-align: center;
+    }
+
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(max(14px, env(safe-area-inset-bottom)) + 72px);
+      z-index: 7;
+      padding: 7px 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(10, 24, 40, 0.94);
+      color: var(--ink);
+      font-size: 12.5px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 6px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .toast.visible { opacity: 1; transform: translate(-50%, 0); }
+
+    /* Static fallback for no-JS / no-canvas, instead of a black screen. */
+    .static-fallback {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .static-fallback:not([hidden]) { display: flex; }
+
+    .fallback-mark {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: clamp(56px, 12vw, 104px);
+      font-weight: 500;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+
+    .fallback-greetings {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px 20px;
+      max-width: 520px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      color: rgba(206, 224, 238, 0.74);
+      font-size: 16px;
+    }
+
+    @media (max-width: 640px) {
+      .brand { left: max(18px, env(safe-area-inset-left)); font-size: 21px; }
+      .card, .auto-card { width: min(220px, calc(100vw - 28px)); padding: 13px 15px 12px; border-radius: 14px; }
+      .card:not(.auto-card) { width: min(244px, calc(100vw - 28px)); }
+      .card { background: linear-gradient(135deg, rgba(10, 25, 42, 0.94), rgba(4, 10, 19, 0.92)), var(--panel); }
+      .card-head, .auto-card .card-head { font-size: 26px; }
+      .card-head.is-long, .auto-card .card-head.is-long { font-size: 21px; }
+      .origin-scroll { padding: 20px 18px max(16px, env(safe-area-inset-bottom)); }
+      .origin-panel {
+        left: 0;
+        right: 0;
+        top: auto;
+        bottom: 0;
+        width: 100%;
+        max-height: 60vh;
+        max-height: 60dvh;
+        border-bottom: 0;
+        border-radius: 18px 18px 0 0;
+      }
+      .source-note { font-size: 13px; padding: 0 10px; }
+      .source-go { padding: 0 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .card, .hello-center, #connection-path, .toast { transition-duration: 0.01s; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="globe" aria-label="Interactive globe of Earth, drawn from points of light"></canvas>
+  <div class="vignette"></div>
+
+  <p class="brand">Hello<span class="brand-dot">.</span></p>
+
+  <div id="city-card" class="card" aria-live="polite">
+    <span class="card-head">
+      <span class="card-greeting"></span>
+      <span class="card-flag" role="img"></span>
+      <button type="button" id="speak-btn" class="card-speak" aria-label="Play pronunciation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.2 6.4a8 8 0 0 1 0 11.2"/></svg></button>
+    </span>
+    <span class="card-city"><span class="card-city-text"></span></span>
+    <button type="button" id="origin-btn" class="card-origin-btn" aria-haspopup="dialog">Where this language comes from</button>
+  </div>
+
+  <div id="auto-card" class="card auto-card" aria-live="polite">
+    <span class="card-head">
+      <span class="card-greeting"></span>
+      <span class="card-flag" role="img"></span>
+    </span>
+    <span class="card-city"><span class="card-city-text"></span></span>
+  </div>
+
+  <div id="hello-center" class="hello-center">Hello.</div>
+  <svg id="connections" aria-hidden="true"><path id="connection-path"></path></svg>
+
+  <div class="teaser-bar">
+    <div id="teaser-row" class="teaser-row">
+      <a id="source-link" class="source-pill" href="https://github.com/gelubodrug/hello" rel="noopener">
+        <span class="source-note">Local first.</span>
+        <span class="source-go">Get it on GitHub</span>
+      </a>
+      <button type="button" id="share-btn" class="share-btn" aria-label="Share"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12"/><path d="M7.5 7.5 12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg></button>
+    </div>
+    <p class="teaser-line">Codex off. Claude off. What do you do? Use a tool made with them.</p>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="static-fallback" class="static-fallback" hidden>
+    <p class="fallback-mark">Hello<span class="brand-dot">.</span></p>
+    <ul class="fallback-greetings">
+      <li lang="ro">Bună!</li>
+      <li lang="ja">こんにちは</li>
+      <li lang="pt">Olá!</li>
+      <li lang="mi">Kia ora!</li>
+      <li lang="ar" dir="rtl">مرحبا</li>
+      <li lang="sw">Jambo!</li>
+      <li lang="hi">नमस्ते</li>
+      <li lang="haw">Aloha!</li>
+    </ul>
+  </div>
+
+  <div id="origin-panel" class="origin-panel" role="dialog" aria-labelledby="origin-title" tabindex="-1" hidden>
+      <button type="button" id="origin-close" class="origin-close" aria-label="Close">&times;</button>
+      <div class="origin-scroll">
+        <p class="origin-eyebrow">Language origin</p>
+        <h2 id="origin-title" class="origin-title"></h2>
+        <div id="origin-status" class="origin-status" role="status" aria-live="polite"></div>
+        <p id="origin-extract" class="origin-extract"></p>
+        <p id="origin-cached" class="origin-cached" hidden>Cached copy</p>
+        <div class="origin-actions">
+          <a id="origin-link" class="origin-link" href="#" target="_blank" rel="noopener noreferrer">Read on Wikipedia &#8599;</a>
+          <button type="button" id="origin-retry" class="origin-retry" hidden>Retry</button>
+        </div>
+        <p class="origin-license">Summary from Wikipedia, available under the <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC&nbsp;BY-SA&nbsp;4.0</a> licence.</p>
+      </div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      setupTeaserBar();
+
+      const TAU = Math.PI * 2;
+      const canvas = document.getElementById("globe");
+      let ctx = null;
+      try { ctx = canvas.getContext ? canvas.getContext("2d") : null; } catch (e) { ctx = null; }
+      if (!ctx) {
+        // No canvas support: show the static wordmark + greetings, not a black screen.
+        canvas.style.display = "none";
+        document.querySelector(".brand").hidden = true;
+        document.getElementById("static-fallback").hidden = false;
+        return;
+      }
+      const cityCard = document.getElementById("city-card");
+      const autoCard = document.getElementById("auto-card");
+      const helloCenter = document.getElementById("hello-center");
+      const connectionPath = document.getElementById("connection-path");
+
+      // greeting stays in each city's own language (native data, kept as-is);
+      // cc = ISO 3166-1 alpha-2 for the flag, country = English name for the aria-label,
+      // bcp47 = language tag the greeting is spoken in.
+      const cities = [
+        { name: "Bucharest", country: "Romania", cc: "RO", lat: 44.4268, lon: 26.1025, greeting: "Bună!", lang: "Romanian", bcp47: "ro-RO", wiki: "Romanian_language" },
+        { name: "Tokyo", country: "Japan", cc: "JP", lat: 35.6762, lon: 139.6503, greeting: "こんにちは", lang: "Japanese", bcp47: "ja-JP", wiki: "Japanese_language" },
+        { name: "Lagos", country: "Nigeria", cc: "NG", lat: 6.5244, lon: 3.3792, greeting: "Ẹ n lẹ!", lang: "Yoruba", bcp47: "yo-NG", wiki: "Yoruba_language" },
+        { name: "São Paulo", country: "Brazil", cc: "BR", lat: -23.5505, lon: -46.6333, greeting: "Olá!", lang: "Portuguese", bcp47: "pt-BR", wiki: "Portuguese_language" },
+        { name: "Reykjavík", country: "Iceland", cc: "IS", lat: 64.1466, lon: -21.9426, greeting: "Góðan dag!", lang: "Icelandic", bcp47: "is-IS", wiki: "Icelandic_language" },
+        { name: "Auckland", country: "New Zealand", cc: "NZ", lat: -36.8509, lon: 174.7645, greeting: "Kia ora!", lang: "Māori", bcp47: "mi-NZ", wiki: "Māori_language" },
+        { name: "New York", country: "United States", cc: "US", lat: 40.7128, lon: -74.0060, greeting: "Hello!", lang: "English", bcp47: "en-US", wiki: "English_language" },
+        { name: "Mexico City", country: "Mexico", cc: "MX", lat: 19.4326, lon: -99.1332, greeting: "¡Hola!", lang: "Spanish", bcp47: "es-MX", wiki: "Spanish_language" },
+        { name: "Cairo", country: "Egypt", cc: "EG", lat: 30.0444, lon: 31.2357, greeting: "مرحبا", lang: "Arabic", bcp47: "ar-EG", wiki: "Arabic" },
+        { name: "Nairobi", country: "Kenya", cc: "KE", lat: -1.2921, lon: 36.8219, greeting: "Jambo!", lang: "Swahili", bcp47: "sw-KE", wiki: "Swahili_language" },
+        { name: "Mumbai", country: "India", cc: "IN", lat: 19.0760, lon: 72.8777, greeting: "नमस्ते", lang: "Hindi", bcp47: "hi-IN", wiki: "Hindi" },
+        { name: "Singapore", country: "Singapore", cc: "SG", lat: 1.3521, lon: 103.8198, greeting: "Hai!", lang: "Malay", bcp47: "ms-SG", wiki: "Malay_language" },
+        { name: "Sydney", country: "Australia", cc: "AU", lat: -33.8688, lon: 151.2093, greeting: "G'day!", lang: "English", bcp47: "en-AU", wiki: "English_language" },
+        { name: "Vancouver", country: "Canada", cc: "CA", lat: 49.2827, lon: -123.1207, greeting: "Hello!", lang: "English", bcp47: "en-CA", wiki: "English_language" },
+        { name: "Lima", country: "Peru", cc: "PE", lat: -12.0464, lon: -77.0428, greeting: "Rimaykullayki!", lang: "Quechua", bcp47: "qu-PE", wiki: "Quechuan_languages" },
+        { name: "Cape Town", country: "South Africa", cc: "ZA", lat: -33.9249, lon: 18.4241, greeting: "Goeie dag!", lang: "Afrikaans", bcp47: "af-ZA", wiki: "Afrikaans" },
+        { name: "Moscow", country: "Russia", cc: "RU", lat: 55.7558, lon: 37.6173, greeting: "Привет!", lang: "Russian", bcp47: "ru-RU", wiki: "Russian_language" },
+        { name: "Istanbul", country: "Turkey", cc: "TR", lat: 41.0082, lon: 28.9784, greeting: "Merhaba!", lang: "Turkish", bcp47: "tr-TR", wiki: "Turkish_language" },
+        { name: "Jakarta", country: "Indonesia", cc: "ID", lat: -6.2088, lon: 106.8456, greeting: "Halo!", lang: "Indonesian", bcp47: "id-ID", wiki: "Indonesian_language" },
+        { name: "Honolulu", country: "United States", cc: "US", lat: 21.3069, lon: -157.8583, greeting: "Aloha!", lang: "Hawaiian", bcp47: "haw-US", wiki: "Hawaiian_language" }
+      ];
+
+      // Approximate outlines, enough for a recognisable silhouette at globe scale.
+      const landPolygons = [
+        [[-168,65],[-160,70],[-140,70],[-125,72],[-110,73],[-95,72],[-85,70],[-75,72],[-65,68],[-60,60],[-55,52],[-60,46],[-65,44],[-70,41],[-75,35],[-80,32],[-81,26],[-84,28],[-90,29],[-97,26],[-97,22],[-94,18],[-90,15],[-86,12],[-83,9],[-79,8],[-83,15],[-90,17],[-97,16],[-104,20],[-110,24],[-114,29],[-117,33],[-122,37],[-124,42],[-124,48],[-130,55],[-135,58],[-145,60],[-155,58],[-165,60]],
+        [[-58,64],[-45,60],[-32,68],[-22,70],[-25,76],[-40,80],[-58,76],[-65,70]],
+        [[-78,7],[-70,11],[-62,10],[-52,5],[-50,0],[-44,-3],[-38,-5],[-35,-10],[-39,-15],[-41,-23],[-48,-28],[-55,-34],[-62,-39],[-65,-45],[-68,-50],[-70,-55],[-73,-52],[-73,-44],[-73,-37],[-71,-30],[-70,-22],[-70,-17],[-75,-14],[-79,-7],[-81,-3],[-80,2]],
+        [[-17,15],[-16,20],[-13,27],[-9,32],[-5,35],[0,36],[10,37],[11,34],[15,32],[20,32],[25,32],[32,31],[34,28],[35,24],[38,20],[43,12],[48,11],[51,10],[46,4],[42,-2],[40,-8],[37,-14],[35,-20],[33,-26],[28,-33],[22,-35],[18,-33],[15,-27],[13,-20],[12,-12],[9,-5],[8,2],[4,6],[-3,5],[-8,4],[-13,8]],
+        [[-9,36],[-9,43],[-2,44],[0,46],[-2,49],[1,51],[5,53],[8,55],[8,57],[10,58],[18,56],[21,59],[24,60],[28,65],[32,70],[40,68],[50,69],[60,70],[70,72],[80,73],[90,75],[100,77],[110,74],[120,73],[130,71],[140,72],[150,70],[160,69],[170,66],[178,65],[178,62],[170,60],[162,58],[156,52],[150,59],[142,55],[140,48],[135,44],[130,42],[127,38],[122,38],[121,31],[115,23],[110,20],[108,15],[105,10],[103,6],[100,8],[98,13],[94,17],[91,22],[88,22],[85,19],[80,13],[77,8],[75,14],[72,20],[68,23],[65,25],[60,25],[57,26],[52,26],[50,29],[48,30],[44,29],[40,32],[36,36],[32,36],[28,37],[24,38],[20,40],[15,40],[12,44],[8,44],[4,43],[0,40],[-3,37]],
+        [[113,-22],[114,-28],[115,-33],[118,-35],[124,-33],[129,-32],[132,-32],[136,-35],[140,-38],[145,-38],[150,-37],[153,-32],[153,-27],[151,-23],[146,-19],[142,-15],[142,-11],[137,-12],[135,-15],[132,-12],[130,-13],[126,-14],[122,-17],[117,-21]],
+        [[95,5],[100,0],[105,-5],[103,-6],[98,-1],[94,3]],
+        [[109,2],[113,4],[117,6],[119,2],[117,-2],[113,-3],[110,0]],
+        [[131,-1],[136,-3],[141,-4],[146,-7],[150,-9],[145,-9],[139,-7],[134,-4]],
+        [[130,31],[132,33],[135,34],[138,35],[140,37],[141,40],[142,43],[145,44],[141,45],[139,41],[136,37],[133,35],[131,33]],
+        [[-5,50],[-3,52],[-5,54],[-3,56],[-5,58],[-2,57],[0,53],[1,51]],
+        [[44,-16],[47,-14],[50,-16],[48,-22],[45,-25],[43,-21]],
+        [[172,-35],[175,-37],[178,-38],[174,-41],[171,-44],[167,-46],[169,-43]],
+        [[120,18],[122,16],[124,12],[122,8],[120,10]]
+      ];
+
+      let width = 0;
+      let height = 0;
+      let dpr = 1;
+      let cx = 0;
+      let cy = 0;
+      let radius = 0;
+      let rotY = -0.72;
+      let rotX = 0.34;
+      let velY = 0;
+      let velX = 0;
+      let pointerDown = false;
+      let dragging = false;
+      let downX = 0;
+      let downY = 0;
+      let downTime = 0;
+      let frozenRotX = 0;
+      let frozenRotY = 0;
+      let lastX = 0;
+      let lastY = 0;
+      let lastMoveTime = 0;
+      let lastInteraction = performance.now();
+      let selectedCity = null;
+      let spotlightCity = null;
+      let spotlightIntensity = 0;
+      let sequenceActive = true;
+      let seqTargetRotY = null;
+      let seqTargetRotX = null;
+      let lastSlot = -1;
+      let sequenceStart = performance.now();
+      let convergence = [];
+      let stars = [];
+      let renderPoints = [];
+
+      // Target-city marker palette: a clear, saturated yellow that reads plainly
+      // against the pale-blue point grid, both at rest and during the auto-tour.
+      const MARKER_YELLOW = "#ffd23f";
+      const MARKER_YELLOW_SOFT = "#ffe08a";
+
+      // Projected silhouette of the unit sphere under projectVector's perspective:
+      // max of sqrt(1 - z^2) / (1.32 - 0.32 z) is ~0.781, so the visible limb sits
+      // at 0.781 x radius.
+      const LIMB = 0.781;
+      let bottomReserve = 0; // px taken by the source/share row at the bottom
+
+      const AUTO_SPEED = 0.055;
+      const CITY_WINDOW = 2600;
+      const CITY_PHASE = cities.length * CITY_WINDOW;
+      const CONVERGE_DURATION = 2600;
+      const HELLO_START = CITY_PHASE + CONVERGE_DURATION;
+      const HELLO_DURATION = 3400;
+      const SEQ_DURATION = HELLO_START + HELLO_DURATION;
+
+      function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+      function lerp(a, b, t) { return a + (b - a) * t; }
+      function smoothstep(a, b, x) {
+        const t = clamp((x - a) / (b - a), 0, 1);
+        return t * t * (3 - 2 * t);
+      }
+      function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+      function seededRandom(seed) {
+        let value = seed >>> 0;
+        return () => {
+          value += 0x6D2B79F5;
+          let t = value;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      const rng = seededRandom(20260913);
+
+      function latLonToVector(lat, lon) {
+        const la = lat * Math.PI / 180;
+        const lo = lon * Math.PI / 180;
+        return {
+          x: Math.cos(la) * Math.sin(lo),
+          y: Math.sin(la),
+          z: Math.cos(la) * Math.cos(lo)
+        };
+      }
+
+      function pointInPolygon(lat, lon, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+          const xi = polygon[i][0];
+          const yi = polygon[i][1];
+          const xj = polygon[j][0];
+          const yj = polygon[j][1];
+          if (((yi > lat) !== (yj > lat)) && (lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)) {
+            inside = !inside;
+          }
+        }
+        return inside;
+      }
+
+      function isLand(lat, lon) {
+        if (lat <= -72) return true;
+        for (let i = 0; i < landPolygons.length; i++) {
+          if (pointInPolygon(lat, lon, landPolygons[i])) return true;
+        }
+        return false;
+      }
+
+      function makePoint(lat, lon, land, random) {
+        return {
+          lat,
+          lon,
+          land,
+          vec: latLonToVector(lat, lon),
+          sparkle: random(),
+          phase: random() * TAU,
+          _v: null
+        };
+      }
+
+      function buildPoints() {
+        const land = [];
+        const ocean = [];
+        for (let lat = -82; lat <= 83; lat += 1.55) {
+          const latRad = lat * Math.PI / 180;
+          const lonStep = 1.55 / Math.max(Math.cos(latRad), 0.22);
+          for (let lon = -180; lon < 180; lon += lonStep) {
+            const jitter = Math.min(1.05, lonStep * 0.62);
+            const testLat = lat + (rng() - 0.5) * jitter;
+            let testLon = lon + (rng() - 0.5) * jitter;
+            if (testLon > 180) testLon -= 360;
+            if (testLon < -180) testLon += 360;
+            if (isLand(testLat, testLon)) land.push(makePoint(testLat, testLon, true, rng));
+          }
+        }
+        for (let lat = -80; lat <= 80; lat += 4.1) {
+          const latRad = lat * Math.PI / 180;
+          const lonStep = 4.1 / Math.max(Math.cos(latRad), 0.22);
+          for (let lon = -180; lon < 180; lon += lonStep) {
+            ocean.push(makePoint(lat + (rng() - 0.5) * 1.2, lon + (rng() - 0.5) * 1.2, false, rng));
+          }
+        }
+        renderPoints = ocean.concat(land);
+      }
+
+      function buildStars() {
+        stars = [];
+        for (let i = 0; i < 145; i++) {
+          stars.push({
+            x: rng(),
+            y: rng(),
+            r: 0.35 + rng() * 1.05,
+            depth: 0.2 + rng() * 0.8,
+            phase: rng() * TAU,
+            speed: 0.35 + rng() * 0.9,
+            alpha: 0.16 + rng() * 0.42
+          });
+        }
+      }
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        cx = width / 2;
+        cy = height / 2;
+        const bar = document.querySelector(".teaser-bar");
+        bottomReserve = bar ? Math.max(0, height - bar.getBoundingClientRect().top) : 0;
+        if (width <= 640 || height > width * 1.15) {
+          // Portrait/compact: the globe owns the screen — a touch larger, anchored
+          // above centre so the source row below keeps clear room. The limb is
+          // capped so it never runs under the wordmark or the bottom row.
+          const top = 56;
+          const usable = Math.max(160, height - bottomReserve - top);
+          cy = top + usable * 0.48;
+          radius = Math.min(width * 0.63, height * 0.39, (usable * 0.5 - 4) / LIMB);
+        } else {
+          radius = Math.min(width, height) * 0.34;
+        }
+      }
+
+      function rotateVectorRot(v, rx, ry) {
+        const cosY = Math.cos(ry);
+        const sinY = Math.sin(ry);
+        const x = v.x * cosY + v.z * sinY;
+        const z = -v.x * sinY + v.z * cosY;
+        const cosX = Math.cos(rx);
+        const sinX = Math.sin(rx);
+        return { x, y: v.y * cosX - z * sinX, z: v.y * sinX + z * cosX };
+      }
+
+      function rotateVector(v) { return rotateVectorRot(v, rotX, rotY); }
+
+      function projectVector(v) {
+        const perspective = 1 / (1.32 - v.z * 0.32);
+        return {
+          x: cx + v.x * radius * perspective,
+          y: cy - v.y * radius * perspective,
+          z: v.z,
+          p: perspective
+        };
+      }
+
+      function projectCity(city) { return projectVector(rotateVector(city.vec)); }
+
+      function drawBackground(now) {
+        ctx.clearRect(0, 0, width, height);
+        const backdrop = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(width, height) * 0.78);
+        backdrop.addColorStop(0, "rgba(13, 31, 52, 0.28)");
+        backdrop.addColorStop(0.45, "rgba(5, 13, 25, 0.12)");
+        backdrop.addColorStop(1, "rgba(1, 3, 7, 0)");
+        ctx.fillStyle = backdrop;
+        ctx.fillRect(0, 0, width, height);
+
+        for (const star of stars) {
+          const twinkle = 0.5 + 0.5 * Math.sin(now * 0.001 * star.speed + star.phase);
+          const x = star.x * width + Math.sin(rotY) * star.depth * 10;
+          const y = star.y * height + Math.cos(rotX) * star.depth * 6;
+          ctx.globalAlpha = star.alpha * (0.45 + twinkle * 0.55);
+          ctx.fillStyle = "#c7dcf2";
+          ctx.beginPath();
+          ctx.arc(x, y, star.r, 0, TAU);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawAtmosphere() {
+        const halo = ctx.createRadialGradient(cx, cy, radius * 0.68, cx, cy, radius * 1.72);
+        halo.addColorStop(0, "rgba(77, 151, 226, 0)");
+        halo.addColorStop(0.48, "rgba(72, 145, 222, 0.055)");
+        halo.addColorStop(0.72, "rgba(92, 169, 246, 0.13)");
+        halo.addColorStop(1, "rgba(54, 121, 205, 0)");
+        ctx.fillStyle = halo;
+        ctx.fillRect(cx - radius * 1.8, cy - radius * 1.8, radius * 3.6, radius * 3.6);
+
+        // Faint body disc sized to the visible limb (no hard outline — the rim
+        // glow below gives the edge instead).
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * LIMB * 1.02, 0, TAU);
+        ctx.fillStyle = "rgba(15, 37, 61, 0.20)";
+        ctx.fill();
+      }
+
+      function drawRimGlow() {
+        // Soft light straddling the globe's limb so the dotted sphere fades into
+        // its atmosphere instead of ending abruptly.
+        const limb = radius * LIMB;
+        const inner = limb * 0.84;
+        const outer = limb * 1.2;
+        const at = (r) => clamp((r - inner) / (outer - inner), 0, 1);
+        const rim = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+        rim.addColorStop(0, "rgba(120, 186, 245, 0)");
+        rim.addColorStop(at(limb * 0.97), "rgba(120, 186, 245, 0.06)");
+        rim.addColorStop(at(limb * 1.01), "rgba(140, 200, 255, 0.11)");
+        rim.addColorStop(at(limb * 1.08), "rgba(100, 170, 240, 0.04)");
+        rim.addColorStop(1, "rgba(80, 150, 230, 0)");
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = rim;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outer, 0, TAU);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawGraticule() {
+        ctx.save();
+        ctx.strokeStyle = "rgba(132, 185, 229, 0.055)";
+        ctx.lineWidth = 1;
+        for (let lon = -150; lon <= 180; lon += 30) {
+          ctx.beginPath();
+          let drawing = false;
+          for (let lat = -84; lat <= 84; lat += 3) {
+            const p = projectVector(rotateVector(latLonToVector(lat, lon)));
+            if (p.z > -0.08) {
+              if (!drawing) { ctx.moveTo(p.x, p.y); drawing = true; }
+              else ctx.lineTo(p.x, p.y);
+            } else drawing = false;
+          }
+          ctx.stroke();
+        }
+        for (let lat = -60; lat <= 60; lat += 30) {
+          ctx.beginPath();
+          let drawing = false;
+          for (let lon = -180; lon <= 180; lon += 3) {
+            const p = projectVector(rotateVector(latLonToVector(lat, lon)));
+            if (p.z > -0.08) {
+              if (!drawing) { ctx.moveTo(p.x, p.y); drawing = true; }
+              else ctx.lineTo(p.x, p.y);
+            } else drawing = false;
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function drawPoints(now) {
+        for (const point of renderPoints) point._v = rotateVector(point.vec);
+        renderPoints.sort((a, b) => a._v.z - b._v.z);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (const point of renderPoints) {
+          const v = point._v;
+          const p = projectVector(v);
+          const depth = (v.z + 1) / 2;
+          const frontness = smoothstep(-0.15, 0.95, v.z);
+          const alpha = point.land
+            ? 0.14 + 0.76 * Math.pow(frontness, 1.25)
+            : 0.028 + 0.11 * depth;
+          const size = (point.land ? 1.02 : 0.58) * (0.72 + depth * 0.46) * p.p;
+          ctx.globalAlpha = clamp(alpha, 0, 1);
+          ctx.fillStyle = point.land ? (v.z > 0.25 ? "#d9edff" : "#99c8ff") : "#4d7198";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, size, 0, TAU);
+          ctx.fill();
+
+          if (point.land && point.sparkle > 0.968 && v.z > 0.12) {
+            ctx.globalAlpha = 0.13 * frontness;
+            ctx.fillStyle = "#d9f1ff";
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, size * 3.1, 0, TAU);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+
+      function drawCityMarkers(now) {
+        // Every city the tour isn't presenting gets a small, quiet yellow target
+        // dot in a faint yellow "press zone". The dot says "tap here"; the zone
+        // (fill + hairline edge) is exactly TAP_HIT_RADIUS, so what looks tappable
+        // is what the hit-test accepts. Kept low-key so idle markers don't compete;
+        // the active/spotlight city is skipped — its pulse stays the focal point.
+        const active = selectedCity || spotlightCity;
+        const zone = TAP_HIT_RADIUS; // the halo mirrors exactly how far a tap may land
+        ctx.save();
+        for (const city of cities) {
+          if (city === active) continue;
+          const p = projectCity(city);
+          if (p.z < 0.06) continue;
+          const front = smoothstep(0.04, 0.4, p.z);
+          if (front <= 0) continue;
+          const breathe = 0.5 + 0.5 * Math.sin(now * 0.0016 + (city.lat + city.lon));
+
+          // Press zone (source-over so it stays gentle): a faint yellow fill fading
+          // out to the tap radius, closed by a barely-there hairline at that radius.
+          ctx.globalCompositeOperation = "source-over";
+          const glow = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, zone);
+          glow.addColorStop(0, "rgba(255, 210, 63, " + (0.08 * front).toFixed(3) + ")");
+          glow.addColorStop(0.6, "rgba(255, 210, 63, " + (0.03 * front).toFixed(3) + ")");
+          glow.addColorStop(1, "rgba(255, 210, 63, 0)");
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, zone, 0, TAU);
+          ctx.fill();
+
+          ctx.globalAlpha = 0.075 * front;
+          ctx.strokeStyle = MARKER_YELLOW;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, zone - 0.5, 0, TAU);
+          ctx.stroke();
+
+          // Small breathing ring + core, drawn additively so the target point
+          // glows like the rest of the globe's lights.
+          ctx.globalCompositeOperation = "lighter";
+          ctx.globalAlpha = (0.26 + breathe * 0.14) * front;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.7 + breathe * 0.5, 0, TAU);
+          ctx.stroke();
+          ctx.globalAlpha = (0.6 + breathe * 0.25) * front;
+          ctx.fillStyle = MARKER_YELLOW_SOFT;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 1.4, 0, TAU);
+          ctx.fill();
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+      }
+
+      function drawCityPulses(now) {
+        const active = selectedCity || spotlightCity;
+        if (!active) return;
+        const p = projectCity(active);
+        if (p.z < 0.025) return;
+        const front = smoothstep(0.02, 0.22, p.z);
+        const intensity = selectedCity ? 1 : clamp(spotlightIntensity, 0, 1);
+        if (intensity <= 0) return;
+        const wave = 0.5 + 0.5 * Math.sin(now * 0.0018);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+
+        ctx.globalAlpha = (0.38 + wave * 0.26) * front * intensity;
+        ctx.strokeStyle = MARKER_YELLOW;
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7 + wave * 9, 0, TAU);
+        ctx.stroke();
+
+        ctx.globalAlpha = 0.18 * front * intensity * (1 - wave);
+        ctx.strokeStyle = MARKER_YELLOW;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 14 + wave * 16, 0, TAU);
+        ctx.stroke();
+
+        ctx.globalAlpha = 0.95 * front * intensity;
+        ctx.fillStyle = "#fff2c4";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.3, 0, TAU);
+        ctx.fill();
+
+        ctx.globalAlpha = 0.42 * front * intensity;
+        ctx.fillStyle = MARKER_YELLOW_SOFT;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4.6, 0, TAU);
+        ctx.fill();
+
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+
+      // Country code -> flag emoji (two regional-indicator symbols). Pure Unicode,
+      // so it renders offline wherever the platform ships flag glyphs.
+      function flagEmoji(cc) {
+        return cc.toUpperCase().replace(/[A-Z]/g, (ch) =>
+          String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65));
+      }
+
+      // Some platforms (notably Windows) have no flag glyphs and draw the two
+      // letters instead. Detect that once by rendering a flag and checking for any
+      // colour: a real flag has coloured pixels, the letter fallback is monochrome.
+      const flagsSupported = (() => {
+        try {
+          const c = document.createElement("canvas");
+          c.width = 24; c.height = 16;
+          const g = c.getContext("2d", { willReadFrequently: true });
+          g.textBaseline = "top";
+          g.font = "16px sans-serif";
+          g.fillStyle = "#555";
+          g.fillText(flagEmoji("US"), 0, 0);
+          const d = g.getImageData(0, 0, 24, 16).data;
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i + 3] === 0) continue;
+            if (Math.abs(d[i] - d[i + 1]) > 24 || Math.abs(d[i + 1] - d[i + 2]) > 24 || Math.abs(d[i] - d[i + 2]) > 24) {
+              return true;
+            }
+          }
+          return false;
+        } catch (e) {
+          return false;
+        }
+      })();
+
+      function setFlag(el, city) {
+        if (!el) return;
+        el.setAttribute("aria-label", city.country + " flag");
+        el.setAttribute("title", city.country);
+        if (flagsSupported) {
+          el.textContent = flagEmoji(city.cc);
+          el.classList.remove("is-code");
+        } else {
+          el.textContent = city.cc; // ISO-code chip fallback (offline, all platforms)
+          el.classList.add("is-code");
+        }
+      }
+
+      function populateCard(card, city) {
+        if (card.dataset.city === city.name) return;
+        card.dataset.city = city.name;
+        card.querySelector(".card-greeting").textContent = city.greeting;
+        // One long unbroken word would otherwise split mid-word on a small card.
+        card.querySelector(".card-head").classList.toggle("is-long", city.greeting.length >= 12);
+        setFlag(card.querySelector(".card-flag"), city);
+        const nameEl = card.querySelector(".card-city-text") || card.querySelector(".card-city");
+        nameEl.textContent = "Hello from " + city.name;
+      }
+
+      // ---- Spoken greeting (Web Speech API; local voices only, no network) ----
+      const speech = ("speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function")
+        ? window.speechSynthesis : null;
+      const speakBtn = document.getElementById("speak-btn");
+      let voices = [];
+
+      // The API exposes no gender, so voices are classed by well-known names.
+      const FEMALE_VOICE_NAMES = new Set(["samantha", "victoria", "karen", "moira", "tessa", "fiona", "veena", "amelie", "amélie", "anna", "milena", "kyoko", "mei-jia", "sin-ji", "ting-ting", "tingting", "sara", "zosia", "ioana", "alice", "alva", "carmit", "damayanti", "ellen", "joana", "kanya", "laura", "lekha", "luciana", "mariska", "melina", "monica", "mónica", "nora", "paulina", "satu", "yelda", "yuna", "zuzana", "allison", "ava", "susan", "serena", "kate", "zira", "hazel", "heera", "helena", "hortense", "elsa", "paola", "lana", "marie", "flo", "sandy", "shelley", "martha", "catherine", "amira", "linh", "lesya", "sofia"]);
+      const MALE_VOICE_NAMES = new Set(["daniel", "alex", "fred", "thomas", "jorge", "juan", "diego", "luca", "yuri", "maged", "otoya", "aaron", "arthur", "gordon", "lee", "rishi", "oliver", "tom", "xander", "carlos", "felipe", "henrik", "jacques", "magnus", "neel", "nicolas", "reed", "rocko", "eddy", "ralph", "junior", "david", "mark", "george", "ravi", "pablo", "stefan", "ichiro", "tarik", "hamza", "aru", "majed", "reza"]);
+
+      // macOS ships novelty/effect voices under real language tags (e.g. en-US
+      // "Bubbles", "Zarvox"); never pick those for a greeting.
+      const NOVELTY_VOICE = /^(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|pipe organ|superstar|trinoids|whisper|wobble|zarvox|deranged|hysterical)\b/i;
+
+      function refreshVoices() {
+        try {
+          voices = (speech.getVoices() || []).filter((v) => !NOVELTY_VOICE.test(v.name || ""));
+        } catch (e) {
+          voices = [];
+        }
+      }
+
+      if (speech) {
+        refreshVoices();
+        if (typeof speech.addEventListener === "function") speech.addEventListener("voiceschanged", refreshVoices);
+        else speech.onvoiceschanged = refreshVoices;
+      } else if (speakBtn) {
+        speakBtn.hidden = true;
+      }
+
+      function voiceGender(voice) {
+        const name = (voice.name || "").toLowerCase();
+        if (/\bfemale\b/.test(name)) return "female";
+        if (/\bmale\b/.test(name)) return "male";
+        const words = name.split(/[\s()_,.]+/);
+        for (const word of words) {
+          if (FEMALE_VOICE_NAMES.has(word)) return "female";
+          if (MALE_VOICE_NAMES.has(word)) return "male";
+        }
+        return "";
+      }
+
+      // Speak a city's greeting in its own language with a random female or male
+      // voice. Only ever called from a user tap or the speaker button, so the tour
+      // stays silent and autoplay rules are respected. Fails silently.
+      function speakCity(city) {
+        if (!speech || !city) return;
+        try {
+          if (speech.speaking || speech.pending) speech.cancel();
+          if (!voices.length) refreshVoices();
+          const code = city.bcp47.toLowerCase();
+          const prefix = code.split("-")[0];
+          const langOf = (v) => (v.lang || "").replace(/_/g, "-").toLowerCase();
+          let pool = voices.filter((v) => langOf(v) === code);
+          if (!pool.length) pool = voices.filter((v) => langOf(v).split("-")[0] === prefix);
+          const female = Math.random() < 0.5;
+          const gendered = pool.filter((v) => voiceGender(v) === (female ? "female" : "male"));
+          const choices = gendered.length ? gendered : pool;
+          const utterance = new SpeechSynthesisUtterance(city.greeting);
+          utterance.lang = city.bcp47;
+          if (choices.length) utterance.voice = choices[Math.floor(Math.random() * choices.length)];
+          utterance.pitch = female ? 1.15 : 0.85;
+          utterance.rate = 0.9 + Math.random() * 0.1;
+          speech.speak(utterance);
+        } catch (e) { /* speech is a nicety; never surface an error */ }
+      }
+
+      function hideCard(card) {
+        card.classList.remove("visible");
+        card.style.opacity = "0";
+      }
+
+      function placeCard(card, point) {
+        const cardWidth = card.offsetWidth || 250;
+        const cardHeight = card.offsetHeight || 135;
+
+        // On a narrow viewport the card is almost as wide as the screen, so a
+        // sideways offset can't clear the point — it would sit on top of the very
+        // city it presents. Offset it vertically instead (above or below the
+        // point) and keep the connector anchored to the edge that faces it.
+        if (width <= 640) {
+          const gap = 26;
+          const margin = 14;
+          const halfW = cardWidth / 2;
+          const halfH = cardHeight / 2;
+          const x = clamp(point.x, halfW + margin, width - halfW - margin);
+          // Push the card toward the roomier side: point low on screen -> card
+          // above it; point high -> card below. Flip if that side lacks room.
+          const preferAbove = point.y > height * 0.5;
+          const aboveY = point.y - gap - halfH;
+          const belowY = point.y + gap + halfH;
+          const aboveFits = aboveY - halfH >= margin;
+          // Keep the card off the source row, and above the bottom sheet when open.
+          const floor = height - Math.max(bottomReserve, originPanelOpen ? originPanel.offsetHeight : 0);
+          const belowFits = belowY + halfH <= floor - margin;
+          let y;
+          if (preferAbove) y = aboveFits ? aboveY : belowY;
+          else y = belowFits ? belowY : aboveY;
+          y = clamp(y, halfH + margin, Math.max(halfH + margin, floor - halfH - margin));
+          card.style.left = x + "px";
+          card.style.top = y + "px";
+          const anchorX = clamp(point.x, x - halfW + 20, x + halfW - 20);
+          const anchorY = point.y < y ? y - halfH : y + halfH;
+          return { x: anchorX, y: anchorY };
+        }
+
+        const side = point.x < cx ? 1 : -1;
+        let x = point.x + side * (cardWidth / 2 + 34);
+        let y = clamp(point.y, 112, Math.max(112, Math.min(height - 112, height - bottomReserve - cardHeight / 2 - 14)));
+        x = clamp(x, cardWidth / 2 + 14, width - cardWidth / 2 - 14);
+        card.style.left = x + "px";
+        card.style.top = y + "px";
+        const left = x - cardWidth / 2;
+        const right = x + cardWidth / 2;
+        const anchorX = point.x < x ? right : left;
+        const anchorY = clamp(point.y, y - cardHeight / 2 + 25, y + cardHeight / 2 - 25);
+        return { x: anchorX, y: anchorY };
+      }
+
+      function setConnection(point, anchor, alpha) {
+        const midX = (point.x + anchor.x) / 2 + (anchor.x - point.x) * 0.08;
+        const midY = (point.y + anchor.y) / 2 - 22;
+        connectionPath.setAttribute("d", `M ${point.x.toFixed(1)} ${point.y.toFixed(1)} Q ${midX.toFixed(1)} ${midY.toFixed(1)} ${anchor.x.toFixed(1)} ${anchor.y.toFixed(1)}`);
+        connectionPath.style.opacity = String(clamp(alpha, 0, 1));
+      }
+
+      function hideConnection() { connectionPath.style.opacity = "0"; }
+
+      function updateSelectedCard(now) {
+        if (!selectedCity) {
+          hideCard(cityCard);
+          // The auto-tour owns the shared connector while it is running; only
+          // clear it here when no sequence is driving it, otherwise this path
+          // would erase the auto card's connector in the same frame it is drawn.
+          if (!sequenceActive) hideConnection();
+          return;
+        }
+        const point = projectCity(selectedCity);
+        const front = smoothstep(0.02, 0.20, point.z);
+        if (front <= 0.02) {
+          hideCard(cityCard);
+          hideConnection();
+          return;
+        }
+        populateCard(cityCard, selectedCity);
+        const anchor = placeCard(cityCard, point);
+        cityCard.classList.add("visible");
+        cityCard.style.opacity = String(front);
+        setConnection(point, anchor, front * 0.72);
+      }
+
+      function makeConvergence() {
+        const sources = cities.map(projectCity).filter((p) => p.z > 0.02);
+        const particles = [];
+        for (let i = 0; i < 48; i++) {
+          const source = sources.length ? sources[i % sources.length] : { x: cx + (rng() - 0.5) * radius, y: cy + (rng() - 0.5) * radius };
+          particles.push({
+            x0: source.x + (rng() - 0.5) * 16,
+            y0: source.y + (rng() - 0.5) * 16,
+            x1: cx + (rng() - 0.5) * 22,
+            y1: cy + (rng() - 0.5) * 22,
+            delay: rng() * 0.34,
+            duration: 1.25 + rng() * 1.05,
+            size: 0.65 + rng() * 1.45
+          });
+        }
+        return particles;
+      }
+
+      function drawConvergence(now) {
+        if (!convergence.length) return;
+        const t = (now - sequenceStart - CITY_PHASE) / 1000;
+        if (t < 0 || t > CONVERGE_DURATION / 1000) return;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const centerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 0.48);
+        centerGlow.addColorStop(0, "rgba(211, 241, 255, 0.18)");
+        centerGlow.addColorStop(1, "rgba(211, 241, 255, 0)");
+        ctx.globalAlpha = Math.sin(Math.PI * clamp(t / (CONVERGE_DURATION / 1000), 0, 1)) * 0.7;
+        ctx.fillStyle = centerGlow;
+        ctx.fillRect(cx - radius * 0.5, cy - radius * 0.5, radius, radius);
+        for (const particle of convergence) {
+          const local = (t - particle.delay) / particle.duration;
+          if (local < 0 || local > 1) continue;
+          const eased = easeOutCubic(local);
+          const x = lerp(particle.x0, particle.x1, eased);
+          const y = lerp(particle.y0, particle.y1, eased);
+          ctx.globalAlpha = Math.sin(Math.PI * local) * 0.72;
+          ctx.fillStyle = "#d9f1ff";
+          ctx.beginPath();
+          ctx.arc(x, y, particle.size * (1 - local * 0.35), 0, TAU);
+          ctx.fill();
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+
+      function startSequence(now) {
+        selectedCity = null;
+        hideCard(cityCard);
+        hideConnection();
+        convergence = [];
+        helloCenter.classList.remove("visible");
+        helloCenter.style.opacity = "0";
+        sequenceActive = true;
+        sequenceStart = now;
+        lastSlot = -1;
+        seqTargetRotY = null;
+        seqTargetRotX = null;
+      }
+
+      function interruptSequence() {
+        sequenceActive = false;
+        sequenceStart = 0;
+        convergence = [];
+        spotlightCity = null;
+        spotlightIntensity = 0;
+        seqTargetRotY = null;
+        seqTargetRotX = null;
+        lastSlot = -1;
+        hideCard(autoCard);
+        helloCenter.classList.remove("visible");
+        helloCenter.style.opacity = "0";
+        hideConnection();
+      }
+
+      function updateSequence(now) {
+        if (!sequenceActive) return;
+        let t = now - sequenceStart;
+        if (t < 0) t = 0;
+        if (t >= SEQ_DURATION) {
+          startSequence(now);
+          t = 0;
+        }
+
+        if (t < CITY_PHASE) {
+          const slot = Math.floor(t / CITY_WINDOW);
+          const baseIndex = slot % cities.length;
+          const city = cities[baseIndex];
+          if (slot !== lastSlot) {
+            lastSlot = slot;
+            let ty = -city.lon * Math.PI / 180;
+            const tx = city.lat * Math.PI / 180;
+            while (ty - rotY > Math.PI) ty -= Math.PI * 2;
+            while (ty - rotY < -Math.PI) ty += Math.PI * 2;
+            seqTargetRotY = ty;
+            seqTargetRotX = tx;
+          }
+          const point = projectCity(city);
+          const local = t - slot * CITY_WINDOW;
+          const fadeIn = smoothstep(0, 260, local);
+          const fadeOut = 1 - smoothstep(CITY_WINDOW - 340, CITY_WINDOW - 80, local);
+          const cardOpacity = clamp(fadeIn * fadeOut * smoothstep(0.02, 0.18, point.z), 0, 1);
+          const readable = local > 260 && local < CITY_WINDOW - 340 ? 1 : cardOpacity;
+          if (cardOpacity > 0.02) {
+            spotlightCity = city;
+            spotlightIntensity = cardOpacity;
+            populateCard(autoCard, city);
+            const anchor = placeCard(autoCard, point);
+            autoCard.classList.add("visible");
+            autoCard.style.opacity = String(readable);
+            setConnection(point, anchor, readable * 0.48);
+          } else {
+            spotlightCity = null;
+            spotlightIntensity = 0;
+            hideCard(autoCard);
+            hideConnection();
+          }
+          return;
+        }
+
+        spotlightCity = null;
+        spotlightIntensity = 0;
+        hideCard(autoCard);
+        hideConnection();
+        if (t < HELLO_START) {
+          if (!convergence.length) convergence = makeConvergence();
+          return;
+        }
+
+        convergence = [];
+        const helloT = t - HELLO_START;
+        const helloDuration = SEQ_DURATION - HELLO_START;
+        const inAmount = smoothstep(0, helloDuration * 0.42, helloT);
+        const outAmount = 1 - smoothstep(helloDuration * 0.78, helloDuration, helloT);
+        const opacity = clamp(inAmount * outAmount, 0, 1);
+        const scale = 0.86 + easeOutCubic(smoothstep(0, helloDuration * 0.55, helloT)) * 0.14;
+        helloCenter.style.opacity = String(opacity);
+        helloCenter.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
+        helloCenter.classList.toggle("visible", opacity > 0.02);
+      }
+
+      function maybeStartSequence(now) {
+        if (originPanelOpen) return;
+        if (selectedCity) return; // a selected card must not be replaced by the tour
+        if (!sequenceActive && !pointerDown && now - lastInteraction > 4000) startSequence(now);
+      }
+
+      function updateMotion(dtMs) {
+        const dt = dtMs / 1000;
+        if (originPanelOpen) {
+          // The globe holds still under the open source panel, as under a card.
+          velX = 0;
+          velY = 0;
+          return;
+        }
+        if (sequenceActive && seqTargetRotY !== null) {
+          const k = 1 - Math.exp(-dt * 3.2);
+          rotY += (seqTargetRotY - rotY) * k;
+          rotX += (seqTargetRotX - rotX) * k;
+          const damping = Math.exp(-dt * 3.5);
+          velY *= damping;
+          velX *= damping;
+          return;
+        }
+        const idle = performance.now() - lastInteraction;
+        if (!pointerDown && !selectedCity && idle > 4000) {
+          velY = lerp(velY, AUTO_SPEED, Math.min(1, dt * 1.15));
+          velX = lerp(velX, 0, Math.min(1, dt * 1.15));
+        } else if (!pointerDown) {
+          const damping = Math.exp(-dt * 1.55);
+          velY *= damping;
+          velX *= damping;
+        }
+        rotY += velY * dt;
+        rotX += velX * dt;
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      }
+
+      const TAP_HIT_RADIUS = 34; // generous px tolerance around a city marker for a tap
+      const DRAG_THRESHOLD = 8;  // px of travel that turns a press into a drag
+
+      function handleGlobeClick(position, now) {
+        // Hit-test against the projection frozen at press time, so a globe that was
+        // spinning or mid-tour when pressed cannot slide the target under the finger.
+        // Select ONLY when the press lands within a marker's radius — never the
+        // "nearest" city from far away.
+        let best = null;
+        let bestDistance = Infinity;
+        for (const city of cities) {
+          const point = projectVector(rotateVectorRot(city.vec, frozenRotX, frozenRotY));
+          if (point.z < 0.02) continue; // facing away from the viewer
+          const distance = Math.hypot(point.x - position.x, point.y - position.y);
+          if (distance <= TAP_HIT_RADIUS && distance < bestDistance) {
+            bestDistance = distance;
+            best = city;
+          }
+        }
+        lastInteraction = now;
+        if (best) {
+          selectedCity = best;
+          speakCity(best);
+          populateCard(cityCard, selectedCity);
+        } else {
+          selectedCity = null; // tapped empty space -> dismiss, let motion resume
+        }
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        if (originPanelOpen) {
+          // A tap on the globe outside the open panel only closes the panel: it
+          // starts no drag and selects no city (pointerDown stays false, so the
+          // matching pointerup is ignored).
+          event.preventDefault();
+          closeOriginPanel(false);
+          return;
+        }
+        const position = pointerPosition(event);
+        pointerDown = true;
+        dragging = false;
+        downX = position.x;
+        downY = position.y;
+        lastX = position.x;
+        lastY = position.y;
+        downTime = performance.now();
+        lastMoveTime = downTime;
+        // Freeze everything at the press: kill inertia, stop the auto-tour and its
+        // card changes, and snapshot the rotation the hit-test will project against.
+        velX = 0;
+        velY = 0;
+        frozenRotX = rotX;
+        frozenRotY = rotY;
+        lastInteraction = downTime;
+        interruptSequence();
+        canvas.classList.add("dragging");
+        canvas.setPointerCapture(event.pointerId);
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        if (!pointerDown) return;
+        const now = performance.now();
+        const position = pointerPosition(event);
+        const dx = position.x - lastX;
+        const dy = position.y - lastY;
+        const dt = Math.max(1, now - lastMoveTime);
+        if (!dragging && Math.hypot(position.x - downX, position.y - downY) > DRAG_THRESHOLD) dragging = true;
+        if (dragging) {
+          const stepY = dx * 0.005;
+          const stepX = dy * 0.005;
+          rotY += stepY;
+          rotX += stepX;
+          velY = clamp(velY * 0.68 + (stepY / (dt / 1000)) * 0.32, -4.2, 4.2);
+          velX = clamp(velX * 0.68 + (stepX / (dt / 1000)) * 0.32, -4.2, 4.2);
+          lastX = position.x;
+          lastY = position.y;
+          lastMoveTime = now;
+        }
+        lastInteraction = now;
+      });
+
+      function endPointer(event) {
+        if (!pointerDown) return;
+        const now = performance.now();
+        const wasDragging = dragging;
+        const position = pointerPosition(event);
+        pointerDown = false;
+        dragging = false;
+        canvas.classList.remove("dragging");
+        lastInteraction = now;
+        // Tap vs drag is decided purely by travel distance from the press point.
+        const moved = Math.hypot(position.x - downX, position.y - downY) > DRAG_THRESHOLD;
+        if (!wasDragging && !moved) handleGlobeClick(position, now);
+      }
+
+      canvas.addEventListener("pointerup", endPointer);
+      canvas.addEventListener("pointercancel", endPointer);
+      canvas.addEventListener("pointerleave", endPointer);
+
+      // Block the context menu / long-press callout on the globe so a long press
+      // can't pop a menu or hijack a tap.
+      canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+
+      // Taps on the interactive card must not fall through to the globe behind it.
+      ["pointerdown", "pointerup", "click"].forEach((type) => {
+        cityCard.addEventListener(type, (event) => event.stopPropagation());
+      });
+
+      // ---- Wikipedia language-origin panel (the app's only network dependency) ----
+      const originBtn = document.getElementById("origin-btn");
+      const originPanel = document.getElementById("origin-panel");
+      const originClose = document.getElementById("origin-close");
+      const originTitle = document.getElementById("origin-title");
+      const originStatus = document.getElementById("origin-status");
+      const originExtract = document.getElementById("origin-extract");
+      const originLink = document.getElementById("origin-link");
+      const originRetry = document.getElementById("origin-retry");
+      let originPanelOpen = false;
+      let originCity = null;
+      let originRequestId = 0;
+
+      const originCached = document.getElementById("origin-cached");
+      const WIKI_CACHE_PREFIX = "hello.wiki.v1.";
+
+      // Last good Wikipedia summary per language, for offline / failed fetches.
+      function readCachedOrigin(city) {
+        try {
+          const raw = localStorage.getItem(WIKI_CACHE_PREFIX + city.wiki);
+          const entry = raw ? JSON.parse(raw) : null;
+          return entry && typeof entry.extract === "string" && entry.extract ? entry : null;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function writeCachedOrigin(city, entry) {
+        try { localStorage.setItem(WIKI_CACHE_PREFIX + city.wiki, JSON.stringify(entry)); } catch (e) { /* storage unavailable */ }
+      }
+
+      function wikiArticleUrl(topic) {
+        return "https://en.wikipedia.org/wiki/" + encodeURIComponent(topic);
+      }
+
+      async function loadOrigin(city) {
+        const requestId = ++originRequestId;
+        originStatus.classList.remove("is-error");
+        originStatus.textContent = "Loading the story of " + city.lang + " from Wikipedia…";
+        originExtract.textContent = "";
+        originCached.hidden = true;
+        originRetry.hidden = true;
+        originTitle.textContent = city.lang;
+        originLink.href = wikiArticleUrl(city.wiki); // usable even if the fetch fails
+        try {
+          const response = await fetch(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(city.wiki),
+            { headers: { accept: "application/json" } }
+          );
+          if (requestId !== originRequestId) return; // a newer request or a close superseded this
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          const data = await response.json();
+          if (requestId !== originRequestId) return;
+          originTitle.textContent = data.title || city.lang;
+          originExtract.textContent = data.extract || ("No summary is available for " + city.lang + " right now.");
+          const page = data.content_urls && data.content_urls.desktop && data.content_urls.desktop.page;
+          if (page) originLink.href = page;
+          originStatus.textContent = "";
+          if (data.extract) writeCachedOrigin(city, { title: data.title || city.lang, extract: data.extract, page: page || "" });
+        } catch (err) {
+          if (requestId !== originRequestId) return;
+          const cached = readCachedOrigin(city);
+          if (cached) {
+            originTitle.textContent = cached.title || city.lang;
+            originExtract.textContent = cached.extract;
+            if (cached.page) originLink.href = cached.page;
+            originStatus.textContent = "";
+            originCached.hidden = false;
+            return;
+          }
+          originStatus.classList.add("is-error");
+          originStatus.textContent = "Couldn't reach Wikipedia — you may be offline. The link below still opens the article.";
+          originExtract.textContent = "";
+          originRetry.hidden = false;
+        }
+      }
+
+      // Non-modal: no focus trap. Esc closes from anywhere on the page.
+      function onOriginKeydown(event) {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        closeOriginPanel(true);
+      }
+
+      // Beside the card, on the side with more room, inside the viewport and above
+      // the teaser row. On mobile the CSS bottom sheet takes over, so inline
+      // placement is cleared. Runs every frame while open (cheap; follows resizes).
+      function positionOriginPanel() {
+        const style = originPanel.style;
+        if (width <= 640) {
+          style.left = "";
+          style.top = "";
+          style.maxHeight = "";
+          return;
+        }
+        const margin = 16;
+        const gap = 14;
+        const floor = height - bottomReserve;
+        const maxHeight = Math.max(160, floor - margin * 2);
+        style.maxHeight = maxHeight + "px";
+        const w = originPanel.offsetWidth;
+        const h = Math.min(originPanel.offsetHeight, maxHeight);
+        let x = (width - w) / 2;
+        let y = (floor - h) / 2;
+        if (cityCard.classList.contains("visible")) {
+          const r = cityCard.getBoundingClientRect();
+          x = width - r.right >= r.left ? r.right + gap : r.left - gap - w;
+          y = r.top + r.height / 2 - h / 2;
+        }
+        style.left = Math.round(clamp(x, margin, Math.max(margin, width - w - margin))) + "px";
+        style.top = Math.round(clamp(y, margin, Math.max(margin, floor - h - margin))) + "px";
+      }
+
+      function openOriginPanel() {
+        const city = selectedCity || cities.find((c) => c.name === cityCard.dataset.city);
+        if (!city) return;
+        originCity = city;
+        originPanel.hidden = false;
+        originPanelOpen = true;
+        velX = 0;
+        velY = 0;
+        loadOrigin(city);
+        positionOriginPanel();
+        originPanel.focus({ preventScroll: true });
+        document.addEventListener("keydown", onOriginKeydown, true);
+      }
+
+      // restoreFocus: X and Esc return focus to the source link; a tap on the globe
+      // does not pull focus back into the card.
+      function closeOriginPanel(restoreFocus) {
+        if (!originPanelOpen) return;
+        originPanelOpen = false;
+        originPanel.hidden = true;
+        originRequestId++; // ignore any in-flight response
+        document.removeEventListener("keydown", onOriginKeydown, true);
+        if (restoreFocus) originBtn.focus({ preventScroll: true });
+        lastInteraction = performance.now();
+      }
+
+      originBtn.addEventListener("click", (event) => { event.stopPropagation(); openOriginPanel(); });
+      speakBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        speakCity(selectedCity || cities.find((c) => c.name === cityCard.dataset.city));
+      });
+      originClose.addEventListener("click", () => closeOriginPanel(true));
+      originRetry.addEventListener("click", () => { if (originCity) loadOrigin(originCity); });
+
+      // The panel sits above the globe; stop its pointer events from propagating so
+      // nothing behind it can react.
+      ["pointerdown", "pointerup", "click"].forEach((type) => {
+        originPanel.addEventListener(type, (event) => event.stopPropagation());
+      });
+
+      window.addEventListener("resize", resize);
+
+      // ---- Source link + share (runs before the canvas check, so it works in the fallback too) ----
+      function setupTeaserBar() {
+        const row = document.getElementById("teaser-row");
+        const shareBtn = document.getElementById("share-btn");
+        const toast = document.getElementById("toast");
+        let toastTimer = 0;
+
+        // Nothing in the row may reach the globe underneath.
+        ["pointerdown", "pointerup", "click"].forEach((type) => {
+          row.addEventListener(type, (event) => event.stopPropagation());
+        });
+
+        function showToast(text) {
+          toast.textContent = text;
+          toast.classList.add("visible");
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => toast.classList.remove("visible"), 1800);
+        }
+
+        async function copyLink(url) {
+          try {
+            if (navigator.clipboard && window.isSecureContext) {
+              await navigator.clipboard.writeText(url);
+              return true;
+            }
+          } catch (e) { /* fall through to the legacy path */ }
+          try {
+            const area = document.createElement("textarea");
+            area.value = url;
+            area.setAttribute("readonly", "");
+            area.style.position = "fixed";
+            area.style.opacity = "0";
+            document.body.appendChild(area);
+            area.select();
+            const ok = document.execCommand("copy");
+            area.remove();
+            return ok;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        shareBtn.addEventListener("click", async () => {
+          const url = location.href;
+          if (navigator.share) {
+            try {
+              await navigator.share({ title: document.title, url });
+              return;
+            } catch (err) {
+              if (err && err.name === "AbortError") return; // user closed the sheet
+            }
+          }
+          showToast((await copyLink(url)) ? "Link copied" : "Couldn't copy the link");
+        });
+      }
+
+      let lastFrame = performance.now();
+      let timeBaseSet = false;
+
+      function frame(now) {
+        // The timestamp handed to a requestAnimationFrame callback is the time
+        // the frame began, which can predate the performance.now() captured while
+        // the page was still starting up — the gap widens under CPU throttling.
+        // Anchoring the clock to that first rAF timestamp keeps every elapsed
+        // time (t = now - sequenceStart, dt = now - lastFrame) non-negative, so
+        // the sequence never indexes cities[] with a negative slot on frame one.
+        if (!timeBaseSet) {
+          timeBaseSet = true;
+          sequenceStart = now;
+          lastFrame = now;
+        }
+        const dt = Math.min(64, Math.max(0, now - lastFrame));
+        lastFrame = now;
+
+        updateMotion(dt);
+        maybeStartSequence(now);
+
+        drawBackground(now);
+        drawAtmosphere();
+        drawGraticule();
+        drawPoints(now);
+        drawRimGlow();
+        drawCityMarkers(now);
+        drawCityPulses(now);
+        drawConvergence(now);
+
+        updateSequence(now);
+        updateSelectedCard(now);
+        if (originPanelOpen) positionOriginPanel();
+
+        requestAnimationFrame(frame);
+      }
+
+      for (const city of cities) city.vec = latLonToVector(city.lat, city.lon);
+
+      resize();
+      buildStars();
+      buildPoints();
+      sequenceStart = performance.now();
+      lastFrame = performance.now();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>

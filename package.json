@@ -3,6 +3,7 @@
   "productName": "Hello.",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "A quiet, local-first workspace for conversations, research and execution.",
   "type": "module",
   "main": "out/main/index.js",
