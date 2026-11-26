@@ -53,3 +53,8 @@ This is a separate, greenfield Electron app. Never mutate the old repository at
   the app is: `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PROVENANCE.md`
   and `design/reference/`; what is open: Spec Kit `specs/blaizzy-nativ-hello-monitor/tasks.md`
   (read it with spec_kit_status).
+- This repository is public. Its files and commit messages never name other
+  applications or tools the owner works with, open source or not (user, 26.11),
+  and never carry a key. A pre-push check refuses a push that does. What a local
+  tool writes into `AGENTS.md` and a spec's `tasks.md` stays in the checkout: the
+  `desk` clean filter (`.gitattributes`) keeps it out of what is committed.

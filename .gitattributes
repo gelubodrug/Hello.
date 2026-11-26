@@ -1,0 +1,4 @@
+# What a local tool writes into these files stays in the checkout: the clean
+# filter (configured per clone, absent elsewhere) keeps it out of commits.
+AGENTS.md filter=desk
+specs/**/tasks.md filter=desk
