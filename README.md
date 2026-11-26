@@ -10,6 +10,10 @@ Hello. is a local-first workspace for AI models on your Mac: one conversation,
 and beside it a shared place to work — a real browser, terminals, files,
 spreadsheets and the CLI agents you already have.
 
+It is made to be a pleasure to use, not only useful. How it looks, how it moves
+and what it does when you close, hide or stop something were decided first, and
+the features were built to fit.
+
 > Codex off. Claude off. What do you do?
 > You use a tool made with them.
 

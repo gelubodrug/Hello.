@@ -3,6 +3,9 @@
 This is a separate, greenfield Electron app. Never mutate the old repository at
 `/Users/q/Documents/app chat local models first` or access its user database.
 
+- Hello. is made to be a pleasure to use, not only useful (user, 26.11: "nu vreau
+  doar să fie ceva folositor… vreau să fie pleasing to use"). A change that works
+  but reads, moves or behaves worse for the person is not done.
 - The approved visual contract and complete executable reference are in
   `design/reference/`. Preserve the approved typography, native CSS materials,
   pill/menu geometry and reveal/fade motion. Do not import the old shell/store.
