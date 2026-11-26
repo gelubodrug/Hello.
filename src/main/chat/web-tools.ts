@@ -9,9 +9,11 @@ import type { Message } from '../../shared/types';
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_CHARS = 16_000;
 const TIMEOUT_MS = 20_000;
+/** A page drawn by a real browser gets its own time: the plain request's is spent by then. */
+const BROWSER_MS = 25_000;
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Hello/1.0 Safari/537.36';
 
-function publicIP(address: string): boolean {
+export function publicIP(address: string): boolean {
   if (isIP(address) === 4) {
     const [a, b, c] = address.split('.').map(Number);
     return !(a === 0 || a === 10 || a === 127 || a >= 224 ||
@@ -124,6 +126,24 @@ function readableHTML(html: string): { title: string; text: string } {
     .replace(/[ \t\f\v]+/g, ' ').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
   return { title, text };
 }
+/**
+ * A real browser page, out of sight, for what a plain request cannot read: a
+ * search the engine answers with a bot check, a page that is empty until its
+ * scripts run. Main supplies it (web-reader.ts); without one the tools say how
+ * to do the same in a browser tab, as before.
+ */
+export type PageRenderer = (url: string, signal: AbortSignal) => Promise<{ url: string; html: string }>;
+type Fetched = Awaited<ReturnType<typeof getPublic>>;
+export interface WebResearchOptions {
+  render?: PageRenderer;
+  /** The plain request; replaced in tests. */
+  get?: (url: URL, signal: AbortSignal, accept: string) => Promise<Fetched>;
+}
+/** What a site says instead of its page when it takes the request for a robot. */
+const BOT_WALL = /just a moment|verify you are human|attention required.*cloudflare|access denied/i;
+/** A refusal a browser often does not get: forbidden, too many requests, a waiting room, a body the request cannot read. */
+const WORTH_A_BROWSER = /HTTP (?:403|429|503)|uncompressed-text/;
+
 function attribute(tag: string, name: string): string {
   return new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(tag)?.slice(1).find(Boolean) ?? '';
 }
@@ -146,26 +166,76 @@ function ddgResults(html: string, count: number): SearchHit[] {
   return results;
 }
 
+/** The same hits on the engine's own page, as a browser draws it: its links carry the address itself. */
+function ddgPageResults(html: string, count: number): SearchHit[] {
+  const anchors = [...html.matchAll(/<a\b([^>]+)>([\s\S]*?)<\/a>/gi)].filter(match => attribute(match[1], 'data-testid') === 'result-title-a');
+  const results: SearchHit[] = [];
+  for (let i = 0; i < anchors.length && results.length < count; i++) {
+    const match = anchors[i];
+    const url = webURL(entities(attribute(match[1], 'href')));
+    if (!url || results.some(hit => hit.url === url)) continue;
+    try { if (new URL(url).hostname.endsWith('duckduckgo.com')) continue; } catch { continue; }
+    const block = html.slice(match.index! + match[0].length, anchors[i + 1]?.index ?? html.length);
+    const snippet = /<div\b[^>]*data-result=["']snippet["'][^>]*>([\s\S]*?)<\/div>/i.exec(block)?.[1] ?? '';
+    results.push({ title: inline(match[2]).slice(0, 300) || url, url, snippet: inline(snippet).slice(0, 1500) });
+  }
+  return results;
+}
+
 export class WebResearch {
   private nextId = 0;
   private ids = new Map<string, number>();
-  constructor(history: readonly Message[] = []) {
+  private readonly render?: PageRenderer;
+  private readonly get: NonNullable<WebResearchOptions['get']>;
+  constructor(history: readonly Message[] = [], options: WebResearchOptions = {}) {
+    this.render = options.render;
+    this.get = options.get ?? getPublic;
     for (const source of fetchedSources(history)) {
       this.nextId = Math.max(this.nextId, source.id);
       this.ids.set(source.url, source.id);
     }
   }
+  /** The page as a real browser draws it, out of sight; nothing when there is no such browser or it could not. */
+  private async shown(url: string, signal: AbortSignal): Promise<{ url: string; html: string } | undefined> {
+    if (!this.render) return undefined;
+    const shown = await this.render(url, AbortSignal.any([signal, AbortSignal.timeout(BROWSER_MS)])).catch(() => undefined);
+    signal.throwIfAborted();
+    return shown;
+  }
   async fetchURL(raw: string, signal: AbortSignal): Promise<WebPageResult> {
     const url = webURL(raw.trim());
     if (!url) throw new Error('fetch_url requires an absolute public HTTP(S) URL without credentials.');
     const scoped = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
-    const page = await getPublic(new URL(url), scoped, 'text/html,application/xhtml+xml,text/plain,application/json,application/xml');
-    const parsed = /html/i.test(page.contentType) || /^\s*<(?:!doctype|html)/i.test(page.body)
-      ? readableHTML(page.body) : { title: new URL(page.url).hostname, text: page.body.trim() };
-    if (!parsed.text || /just a moment|verify you are human|attention required.*cloudflare|access denied/i.test(parsed.title))
-      // The browser is named as the way through: a model told only to try elsewhere answered from memory instead
-      // of opening the page in the browser it had (a chat, 17.11).
-      throw new Error('No readable page was returned (empty, JavaScript-only or bot protection). Hello’s browser is a real browser and reads such a page: browser_open this URL and browser_read the tab (the browser tools are loaded for your next step; tools_find browser if they are not). Or try another public source. Do not cite this attempt.');
+    const read = (body: string, contentType: string, at: string) => /html/i.test(contentType) || /^\s*<(?:!doctype|html)/i.test(body)
+      ? readableHTML(body) : { title: new URL(at).hostname, text: body.trim() };
+    const unreadable = (parsed: { title: string; text: string }) => !parsed.text || BOT_WALL.test(parsed.title);
+    let page: Fetched | undefined;
+    let parsed: { title: string; text: string } | undefined;
+    let refused: unknown;
+    try {
+      page = await this.get(new URL(url), scoped, 'text/html,application/xhtml+xml,text/plain,application/json,application/xml');
+      parsed = read(page.body, page.contentType, page.url);
+    } catch (error) {
+      scoped.throwIfAborted();
+      // A page that is not there is not there for a browser either.
+      if (!this.render || !WORTH_A_BROWSER.test(error instanceof Error ? error.message : '')) throw error;
+      refused = error;
+    }
+    if (!page || !parsed || unreadable(parsed)) {
+      // The same page in a real browser, out of sight: its scripts run, and it is not asked whether it is a robot.
+      const shown = await this.shown(url, signal);
+      const drawn = shown ? readableHTML(shown.html) : undefined;
+      const at = shown ? webURL(shown.url) : undefined;
+      if (shown && drawn && at && !unreadable(drawn)) {
+        page = { url: at, status: 200, contentType: 'text/html', body: shown.html, bytes: Buffer.byteLength(shown.html) };
+        parsed = drawn;
+      } else {
+        if (refused) throw refused;
+        // The browser is named as the way through: a model told only to try elsewhere answered from memory instead
+        // of opening the page in the browser it had (a chat, 17.11).
+        throw new Error('No readable page was returned (empty, JavaScript-only or bot protection). Hello’s browser is a real browser and reads such a page: browser_open this URL and browser_read the tab (the browser tools are loaded for your next step; tools_find browser if they are not). Or try another public source. Do not cite this attempt.');
+      }
+    }
     const id = this.ids.get(page.url) ?? ++this.nextId;
     this.ids.set(page.url, id);
     return { kind: 'fetch_url', source: { id, url: page.url, title: parsed.title || page.url, fetchedAt: new Date().toISOString() },
@@ -180,9 +250,32 @@ export class WebResearch {
     const searx = process.env.HELLO_SEARXNG_URL?.trim();
     let engine = searx ? 'SearXNG' : 'DuckDuckGo';
     const ddg = async (q: string) => {
-      const page = await getPublic(new URL(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`), scoped, 'text/html');
-      const results = ddgResults(page.body, count);
-      if (!results.length && /anomaly\.js|bots use DuckDuckGo|challenge-form|captcha/i.test(page.body))
+      const challenged = (html: string) => /anomaly\.js|bots use DuckDuckGo|challenge-form|captcha/i.test(html);
+      let results: SearchHit[] = [];
+      let blocked = false;
+      try {
+        const page = await this.get(new URL(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`), scoped, 'text/html');
+        results = ddgResults(page.body, count);
+        blocked = !results.length && challenged(page.body);
+      } catch (error) {
+        scoped.throwIfAborted();
+        if (!this.render) throw error;
+        blocked = true;
+      }
+      if (blocked && this.render) {
+        // The engine took the request for a robot. The same search in a real
+        // browser, out of sight: its plain page first, then the page a person
+        // sees. The model is not sent to do this by hand (user, 26.11).
+        for (const [address, parse] of [
+          [`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, ddgResults],
+          [`https://duckduckgo.com/?q=${encodeURIComponent(q)}&ia=web`, ddgPageResults],
+        ] as const) {
+          const shown = await this.shown(address, signal);
+          const seen = shown ? parse(shown.html, count) : [];
+          if (seen.length) { engine = 'DuckDuckGo, in a hidden browser page'; return seen; }
+        }
+      }
+      if (blocked)
         throw new Error(`DuckDuckGo blocked this search with bot protection; repeating it will not help. Run it in Hello’s browser, a real browser that is not blocked: browser_open "https://duckduckgo.com/?q=${encodeURIComponent(q)}" and browser_read the tab; open a result the same way to read it. The browser tools are loaded for your next step (tools_find browser if they are not).`);
       return results;
     };

@@ -523,7 +523,20 @@ redirect; the validated address is pinned for connection. Requests stop at 20s,
 2 MiB or five redirects. Returned text is untrusted data, not instructions.
 Queries and URLs are sent to the requested public services; the model is told
 not to include private content without explicit authorization. This is not a
-content-based secret detector. Remote bot protection/JS may prevent extraction.
+content-based secret detector.
+
+Where remote bot protection or a script-drawn page defeats the plain request —
+a search answered with a robot check, a page that is empty until its scripts
+run, a 403/429/503 — the same address is loaded once in a hidden browser page
+([`web-reader.ts`](../src/main/chat/web-reader.ts)) and its drawn text is what
+the tool returns. That page has a session of its own, never written to disk
+and sharing nothing with the browser pane: no cookies and no sign-ins, so it
+reads what a stranger would. It reaches public hosts only — every request's
+host is resolved and refused when any address is private, loopback or reserved,
+which is checked before the request and not pinned for the connection, unlike
+the plain request — opens no window, saves no file, is granted no permission,
+loads no images, is muted, and is destroyed after one read (15 s to load, 2 MB
+of markup). A 404 is never retried there.
 
 Source favicons use only `https://icons.duckduckgo.com/ip3/<hostname>.ico` with
 no referrer. That service receives the source hostname, not its page path, query,

@@ -74,7 +74,7 @@ const fingerprint = (output: ToolOutput): string => {
 };
 import { ResourceLibrary } from '../extensions/library';
 import { McpManager, type McpToolHandle } from '../extensions/mcp';
-import { WebResearch } from './web-tools';
+import { WebResearch, type PageRenderer } from './web-tools';
 import { ChatAttachments, type AttachmentContext } from './attachments';
 import { modelVision } from './model-vision';
 import type { ModelFileChange } from '../../shared/files';
@@ -208,6 +208,8 @@ class WatchedMap<K, V> extends Map<K, V> {
   override clear(): void { const had = this.size > 0; super.clear(); if (had) this.changed(); }
 }
 export interface ChatServiceOptions {
+  /** A real browser page, out of sight, for a search or a page a plain request cannot read (web-reader.ts). */
+  renderPage?: PageRenderer;
   emitFileChange?(event: ModelFileChange): void;
   store: DataStore;
   emit(event: ChatEvent): void;
@@ -609,6 +611,7 @@ export class ChatService {
     this.sheets = options.sheets;
     this.workers = options.workers;
     this.fetcher = options.fetch ?? globalThis.fetch;
+    this.renderPage = options.renderPage;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 300_000;
     this.piEntry = options.piEntry;
     // A local server answers its model list in milliseconds; a second is
@@ -623,6 +626,7 @@ export class ChatService {
         whisper: (baseUrl, command) => isWhisperServer(baseUrl, command, this.fetcher),
       });
   }
+  private readonly renderPage?: PageRenderer;
   isRunning(conversationId: string): boolean {
     return this.runs.has(conversationId);
   }
@@ -1472,7 +1476,7 @@ export class ChatService {
       ].join('\n\n'),
       isRetry: prompt === undefined,
       attachments,
-      web: new WebResearch(this.store.listMessages(conversationId)),
+      web: new WebResearch(this.store.listMessages(conversationId), { render: this.renderPage }),
       toolCalls: new Map(),
       resumed: 0,
       steers: new Map(),
@@ -2279,7 +2283,7 @@ export class ChatService {
       startedAt: Date.now(),
       conversationId, message, controller: new AbortController(), promise: Promise.resolve(), approvalIds: new Set(),
       key: this.store.getApiKey(settings.endpointUrl), finished: false, prompt: '', isRetry: false,
-      web: new WebResearch(this.store.listMessages(conversationId)), toolCalls: new Map(), resumed: 0,
+      web: new WebResearch(this.store.listMessages(conversationId), { render: this.renderPage }), toolCalls: new Map(), resumed: 0,
       steers: new Map(), steerWork: Promise.resolve(), takingBack: false, steersClosed: false, external: true,
     };
     this.runs.set(conversationId, run);
