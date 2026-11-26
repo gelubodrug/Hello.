@@ -7,7 +7,9 @@
 // models the way three years of frontier models taught them to write, and the
 // local model has no way to fill the gaps. So the gap is closed before the
 // agent sees the request: the same model, with no tools, no manuals and no
-// history, reads the request once and answers one of two ways — a work order
+// history beyond the last order and the last reply (a "yes, write it" read
+// alone is a riddle: user, 26.11), reads the request once and answers one of
+// two ways — a work order
 // it can execute, or the few questions whose answers it needs. What reaches
 // the agent is the work order; the agent assumes at the level of execution,
 // never at the level of the problem.
@@ -26,6 +28,8 @@ export const GATE_MAX_ROUNDS = 2;
 export const GATE_TIMEOUT_MS = 90_000;
 /** The request as the gate reads it; the rest is referred to, not sent. */
 const GATE_REQUEST_CHARS = 12_000;
+/** The end of the agent's last reply, as the gate reads it. */
+const GATE_REPLY_CHARS = 2_000;
 
 /** What the gate is waiting on, kept for the chat between its question and the person's answer. */
 export interface GateState {
@@ -66,6 +70,7 @@ export function gatePrompt(final: boolean): string {
     'understood is the order itself, in plain imperative lines: no reasoning, no alternatives weighed, no "let\'s assume". Decide, then write the decision under assumptions.',
     'The agent reads and writes files only in the folder attached to the chat. When no folder is attached and the request is about files, the one question is which folder to attach (the person attaches it in the chat); a path written in the request does not replace it. When a folder is attached, assume the files named are in it.',
     'When an earlier order of this chat is given, the new message is usually a follow-up to it: read it against that order, carry its files, names and choices forward, and ask nothing the order already settled.',
+    'When the agent’s last reply is given, the new message is usually an answer to it: a yes, a choice among what it offered, a short instruction about what it just said. Read the message as that answer — "yes, write it for X" after the reply offered to write a draft means: write that draft, for X — and say so in understood. Never ask what the reply already makes clear, and never read a name it mentioned (a community, a site, a person) as a file or a folder.',
     ...(final ? [
       'This is the last round: the human has answered what they will answer. Do not ask again. Decide what is still open as an assumption, name it as one, and let the work through: questions must be an empty list.',
     ] : []),
@@ -73,11 +78,13 @@ export function gatePrompt(final: boolean): string {
 }
 
 /** The request as the gate reads it, with the answers of earlier rounds. */
-export function gateUserMessage(state: Pick<GateState, 'request' | 'questions' | 'answers'>, folder?: string | null, prior?: string, attached: string[] = []): string {
+export function gateUserMessage(state: Pick<GateState, 'request' | 'questions' | 'answers'>, folder?: string | null, prior?: string, attached: string[] = [], said?: string): string {
   const lines = [
     folder ? `The agent works in the folder ${folder}.` : 'The agent has no folder attached: file work, if any, needs one.',
     ...(attached.length ? [`Files attached to this message, which the agent receives with it: ${attached.join(', ')}.`] : []),
     ...(prior ? ['', 'The order the agent executed earlier in this chat:', clip(prior, 3_000), ''] : []),
+    // Its end is where a reply asks and offers: that is what the next message answers.
+    ...(said?.trim() ? ['', 'The agent’s last reply to the human, which the request may be answering:', said.trim().length > GATE_REPLY_CHARS ? `[…] ${said.trim().slice(-GATE_REPLY_CHARS)}` : said.trim(), ''] : []),
     'The human’s request:',
     clip(state.request, GATE_REQUEST_CHARS),
   ];
@@ -89,14 +96,14 @@ export function gateUserMessage(state: Pick<GateState, 'request' | 'questions' |
 }
 
 /** The body of the gate's request: the chat's model, thinking off where the connection takes the switch. */
-export function gateRequestBody(settings: AppSettings, state: Pick<GateState, 'request' | 'questions' | 'answers'>, folder: string | null | undefined, final: boolean, prior?: string, attached: string[] = []): Record<string, unknown> {
+export function gateRequestBody(settings: AppSettings, state: Pick<GateState, 'request' | 'questions' | 'answers'>, folder: string | null | undefined, final: boolean, prior?: string, attached: string[] = [], said?: string): Record<string, unknown> {
   const compatibility = settings.modelCompatibility ?? 'auto';
   const reach = reasoningReach(settings);
   return {
     model: settings.model,
     messages: [
       { role: 'system', content: gatePrompt(final) },
-      { role: 'user', content: gateUserMessage(state, folder, prior, attached) },
+      { role: 'user', content: gateUserMessage(state, folder, prior, attached, said) },
     ],
     stream: false,
     temperature: 0,
@@ -201,13 +208,15 @@ export interface GateCall {
   prior?: string;
   /** The names of the files attached to the message, so the gate does not ask for a file it already has. */
   attached?: string[];
+  /** The agent's last reply in this chat, so an answer to it is read as one. */
+  said?: string;
   signal?: AbortSignal;
 }
 
 /** One call to the chat's model, no tools, thinking off. Any failure is a `skipped` verdict, never a thrown error. */
 export async function runGate(call: GateCall, state: Pick<GateState, 'request' | 'questions' | 'answers'> & { rounds: number }): Promise<GateVerdict> {
   const final = state.rounds >= GATE_MAX_ROUNDS;
-  const body = gateRequestBody(call.settings, state, call.folder, final, call.prior, call.attached);
+  const body = gateRequestBody(call.settings, state, call.folder, final, call.prior, call.attached, call.said);
   const timeout = AbortSignal.timeout(GATE_TIMEOUT_MS);
   const signal = call.signal ? AbortSignal.any([call.signal, timeout]) : timeout;
   try {

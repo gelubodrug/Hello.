@@ -43,6 +43,19 @@ describe('what the gate asks of the model', () => {
     // A file attached to the message is named, so the gate does not ask for it.
     const withFile = gateRequestBody(local, fresh, null, false, undefined, ['gps.xlsx']) as { messages: Array<{ content: string }> };
     expect(withFile.messages[1].content).toContain('Files attached to this message, which the agent receives with it: gps.xlsx.');
+    // What the agent last said travels too (user, 26.11): "da, scrie-l pe r/MacLocalLLM" after a reply that offered
+    // a draft is an answer, and read alone it was taken for a file to write at a path.
+    const answering = gateRequestBody(local, { ...fresh, request: 'da scrie-l pe /MacLocalLLM' }, null, false, undefined, [],
+      'Canalul potrivit e Reddit: r/LocalLLaMA sau r/MacLocalLLM.\n\nVrei draftul pentru Reddit?') as { messages: Array<{ content: string }> };
+    expect(answering.messages[1].content).toContain('The agent’s last reply to the human, which the request may be answering:\nCanalul potrivit e Reddit');
+    expect(answering.messages[1].content).toContain('Vrei draftul pentru Reddit?');
+    expect(answering.messages[0].content).toContain('never read a name it mentioned (a community, a site, a person) as a file or a folder');
+    // Only the end of a long reply: that is where it asks and offers.
+    const long = gateRequestBody(local, fresh, null, false, undefined, [], `${'x'.repeat(5_000)} Shall I write it?`) as { messages: Array<{ content: string }> };
+    expect(long.messages[1].content).toContain('[…] ');
+    expect(long.messages[1].content).toContain('Shall I write it?');
+    expect(long.messages[1].content.length).toBeLessThan(3_000);
+    expect(withFile.messages[1].content).not.toContain('last reply');
   });
 });
 

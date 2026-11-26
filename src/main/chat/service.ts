@@ -1145,7 +1145,7 @@ export class ChatService {
       verdict = await runGate({
         fetcher: this.fetcher, url: completionURL(settings.endpointUrl), key: this.store.getApiKey(settings.endpointUrl),
         settings, folder: this.store.getConversation(conversationId).folder, prior: this.store.getLastOrder(conversationId) ?? undefined,
-        attached: attachments?.attachments.map(item => item.name), signal: controller.signal,
+        attached: attachments?.attachments.map(item => item.name), said: this.lastReply(conversationId, message.id), signal: controller.signal,
       }, state);
       this.assertPreparation(conversationId, generation);
     } catch (error) {
@@ -1345,6 +1345,14 @@ export class ChatService {
     await this.attachments.removeConversation(conversationId);
     this.notedDomains.delete(conversationId);
     await rm(piConversationDir(this.store.dataDir, conversationId), { recursive: true, force: true });
+  }
+
+  /** What the agent last said in this chat, for the gate: a message that answers it is read as an answer. */
+  private lastReply(conversationId: string, except: string): string | undefined {
+    const fresh = this.store.getConversation(conversationId).freshFrom ?? 0;
+    const said = this.store.listMessages(conversationId).reverse()
+      .find(item => item.role === 'assistant' && item.id !== except && item.status === 'complete' && item.createdAt >= fresh && item.content.trim());
+    return said?.content;
   }
 
   private assertAvailable(conversationId: string): void {
