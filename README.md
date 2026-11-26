@@ -30,8 +30,11 @@ there; it runs on your local models, or on any endpoint you choose.
   headless over RPC, against any OpenAI-compatible endpoint: Ollama, LM Studio,
   llama.cpp or oMLX on this Mac, or a provider such as OpenRouter. Servers
   running on the Mac are found, not typed, and each chat keeps the model it last used.
-- **A browser the model can use.** A real page in a pane beside the chat. A tab
-  you open starts with agent control Off; Read lets the model read it, Full lets it act.
+- **A browser the model can use.** A real page in a pane beside the chat, and
+  yours: sign in once and the cookies stay. A tab you open starts with agent
+  control Off; Read lets the model read it, Full lets it act.
+- **Annotate.** Draw on the live page and send the marked-up picture to the
+  chat; the model can mark a page for you too.
 - **Terminals and CLI workers.** Claude Code, Codex, Kimi, Qwen Code, OpenCode
   and Pi run in panes of their own, next to the chat that started them.
 - **Files, spreadsheets and PDFs** of the folder a chat works in.
