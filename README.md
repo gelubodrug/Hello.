@@ -17,8 +17,10 @@ the features were built to fit.
 > Codex off. Claude off. What do you do?
 > You use a tool made with them.
 
-Hello. was built with Claude Code and Codex, for the hours when they are not
-there: it runs on the models on your own machine, or on any endpoint you choose.
+The idea: the experience you are used to from the premium online apps — the
+Claude Code and Codex desktop apps — mirrored offline, on a model that runs on
+your own Mac. Hello. was built with those two, for the hours when they are not
+there; it runs on your local models, or on any endpoint you choose.
 
 ![The Hello. workspace: a chat beside its tools](assets/readme/workspace.webp)
 
@@ -34,6 +36,8 @@ there: it runs on the models on your own machine, or on any endpoint you choose.
   and Pi run in panes of their own, next to the chat that started them.
 - **Files, spreadsheets and PDFs** of the folder a chat works in.
 - **A notebook per chat**: Runbooks, Tasks and Plans.
+- **DSH inside.** The DSH agent harness is hosted in the app: it opens from the
+  sidebar and updates to its latest release there.
 - **Yours.** Data lives in SQLite in Hello's own user-data directory. API keys
   are encrypted with the system keychain and never reach the window.
 
