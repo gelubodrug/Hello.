@@ -40,13 +40,15 @@ function setup(html = HTML, over: Partial<BrowserTab> = {}) {
     answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'choice', choice: 'ad', probabilities: { ad: 0.97 }, confidence: 0.95 }])),
   }));
   const openjev = {
+    name: 'OpenJev', model: 'openjev', batchSize: 6,
     status: vi.fn(async () => ({ state: 'ready' as const, detail: 'OpenJev answers', ownHelper: false })),
     ask: vi.fn(async (body: unknown) => { asked.push(body); return answer(body as never); }),
     stop: vi.fn(() => false),
     dispose: vi.fn(),
   };
   const emitted: UnclutterTabState[] = [];
-  const service = new UnclutterService({ pages, store, openjev, emit: state => emitted.push(state), settleMs: 1, autoMs: 1 });
+  // Both models are the one fake: what is checked here is the asking, not the model.
+  const service = new UnclutterService({ pages, store, classifiers: { decider: openjev, openjev }, emit: state => emitted.push(state), settleMs: 1, autoMs: 1 });
   cleanup.unshift(() => service.dispose());
   return { service, store, dom, contents, openjev, asked, answer, emitted, worlds, setTab: (next: Partial<BrowserTab>) => { current = { ...current, ...next }; }, fire: (event: BrowserPageEvent) => observer(event) };
 }
@@ -130,7 +132,7 @@ describe('Unclutter service', () => {
     service.setTypeEnabled('t1', true);
     await wait();
     expect(ad()).toBe('none');
-    expect(service.setSwitches({ enabled: false })).toEqual({ enabled: false, auto: false });
+    expect(service.setSwitches({ enabled: false })).toEqual({ enabled: false, auto: false, classifier: 'decider' });
     await wait();
     expect(ad()).toBe('');
     await expect(service.analyze('t1')).rejects.toThrow(/off/);

@@ -1,5 +1,6 @@
 import { ipcMain, type BrowserWindow } from 'electron';
 import type { UnclutterService } from './service';
+import { isClassifier } from './model';
 
 const id = (value: unknown): string => {
   if (typeof value !== 'string' || !value.trim() || value.length > 200) throw new Error('Invalid tab.');
@@ -31,10 +32,12 @@ export function registerUnclutterIPC(window: BrowserWindow, unclutter: Unclutter
   handle('forgetType', tabId => unclutter.forgetType(id(tabId)));
   handle('setSwitches', input => {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null;
-    if (!value || Object.keys(value).some(key => key !== 'enabled' && key !== 'auto')) throw new Error('Invalid switches.');
+    if (!value || Object.keys(value).some(key => key !== 'enabled' && key !== 'auto' && key !== 'classifier')) throw new Error('Invalid switches.');
+    if (value.classifier !== undefined && !isClassifier(value.classifier)) throw new Error('Invalid switches.');
     return unclutter.setSwitches({
       ...(value.enabled !== undefined ? { enabled: flag(value.enabled) } : {}),
       ...(value.auto !== undefined ? { auto: flag(value.auto) } : {}),
+      ...(value.classifier !== undefined ? { classifier: value.classifier as 'decider' | 'openjev' } : {}),
     });
   });
   handle('stopOpenJev', () => unclutter.stopOpenJev());

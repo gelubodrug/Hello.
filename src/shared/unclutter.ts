@@ -1,6 +1,16 @@
-/** Unclutter, as the window sees it: one tab's page, the switches, and OpenJev. */
+/** Unclutter, as the window sees it: one tab's page, the switches, and the model that classifies. */
 
-export interface UnclutterSwitches { enabled: boolean; auto: boolean }
+/** Which model classifies a page's blocks: Perplexity's Decider on OpenRouter, or OpenJev on this Mac. */
+export type UnclutterClassifierId = 'decider' | 'openjev';
+
+/** The models Unclutter can ask, in the order the menu offers them; the first is the default. */
+export const UNCLUTTER_CLASSIFIERS: ReadonlyArray<{ id: UnclutterClassifierId; name: string; where: string }> = [
+  { id: 'decider', name: 'Decider V1.3', where: 'Perplexity on OpenRouter, free — the redacted blocks leave this Mac' },
+  { id: 'openjev', name: 'OpenJev', where: 'On this Mac, about 27 GB — nothing leaves it' },
+];
+export const DEFAULT_CLASSIFIER: UnclutterClassifierId = 'decider';
+
+export interface UnclutterSwitches { enabled: boolean; auto: boolean; classifier: UnclutterClassifierId }
 
 export interface UnclutterTabState {
   tabId: string;
@@ -18,6 +28,7 @@ export interface UnclutterTabState {
   error?: string | null;
 }
 
-export interface UnclutterOpenJev { state: 'ready' | 'starting' | 'stopped' | 'missing'; detail: string; ownHelper: boolean }
+/** The chosen model as it stands: ready, starting (OpenJev loading), stopped, or missing what it needs. */
+export interface UnclutterClassifier { id: UnclutterClassifierId; name: string; state: 'ready' | 'starting' | 'stopped' | 'missing'; detail: string; ownHelper: boolean }
 
-export interface UnclutterOverview { switches: UnclutterSwitches; openjev: UnclutterOpenJev; tab: UnclutterTabState }
+export interface UnclutterOverview { switches: UnclutterSwitches; classifier: UnclutterClassifier; tab: UnclutterTabState }

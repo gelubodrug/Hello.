@@ -10,12 +10,14 @@
  * small batch, and its state holds only that batch's elements.
  */
 
+import { DEFAULT_CLASSIFIER, UNCLUTTER_CLASSIFIERS, type UnclutterClassifierId, type UnclutterSwitches } from '../../shared/unclutter';
+
 export const POLICY_VERSION = 1;
 /** 3: floating links and buttons are candidates, and a floating block says its size and corner (26.11). */
 export const ANALYSIS_VERSION = 3;
 /** At most this many elements are asked about on one page. */
 export const MAX_CANDIDATES = 60;
-/** Elements per OpenJev request: each request's state holds only these. */
+/** Elements per OpenJev request: each request's state holds only these. Decider, hosted, takes larger batches (decider.ts). */
 export const BATCH_SIZE = 6;
 /** Conservative operational cutoff, not a claim of calibrated accuracy. */
 export const CUTOFF = 0.9;
@@ -108,9 +110,9 @@ export function batches<T>(items: T[], size = BATCH_SIZE): T[][] {
  * value leaves the page: only the page kind and each element's tag, its
  * identifying attributes, its (redacted) visible text, its position and count.
  */
-export function evaluationRequest(kind: PageKind, batch: Candidate[]) {
+export function evaluationRequest(kind: PageKind, batch: Candidate[], model = 'openjev') {
   return {
-    model: 'openjev',
+    model,
     state: {
       pageType: kind,
       elements: batch.map(({ id, tag, signals, text, position, count }) => ({ id, tag, signals, text, position, count })),
@@ -120,13 +122,15 @@ export function evaluationRequest(kind: PageKind, batch: Candidate[]) {
 }
 
 /** The rules a batch's answers support. An incomplete answer refuses the whole analysis. */
-export function rulesFromAnswers(raw: unknown, batch: Candidate[]): UnclutterRule[] {
-  const invalid = () => new Error('OpenJev returned incomplete or unexpected answers. Existing rules were kept.');
+export function rulesFromAnswers(raw: unknown, batch: Candidate[], name = 'OpenJev'): UnclutterRule[] {
+  const invalid = () => new Error(`${name} returned incomplete or unexpected answers. Existing rules were kept.`);
   if (!isObject(raw) || !isObject(raw.answers)) throw invalid();
   const answers = raw.answers;
   if (Object.keys(answers).length !== batch.length || batch.some(candidate => !isObject(answers[candidate.id]))) throw invalid();
   return batch.flatMap(candidate => {
     const answer = answers[candidate.id] as Record<string, unknown>;
+    // A question the model declined is not an answer: the block stays.
+    if (answer.type === 'refusal') return [];
     if (answer.type !== 'choice' || !isCategory(answer.choice)) throw invalid();
     const unit = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
     if (answer.confidence !== undefined && !unit(answer.confidence)) throw invalid();
@@ -140,14 +144,16 @@ export function rulesFromAnswers(raw: unknown, batch: Candidate[]): UnclutterRul
   });
 }
 
-/** The person's switches: Unclutter on at all, and whether a new page type is analysed unasked. */
-export interface UnclutterSettings { enabled: boolean; auto: boolean }
-export const DEFAULT_SETTINGS: UnclutterSettings = { enabled: true, auto: false };
+/** The person's switches: Unclutter on at all, whether a new page type is analysed unasked, and which model classifies. */
+export type UnclutterSettings = UnclutterSwitches;
+export const DEFAULT_SETTINGS: UnclutterSettings = { enabled: true, auto: false, classifier: DEFAULT_CLASSIFIER };
+export const isClassifier = (value: unknown): value is UnclutterClassifierId => UNCLUTTER_CLASSIFIERS.some(entry => entry.id === value);
 export function parseSettings(raw: unknown): UnclutterSettings {
   if (!isObject(raw)) return { ...DEFAULT_SETTINGS };
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_SETTINGS.enabled,
     auto: typeof raw.auto === 'boolean' ? raw.auto : DEFAULT_SETTINGS.auto,
+    classifier: isClassifier(raw.classifier) ? raw.classifier : DEFAULT_SETTINGS.classifier,
   };
 }
 

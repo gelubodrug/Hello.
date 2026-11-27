@@ -49,6 +49,11 @@ describe('Unclutter answers', () => {
     expect(rulesFromAnswers({ answers: { e0: { type: 'choice', choice: 'cookie', probabilities: { cookie: 0.99, keep: 0.01 }, confidence: 0.93 } } }, batch))
       .toEqual([{ selector: 'div.ad-0x', category: 'cookie', enabled: true }]);
   });
+
+  it('leave a block a model declined to classify, and name that model when the answers are wrong', () => {
+    expect(rulesFromAnswers({ answers: { e0: { type: 'refusal' } } }, batch)).toEqual([]);
+    expect(() => rulesFromAnswers({ answers: {} }, batch, 'Decider V1.3')).toThrow(/^Decider V1\.3 returned/);
+  });
 });
 
 describe('Unclutter page input', () => {
@@ -70,12 +75,14 @@ describe('Unclutter page input', () => {
 
 describe('Unclutter switches', () => {
   it('are on, with Auto off, until the person says otherwise', () => {
-    expect(parseSettings(null)).toEqual({ enabled: true, auto: false });
-    expect(parseSettings({ enabled: false, auto: 'yes' })).toEqual({ enabled: false, auto: false });
+    expect(parseSettings(null)).toEqual({ enabled: true, auto: false, classifier: 'decider' });
+    expect(parseSettings({ enabled: false, auto: 'yes' })).toEqual({ enabled: false, auto: false, classifier: 'decider' });
+    expect(parseSettings({ classifier: 'openjev' }).classifier).toBe('openjev');
+    expect(parseSettings({ classifier: 'elsewhere' }).classifier).toBe('decider');
   });
 
   it('analyse unasked only with Auto on, once, and never a type the person switched off', () => {
-    const on = { enabled: true, auto: true };
+    const on = { enabled: true, auto: true, classifier: 'decider' as const };
     expect(shouldAutoAnalyze(on, null, false)).toBe(true);
     expect(shouldAutoAnalyze({ ...on, auto: false }, null, false)).toBe(false);
     expect(shouldAutoAnalyze({ ...on, enabled: false }, null, false)).toBe(false);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Eraser, Power, RotateCw, Trash2, WandSparkles } from 'lucide-react';
 import type { BrowserTab } from '../../shared/types';
-import type { UnclutterOverview, UnclutterTabState } from '../../shared/unclutter';
+import { UNCLUTTER_CLASSIFIERS, type UnclutterOverview, type UnclutterTabState } from '../../shared/unclutter';
 import { api } from '../api';
 import { MenuButton, type MenuItem } from '../ui/primitives';
 
@@ -20,9 +20,9 @@ export function rulesSummary(categories: Record<string, number>): string {
 }
 
 /** What the first row of the menu says about this page. */
-export function pageLine(state: UnclutterTabState): { label: string; detail?: string } {
+export function pageLine(state: UnclutterTabState, classifier = 'The model'): { label: string; detail?: string } {
   if (!state.eligible) return { label: 'Not cleaned', detail: 'Generated documents, previewed files and local servers are never touched' };
-  if (state.analyzing) return { label: state.analyzing.total ? `Analysing… ${state.analyzing.done} of ${state.analyzing.total}` : 'Reading the page…', detail: 'OpenJev on this Mac classifies the page’s blocks' };
+  if (state.analyzing) return { label: state.analyzing.total ? `Analysing… ${state.analyzing.done} of ${state.analyzing.total}` : 'Reading the page…', detail: `${classifier} classifies the page’s blocks` };
   const hidden = state.hidden === 1 ? '1 block hidden' : state.hidden ? `${state.hidden} blocks hidden` : 'Nothing hidden';
   if (!state.profile) return { label: hidden, detail: state.label ? `${state.label} — not analysed yet` : undefined };
   return { label: hidden, detail: `${state.label ?? 'This page type'}${state.profile.enabled ? '' : ' (off)'} — ${rulesSummary(state.profile.categories)}` };
@@ -30,8 +30,9 @@ export function pageLine(state: UnclutterTabState): { label: string; detail?: st
 
 /**
  * Unclutter on the toolbar: a button that counts the blocks hidden on the
- * page, and a menu to analyse this page type with OpenJev, switch its rules
- * off, forget them, or turn Unclutter and its Auto mode on and off. The
+ * page, and a menu to analyse this page type with the chosen model (Decider
+ * V1.3 on OpenRouter, or OpenJev on this Mac), switch its rules off, forget
+ * them, choose the model, or turn Unclutter and its Auto mode on and off. The
  * person's own switch: AI Mode does not gate it, and the agent never sees it.
  */
 export function UnclutterMenu({ tab, onError }: Props): JSX.Element | null {
@@ -46,17 +47,18 @@ export function UnclutterMenu({ tab, onError }: Props): JSX.Element | null {
   useEffect(() => bridge?.onChange(next => { if (next.tabId === tab.id) setState(next); }), [bridge, tab.id]);
   if (!bridge) return null;
   const run = (task: () => Promise<unknown>) => { void task().then(refresh, (error: Error) => { onError(error.message); refresh(); }); };
-  const switches = overview?.switches ?? { enabled: true, auto: false };
-  const openjev = overview?.openjev;
+  const switches = overview?.switches ?? { enabled: true, auto: false, classifier: UNCLUTTER_CLASSIFIERS[0].id };
+  const model = overview?.classifier;
+  const name = model?.name ?? UNCLUTTER_CLASSIFIERS.find(entry => entry.id === switches.classifier)?.name ?? 'The model';
   const current = state ?? { tabId: tab.id, eligible: false, hidden: 0, profile: null, analyzing: null };
-  const line = pageLine(current);
+  const line = pageLine(current, name);
   const busy = current.analyzing !== null;
   const items: MenuItem[] = [
     { id: 'page', label: line.label, detail: line.detail, icon: Eraser, disabled: true },
     ...(current.error ? [{ id: 'error', label: 'The last analysis failed', detail: current.error, disabled: true }] : []),
     { id: 'analyze', label: current.profile ? 'Analyse this page type again' : 'Analyse this page type', icon: current.profile ? RotateCw : WandSparkles,
-      detail: openjev?.state === 'missing' ? openjev.detail : openjev?.state === 'ready' ? 'OpenJev is ready' : 'Starts OpenJev on this Mac (about 27 GB) if it is off',
-      disabled: busy || !current.eligible || !switches.enabled || openjev?.state === 'missing', separator: true,
+      detail: model?.state === 'missing' ? model.detail : model?.state === 'ready' ? `${name} is ready` : 'Starts OpenJev on this Mac (about 27 GB) if it is off',
+      disabled: busy || !current.eligible || !switches.enabled || model?.state === 'missing', separator: true,
       action: () => run(() => bridge.analyze(tab.id)) },
     ...(current.profile ? [
       { id: 'type', label: 'Clean this page type', toggle: true, stayOpen: true, checked: current.profile.enabled, disabled: busy || !switches.enabled,
@@ -64,12 +66,14 @@ export function UnclutterMenu({ tab, onError }: Props): JSX.Element | null {
       { id: 'forget', label: 'Forget this page type', icon: Trash2, detail: 'Its blocks show again until it is analysed', disabled: busy,
         action: () => run(() => bridge.forgetType(tab.id)) },
     ] : []),
-    { id: 'enabled', label: 'Unclutter', detail: 'Hide what OpenJev classified on every site', toggle: true, stayOpen: true, checked: switches.enabled, separator: true,
+    { id: 'enabled', label: 'Unclutter', detail: 'Hide what the model classified on every site', toggle: true, stayOpen: true, checked: switches.enabled, separator: true,
       action: () => run(() => bridge.setSwitches({ enabled: !switches.enabled })) },
-    { id: 'auto', label: 'Analyse new page types automatically', detail: 'Runs OpenJev on this Mac the first time a page type is shown', toggle: true, stayOpen: true,
+    { id: 'auto', label: 'Analyse new page types automatically', detail: `Asks ${name} the first time a page type is shown`, toggle: true, stayOpen: true,
       checked: switches.auto, disabled: !switches.enabled, action: () => run(() => bridge.setSwitches({ auto: !switches.auto })) },
-    { id: 'openjev', label: 'OpenJev', detail: openjev?.detail ?? 'Checking…', disabled: true, separator: true },
-    ...(openjev?.ownHelper ? [{ id: 'stop', label: 'Stop OpenJev', icon: Power, detail: 'Frees its memory; the next analysis starts it again', disabled: busy,
+    ...UNCLUTTER_CLASSIFIERS.map((entry, index) => ({ id: `model-${entry.id}`, label: entry.name, detail: entry.id === switches.classifier ? model?.detail ?? entry.where : entry.where,
+      checked: entry.id === switches.classifier, stayOpen: true, separator: index === 0, disabled: busy,
+      action: () => { if (entry.id !== switches.classifier) run(() => bridge.setSwitches({ classifier: entry.id })); } })),
+    ...(model?.id === 'openjev' && model.ownHelper ? [{ id: 'stop', label: 'Stop OpenJev', icon: Power, detail: 'Frees its memory; the next analysis starts it again', disabled: busy,
       action: () => run(() => bridge.stopOpenJev()) }] : []),
   ];
   const hidden = current.eligible && switches.enabled ? current.hidden : 0;

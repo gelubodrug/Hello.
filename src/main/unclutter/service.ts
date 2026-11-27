@@ -6,25 +6,38 @@
  * installs the cleaner into the page's isolated world on every load and hands
  * it the rules saved for the page type it is on. Learning them is an analysis
  * the person asks for (or, with Auto on, a page type seen for the first time):
- * the page lists its candidate blocks, OpenJev on this Mac classifies them a
- * batch at a time, and the ones it is sure are ads, consent banners, upsells,
- * newsletter or social nags become the type's rules.
+ * the page lists its candidate blocks, the chosen model classifies them a
+ * batch at a time — Decider V1.3 on OpenRouter by default, or OpenJev on this
+ * Mac — and the ones it is sure are ads, consent banners, upsells, newsletter
+ * or social nags become the type's rules.
  *
  * This is the person's own switch, like an ad blocker, not the agent's: the
  * tab's AI Mode does not gate it, and nothing it reads goes to the chat model
- * or any agent tool — the redacted candidates go to 127.0.0.1 only. It never
+ * or any agent tool — the redacted candidates go to the chosen model only
+ * (openrouter.ai for Decider, 127.0.0.1 for OpenJev). It never
  * touches a generated document, a previewed file or a local dev server: those
  * are the person's or the model's own pages, never clutter.
  */
 import type { WebContents } from 'electron';
 import type { BrowserTab } from '../../shared/types';
-import type { UnclutterOverview, UnclutterSwitches, UnclutterTabState } from '../../shared/unclutter';
+import { UNCLUTTER_CLASSIFIERS, type UnclutterClassifierId, type UnclutterOverview, type UnclutterSwitches, type UnclutterTabState } from '../../shared/unclutter';
 import type { BrowserPageEvent } from '../browser/manager';
 import {
   ANALYSIS_VERSION, POLICY_VERSION, batches, evaluationRequest, parseContext, parseProfile, parseSettings, parseSnapshot,
   rulesFromAnswers, shouldAutoAnalyze, type PageContext, type UnclutterProfile, type UnclutterRule,
 } from './model';
-import type { OpenJev } from './openjev';
+
+/** A model Unclutter asks: its name, its request's model id, how many blocks one request holds, and its lifecycle. */
+export interface UnclutterClassifierHost {
+  readonly name: string;
+  readonly model: string;
+  readonly batchSize: number;
+  status(): Promise<{ state: 'ready' | 'starting' | 'stopped' | 'missing'; detail: string; ownHelper: boolean }>;
+  ask(body: unknown, signal?: AbortSignal): Promise<unknown>;
+  /** Stops what Hello started for it; false when nothing was. */
+  stop(): boolean;
+  dispose(): void;
+}
 import { UNCLUTTER_WORLD_ID, unclutterCall } from './page';
 
 export interface UnclutterPages {
@@ -41,7 +54,7 @@ export interface UnclutterStore {
 interface Options {
   pages: UnclutterPages;
   store: UnclutterStore;
-  openjev: Pick<OpenJev, 'status' | 'ask' | 'stop' | 'dispose'>;
+  classifiers: Record<UnclutterClassifierId, UnclutterClassifierHost>;
   emit(state: UnclutterTabState): void;
   /** Delays, for tests. */
   settleMs?: number;
@@ -85,7 +98,7 @@ export class UnclutterService {
   private activeId: string | null = null;
   /** Page types analysed unasked in this run: Auto asks once per type. */
   private attempted = new Set<string>();
-  /** One analysis at a time, app-wide: OpenJev answers one question at a time. */
+  /** One analysis at a time, app-wide: OpenJev answers one question at a time, Decider's free tier counts requests. */
   private running: { tabId: string; controller: AbortController } | null = null;
   private unobserve: () => void;
   private disposed = false;
@@ -96,6 +109,10 @@ export class UnclutterService {
 
   switches(): UnclutterSwitches {
     return parseSettings(this.options.store.getUnclutterSettings());
+  }
+
+  private classifier(id = this.switches().classifier): UnclutterClassifierHost {
+    return this.options.classifiers[id];
   }
 
   private profile(key: string): UnclutterProfile | null {
@@ -142,8 +159,10 @@ export class UnclutterService {
         if (typeof counted?.hidden === 'number') this.state(tabId).hidden = counted.hidden;
       } catch { /* The page is between documents; the last count stands. */ }
     }
-    const openjev = await this.options.openjev.status();
-    return { switches: this.switches(), openjev: { state: openjev.state, detail: openjev.detail, ownHelper: openjev.ownHelper }, tab: this.tabState(tabId) };
+    const switches = this.switches();
+    const classifier = this.classifier(switches.classifier);
+    const status = await classifier.status();
+    return { switches, classifier: { id: switches.classifier, name: classifier.name, state: status.state, detail: status.detail, ownHelper: status.ownHelper }, tab: this.tabState(tabId) };
   }
 
   private call(contents: WebContents, method: Parameters<typeof unclutterCall>[0], args: unknown[] = []): Promise<unknown> {
@@ -228,6 +247,7 @@ export class UnclutterService {
     if (!page?.contents || !eligible(page.tab)) throw new Error('Unclutter cleans web pages only, not generated documents, previewed files or local servers.');
     if (!this.switches().enabled) throw new Error('Unclutter is off.');
     const contents = page.contents;
+    const classifier = this.classifier();
     const state = this.state(tabId);
     const controller = new AbortController();
     this.running = { tabId, controller };
@@ -236,14 +256,14 @@ export class UnclutterService {
     this.publish(tabId);
     try {
       const snapshot = parseSnapshot(await this.call(contents, 'snapshot'));
-      const groups = batches(snapshot.candidates);
+      const groups = batches(snapshot.candidates, classifier.batchSize);
       state.analyzing = { done: 0, total: groups.length };
       this.publish(tabId);
       const rules: UnclutterRule[] = [];
       for (const group of groups) {
         if (controller.signal.aborted) throw new Error('The tab closed during the analysis.');
-        const answer = await this.options.openjev.ask(evaluationRequest(snapshot.context.kind, group), controller.signal);
-        rules.push(...rulesFromAnswers(answer, group));
+        const answer = await classifier.ask(evaluationRequest(snapshot.context.kind, group, classifier.model), controller.signal);
+        rules.push(...rulesFromAnswers(answer, group, classifier.name));
         state.analyzing = { done: state.analyzing.done + 1, total: groups.length };
         this.publish(tabId);
       }
@@ -274,10 +294,15 @@ export class UnclutterService {
     }
   }
 
-  /** Unclutter on or off everywhere, and whether new page types are analysed unasked. */
+  /** Unclutter on or off everywhere, whether new page types are analysed unasked, and which model classifies. */
   setSwitches(next: Partial<UnclutterSwitches>): UnclutterSwitches {
-    const switches = { ...this.switches(), ...next };
+    const previous = this.switches();
+    if (next.classifier !== undefined && !UNCLUTTER_CLASSIFIERS.some(entry => entry.id === next.classifier)) throw new Error('Unknown Unclutter model.');
+    const switches = { ...previous, ...next };
     this.options.store.saveUnclutterSettings(switches);
+    // The model left behind frees what Hello started for it (OpenJev's 27 GB),
+    // unless an analysis under way is still asking it.
+    if (switches.classifier !== previous.classifier && !this.running) this.classifier(previous.classifier).stop();
     for (const tabId of this.tabs.keys()) this.schedule(tabId);
     return switches;
   }
@@ -307,7 +332,7 @@ export class UnclutterService {
   }
 
   stopOpenJev(): boolean {
-    return this.options.openjev.stop();
+    return this.options.classifiers.openjev.stop();
   }
 
   dispose(): void {
@@ -317,6 +342,6 @@ export class UnclutterService {
     this.running?.controller.abort();
     for (const state of this.tabs.values()) { clearTimeout(state.timer); clearTimeout(state.autoTimer); }
     this.tabs.clear();
-    this.options.openjev.dispose();
+    for (const classifier of new Set(Object.values(this.options.classifiers))) classifier.dispose();
   }
 }

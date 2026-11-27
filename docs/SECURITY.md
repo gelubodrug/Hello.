@@ -776,11 +776,15 @@ Unclutter is the person's switch, like an ad blocker, and not an agent grant:
 a tab's AI Mode does not gate it, because it gives the agent nothing. Its
 isolated world (1209) shares only the DOM with the page; the page can neither
 read its rules nor turn it off, and nothing it reads reaches the chat model,
-Pi, a CLI or any agent tool. What it sends leaves the Mac for nowhere: the
-candidates go to OpenJev on `127.0.0.1`, as the page kind and, per block, its
-tag, identifying attributes, visible text with URLs, e-mail addresses and long
-numbers redacted, its position and count — never the URL, the title, the
-article's text or a form's values.
+Pi, a CLI or any agent tool. What it sends goes to the model the person chose
+in its menu, and only there: by default Decider V1.3 (Perplexity, free) through
+OpenRouter's Decisions API at `openrouter.ai`, with the key of the person's
+OpenRouter connection, read from the encrypted store when asked; or OpenJev on
+`127.0.0.1`, which leaves the Mac for nowhere (user, 27.11: Decider by default).
+Either way it is the page kind and, per block, its tag, identifying attributes,
+visible text with URLs, e-mail addresses and long numbers redacted, its
+position and count — never the URL, the title, the article's text or a form's
+values. Switching away from OpenJev stops the helper Hello started for it.
 
 The original's safety core is kept verbatim. Only selectors of a fixed shape
 are ever applied, and a selector that matches more than twenty elements, or any

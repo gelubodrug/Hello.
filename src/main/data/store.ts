@@ -1402,7 +1402,7 @@ export class DataStore {
     if (typeof row?.value !== 'string') return null;
     try { return JSON.parse(row.value); } catch { return null; }
   }
-  saveUnclutterSettings(settings: { enabled: boolean; auto: boolean }): void {
+  saveUnclutterSettings(settings: { enabled: boolean; auto: boolean; classifier: string }): void {
     this.db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('unclutter', JSON.stringify(settings));
   }
   /** Every chat's downloads, oldest first. */

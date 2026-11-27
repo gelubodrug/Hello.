@@ -332,7 +332,7 @@ export interface HelloAPI {
   /** Unclutter: the person's ad and slop blocker for the browser pane (shared/unclutter.ts). Optional for an older preload. */
   unclutter?: {
     overview(tabId: string): Promise<import('./unclutter').UnclutterOverview>;
-    /** Learn this page type's rules with OpenJev on this Mac, then apply them. */
+    /** Learn this page type's rules with the chosen model (Decider V1.3 on OpenRouter, or OpenJev on this Mac), then apply them. */
     analyze(tabId: string): Promise<import('./unclutter').UnclutterTabState>;
     setTypeEnabled(tabId: string, enabled: boolean): Promise<import('./unclutter').UnclutterTabState>;
     forgetType(tabId: string): Promise<import('./unclutter').UnclutterTabState>;

@@ -22,6 +22,7 @@ import { HtmlArtifacts } from './browser/html-artifacts';
 import { Workbooks } from './sheets/workbooks';
 import { registerSheetsIPC } from './sheets/ipc';
 import { OpenJev } from './unclutter/openjev';
+import { Decider } from './unclutter/decider';
 import { UnclutterService } from './unclutter/service';
 import { registerUnclutterIPC } from './unclutter/ipc';
 import { scopedPath } from './chat/tools';
@@ -202,7 +203,7 @@ else {
     approveGuest=(preferences,params)=>browser.approveGuestAttach(preferences,params)||dshSurface.approveGuestAttach(preferences,params);
     window.webContents.on('did-attach-webview',(_event,guest)=>{if(!dshSurface.adoptGuest(guest))browser.adoptGuest(guest);});
     const pageModes=new PageModeController({pages:browser,dataDir,kinds:['design','annotate'],emit:event=>emit('hello:browser-mode',event)});
-    const unclutter=new UnclutterService({pages:browser,store,openjev:new OpenJev({dataDir,log:line=>console.warn(line)}),emit:state=>emit('hello:unclutter',state)});
+    const unclutter=new UnclutterService({pages:browser,store,classifiers:{decider:new Decider({keys:store}),openjev:new OpenJev({dataDir,log:line=>console.warn(line)})},emit:state=>emit('hello:unclutter',state)});
     const previews=new LocalPreviewServer();
     const artifactPreviews=new LocalPreviewServer();
     const artifacts=new HtmlArtifacts(dataDir);

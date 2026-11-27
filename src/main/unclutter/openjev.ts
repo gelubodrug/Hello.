@@ -23,6 +23,7 @@ import { createServer } from 'node:net';
 import { appendFileSync, existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { BATCH_SIZE } from './model';
 
 /** The frozen helper and its MLX stand-in as the model card pins them. */
 export const HELPER_FILES: ReadonlyArray<readonly [string, string]> = [
@@ -87,6 +88,10 @@ const defaultPortFree = (port: number) => new Promise<boolean>(resolve => {
 });
 
 export class OpenJev {
+  readonly name = 'OpenJev';
+  readonly model = 'openjev';
+  /** Small: OpenJev answers one question at a time and re-reads the state for each. */
+  readonly batchSize = BATCH_SIZE;
   private child: ChildProcess | null = null;
   private port: number | null = null;
   private starting: Promise<string> | null = null;
