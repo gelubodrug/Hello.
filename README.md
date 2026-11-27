@@ -35,6 +35,9 @@ there; it runs on your local models, or on any endpoint you choose.
   control Off; Read lets the model read it, Full lets it act.
 - **Annotate.** Draw on the live page and send the marked-up picture to the
   chat; the model can mark a page for you too.
+- **Unclutter.** The Eraser in the browser toolbar hides ads and slop on a page.
+  A small decision model classifies each kind of page once, and the cleanup is
+  remembered for every page of that kind.
 - **Terminals and CLI workers.** Claude Code, Codex, Kimi, Qwen Code, OpenCode
   and Pi run in panes of their own, next to the chat that started them.
 - **Files, spreadsheets and PDFs** of the folder a chat works in.
@@ -43,6 +46,10 @@ there; it runs on your local models, or on any endpoint you choose.
   sidebar and updates to its latest release there.
 - **Yours.** Data lives in SQLite in Hello's own user-data directory. API keys
   are encrypted with the system keychain and never reach the window.
+
+<img src="assets/readme/unclutter-demo.gif" width="100%" alt="Unclutter in Hello.'s browser: a news page full of ads, cleaned with the Eraser, then the same kind of page cleaned on its own.">
+
+Unclutter, recorded in the app ([the full video](assets/readme/unclutter-demo.mp4), 43 s).
 
 ## Things to ask it
 
